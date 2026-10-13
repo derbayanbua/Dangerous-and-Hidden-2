@@ -25,7 +25,8 @@ const FALLBACK_TEXTS := {
 	2407: "STEUERUNGS-EINSTELLUNGEN", 2408: "SPIEL-EINSTELLUNGEN", 2409: "MEHRSPIELER-SPIEL-EINSTELLUNGEN",
 	2410: "ZURÜCK", 2102: "Datum und Zeit aktuell:", 2103: "Aktuelles Profil",
 	2104: "Datum und Zeit des letzten gespeicherten Spielstandes:", 2020: "KEIN AKTUELLES PROFIL",
-	2021: "KEIN GESPEICHERTER SPIELSTAND",
+	2021: "KEIN GESPEICHERTER SPIELSTAND", 2117: "PROFIL ERSTELLEN", 2001: "JA", 2004: "SIND SIE SICHER?",
+	2008: "ANNULLIEREN", 2013: "OK",
 }
 
 var spec := {}
@@ -40,6 +41,8 @@ var _desc_label: Label
 var _side_image: TextureRect
 var _credits_root: Control
 var current_menu := ""
+var _start_btn: Button          ## START in der Missionsliste (Membervariable: Lambdas fangen Werte beim Erzeugen)
+var selected_mission := ""
 var _wide_bg: TextureRect
 
 
@@ -127,7 +130,9 @@ func _rect_of(it: Dictionary, fallback: Rect2) -> Rect2:
 
 
 func _clear() -> void:
+	# sofort aushängen: sonst tragen neue gleichnamige Knöpfe automatisch umbenannte Namen
 	for c in stage.get_children():
+		stage.remove_child(c)
 		c.queue_free()
 	_desc_label = null
 	_side_image = null
@@ -260,6 +265,8 @@ func show_menu(menu: String) -> void:
 			_mission_list("single")
 		"options":
 			_options_menu()
+		"change_profile":
+			_profile_menu()
 
 
 func _main_menu() -> void:
@@ -269,7 +276,7 @@ func _main_menu() -> void:
 	# Infoblock rechts: Datum/Zeit, Profil, letzter Spielstand
 	var info := [
 		["text_date00", text(2102)], ["text_date01", Time.get_datetime_string_from_system(false, true)],
-		["text_profile00", text(2103)], ["text_profile01", text(2020)],
+		["text_profile00", text(2103)], ["text_profile01", Game.profile_name if Game.has_profile() else text(2020)],
 		["text_last save00", text(2104)], ["text_last save01", _last_save_text()]]
 	var y := 129.3
 	for pair in info:
@@ -277,16 +284,18 @@ func _main_menu() -> void:
 		var bold: bool = pair[0].ends_with("01")
 		_label(_rect_of(it, Rect2(541.3, y, 394.7, 18.0)), pair[1], 15 if bold else 13, TEXT_COLOR)
 		y += 30.0
-	var has_save := Game.has_save("quick")
+	var prof := Game.has_profile()
+	var has_save := prof and Game.has_save("quick")
+	# Original (Show-Handler 0x627520): ohne Profil heißt Knopf 2 "PROFIL ERSTELLEN", die übrigen sind gesperrt
 	var entries := [
 		["bresume game", 2105, func(): Game.load_game("quick"), has_save],
-		["bchange profile", 2106, func(): pass, false],
-		["bsingleplayer", 2107, func(): show_menu("singleplayer"), true],
+		["bchange profile", 2106 if prof else 2117, _open_profiles, true],
+		["bsingleplayer", 2107, func(): show_menu("singleplayer"), prof],
 		["bmultiplayerlan", 2115, func(): pass, false],
 		["bmultiplayernet", 2116, func(): pass, false],
 		["bcinematics", 2109, func(): pass, false],
-		["boptions", 2110, func(): show_menu("options"), true],
-		["bcredits", 2111, _show_credits, true],
+		["boptions", 2110, func(): show_menu("options"), prof],
+		["bcredits", 2111, _show_credits, prof],
 		["bexit", 2112, func(): get_tree().quit(), true],
 	]
 	for i in entries.size():
@@ -297,7 +306,7 @@ func _main_menu() -> void:
 func _last_save_text() -> String:
 	if not Game.has_save("quick"):
 		return text(2021)
-	var path := ProjectSettings.globalize_path("%s/quick.json" % Game.SAVE_DIR)
+	var path := ProjectSettings.globalize_path(Game.save_path("quick"))
 	var mt := FileAccess.get_modified_time(path)
 	return Time.get_datetime_string_from_unix_time(mt, true) if mt > 0 else "Schnellspeicherstand"
 
@@ -342,8 +351,8 @@ func _mission_list(kind: String) -> void:
 			if Game.is_unlocked(id):
 				ids.append(id)
 		ids.append_array(Game.PRACTICE_MISSIONS)
-	var selected := [""]
-	var start_b: Button
+	selected_mission = ""
+	_start_btn = null
 	var y := 132.0
 	var n := 1
 	for id in ids:
@@ -371,19 +380,23 @@ func _mission_list(kind: String) -> void:
 			b.add_theme_stylebox_override(st, sb)
 		b.pressed.connect(func():
 			_click.play()
-			selected[0] = id
+			selected_mission = id
 			for c in stage.get_children():
 				if c is Button and c.toggle_mode and c != b:
 					(c as Button).button_pressed = false
 			desc.text = Game.briefing_text(id).substr(0, 900)
-			if start_b:
-				start_b.disabled = false)
+			if is_instance_valid(_start_btn):
+				_start_btn.disabled = false)
+		b.gui_input.connect(func(ev: InputEvent):
+			if ev is InputEventMouseButton and ev.double_click and not b.disabled:
+				selected_mission = id
+				_show_briefing(id))
 		stage.add_child(b)
 		y += 34.0
 		n += 1
-	start_b = _button("single_mission", "bload mission", text(2357), Rect2(525.4, 629.6, 201.8, 35.8),
-		func(): if selected[0] != "": _show_briefing(selected[0]), true)
-	start_b.disabled = true
+	_start_btn = _button("single_mission", "bload mission", text(2357), Rect2(525.4, 629.6, 201.8, 35.8),
+		_start_selected, true)
+	_start_btn.disabled = true
 	_button("single_mission", "bload lastsave", text(2105), Rect2(737.7, 629.6, 201.7, 35.8),
 		func(): Game.load_game("quick"), Game.has_save("quick"))
 	_button("single_mission", "bexit", text(2256), Rect2(BTN_X, 669.0, BTN_W, BTN_H), func(): show_menu("singleplayer"))
@@ -394,20 +407,431 @@ func _mission_list(kind: String) -> void:
 			show_menu("campaign"))
 
 
+func _start_selected() -> void:
+	if selected_mission != "":
+		_show_briefing(selected_mission)
+
+
+func _open_profiles() -> void:
+	show_menu("change_profile")
+	if not Game.has_profile():
+		_name_dialog(text(2152), "", func(n: String):
+			if Game.create_profile(n, 2):
+				show_menu("change_profile")
+			else:
+				Events.say("Name ungültig oder schon vergeben.", 2.0))
+
+
+# --- Einstellungen (Original options.4ds: Seiten links, Auswahl rechts) -------------
+
+var options_page := "graphics"
+var _keys_category := 0
+var _waiting_action := ""
+
+
 func _options_menu() -> void:
 	_background("options")
-	var opts := func(): add_child(load("res://src/ui/options_menu.gd").new())
-	_button("options", "bvideo setup", text(2405), _std_rect(0, 199.5, 43.8), opts)
-	_button("options", "bsound setup", text(2406), _std_rect(1, 199.5, 43.8), opts)
-	_button("options", "bcontrols", text(2407), _std_rect(2, 199.5, 43.8), opts)
-	_button("options", "bgame setup", text(2408), _std_rect(3, 199.5, 43.8), func():
-		Game.new_campaign()
-		Events.say("Neue Kampagne angelegt.", 2.0)
-		show_menu("options"))
+	_label(_rect_of(_item("options", "text_date00"), Rect2(525.4, 109.5, 354.6, 18.0)), text(2402), 14, TEXT_COLOR)
+	_label(_rect_of(_item("options", "text_date01"), Rect2(525.4, 127.5, 354.6, 35.8)),
+		Game.profile_name if Game.has_profile() else text(2020), 16, TEXT_COLOR)
+	_button("options", "bvideo setup", text(2405), _std_rect(0, 199.5, 43.8), _opt_page.bind("graphics"))
+	_button("options", "bsound setup", text(2406), _std_rect(1, 199.5, 43.8), _opt_page.bind("sound"))
+	_button("options", "bcontrols", text(2407), _std_rect(2, 199.5, 43.8), _opt_page.bind("controls"))
+	_button("options", "bgame setup", text(2408), _std_rect(3, 199.5, 43.8), _opt_page.bind("game"))
 	_button("options", "bmultiplayer setup", text(2409), _std_rect(4, 199.5, 43.8), func(): pass, false)
-	_button("options", "bback", text(2410), Rect2(BTN_X, 669.0, BTN_W, BTN_H), func(): show_menu("main_menu"))
-	_label(Rect2(525.4, 430.0, 414.0, 200.0),
-		"„Spiel-Einstellungen“ setzt die Kampagne zurück (neue Kampagne).", 13, TEXT_COLOR)
+	_button("options", "bback", text(2410), Rect2(BTN_X, 669.0, BTN_W, BTN_H), func():
+		Settings.save_settings()
+		show_menu("main_menu"))
+	match options_page:
+		"graphics":
+			_page_graphics()
+		"sound":
+			_page_sound()
+		"controls":
+			_page_controls()
+		"keys":
+			_page_keys()
+		"game":
+			_page_game()
+
+
+func _opt_page(page: String) -> void:
+	options_page = page
+	show_menu("options")
+
+
+func _changed() -> void:
+	Settings.apply()
+	Settings.save_settings()
+
+
+## Ja/Nein-Zeile wie im Original (Text links, Felder "nein"/"ja" rechts)
+func _yesno(y: float, label: String, value: bool, cb: Callable, enabled := true) -> void:
+	_label(Rect2(67, y, 337, 33), label, 15, TEXT_COLOR if enabled else TEXT_DISABLED)
+	for pair in [[410.0, false], [446.0, true]]:
+		var b := Button.new()
+		b.position = Vector2(pair[0], y)
+		b.size = Vector2(33, 33)
+		b.text = "✕" if value == pair[1] and enabled else ""
+		b.tooltip_text = text(2001) if pair[1] else "NEIN"
+		b.disabled = not enabled
+		b.add_theme_font_size_override("font_size", 18)
+		b.add_theme_color_override("font_color", TEXT_HOVER)
+		b.add_theme_color_override("font_disabled_color", TEXT_DISABLED)
+		for st in ["normal", "hover", "pressed", "disabled", "focus"]:
+			var sb := StyleBoxFlat.new()
+			sb.bg_color = Color(0.86, 0.82, 0.7, 0.9) if st != "hover" else Color(0.93, 0.89, 0.77)
+			sb.border_color = Color(0.22, 0.18, 0.12, 1.0 if enabled else 0.4)
+			sb.set_border_width_all(2)
+			b.add_theme_stylebox_override(st, sb)
+		var v: bool = pair[1]
+		b.pressed.connect(func():
+			_click.play()
+			cb.call(v)
+			_changed()
+			show_menu("options"))
+		stage.add_child(b)
+
+
+## Schieberegler wie im Original (Leiste 336×33, darunter "minimum normal maximum")
+func _slider(y: float, value: float, lo: float, hi: float, cb: Callable) -> HSlider:
+	var s := HSlider.new()
+	s.position = Vector2(105, y)
+	s.size = Vector2(336, 33)
+	s.min_value = lo
+	s.max_value = hi
+	s.step = (hi - lo) / 100.0
+	s.value = value
+	var track := StyleBoxFlat.new()
+	track.bg_color = Color(0.3, 0.25, 0.18, 0.75)
+	track.content_margin_top = 4
+	track.content_margin_bottom = 4
+	s.add_theme_stylebox_override("slider", track)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = Color(0.55, 0.12, 0.07, 0.85)
+	fill.content_margin_top = 4
+	fill.content_margin_bottom = 4
+	s.add_theme_stylebox_override("grabber_area", fill)
+	s.add_theme_stylebox_override("grabber_area_highlight", fill)
+	s.value_changed.connect(func(v: float):
+		cb.call(v)
+		_changed())
+	stage.add_child(s)
+	_label(Rect2(105, y + 34, 336, 18), text(2446) if texts.has("2446") else "minimum            normal            maximum",
+		12, TEXT_COLOR, HORIZONTAL_ALIGNMENT_CENTER)
+	return s
+
+
+## Auswahlknopf über die volle Zeilenbreite (z. B. Grafikdetails, Auflösung)
+func _cycle(r: Rect2, label: String, cb: Callable, enabled := true) -> Button:
+	var b := Button.new()
+	b.position = r.position
+	b.size = r.size
+	b.text = label
+	b.disabled = not enabled
+	b.add_theme_font_size_override("font_size", 15)
+	b.add_theme_color_override("font_color", TEXT_COLOR)
+	b.add_theme_color_override("font_hover_color", TEXT_HOVER)
+	b.add_theme_color_override("font_disabled_color", TEXT_DISABLED)
+	var it := {"normal": {"texture": "X_NMNBTN.BMP", "uv_rect": [0.001, 0.0011, 0.8059, 0.2814]},
+		"hover": {"texture": "X_NMNBTN.BMP", "uv_rect": [0.0011, 0.2824, 0.8059, 0.5591]}}
+	b.add_theme_stylebox_override("normal", _atlas_style(it, "normal"))
+	b.add_theme_stylebox_override("hover", _atlas_style(it, "hover"))
+	b.add_theme_stylebox_override("pressed", _atlas_style(it, "hover"))
+	b.add_theme_stylebox_override("disabled", _atlas_style(it, "normal"))
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.pressed.connect(func():
+		_click.play()
+		cb.call()
+		_changed()
+		show_menu("options"))
+	stage.add_child(b)
+	return b
+
+
+func _page_graphics() -> void:
+	_label(Rect2(67, 149, 383, 18), text(2411), 16, TEXT_COLOR)
+	_label(Rect2(67, 179, 383, 18), text(2412), 14, TEXT_COLOR)
+	_slider(201, Settings.gamma, 0.6, 1.6, func(v: float): Settings.gamma = v)
+	var q_ids := [2414, 2415, 2416]
+	var q_text: String = text(q_ids[Settings.quality]) if Settings.quality < 3 else "GRAFIK-DETAILS - ULTRA"
+	_cycle(Rect2(105, 290, 336, 32), q_text, func(): Settings.quality = (Settings.quality + 1) % 4)
+	_label(Rect2(67, 336, 383, 18), text(2430) + " (moderne Ergänzungen)", 13, TEXT_COLOR)
+	_yesno(364, "VOLLBILD", Settings.fullscreen, func(v: bool): Settings.fullscreen = v)
+	_yesno(408, text(2418), Settings.shadows, func(v: bool): Settings.shadows = v)
+	_yesno(451, "VSYNC", Settings.vsync, func(v: bool): Settings.vsync = v)
+	var ri := Settings.RESOLUTIONS.find(Settings.resolution)
+	_cycle(Rect2(67, 495, 412, 33), "AUFLÖSUNG: " + Settings.resolution_name(Settings.resolution), func():
+		Settings.resolution = Settings.RESOLUTIONS[(maxi(ri, 0) + 1) % Settings.RESOLUTIONS.size()])
+	var scales := [1.0, 0.85, 0.7, 0.5]
+	var si := scales.find(snappedf(Settings.render_scale, 0.05))
+	_cycle(Rect2(67, 539, 412, 33), "3D-RENDERSKALIERUNG: %d %%" % int(Settings.render_scale * 100.0), func():
+		Settings.render_scale = scales[(maxi(si, 0) + 1) % scales.size()])
+	var fovs := [60.0, 70.0, 80.0, 90.0, 100.0]
+	var fi := fovs.find(Settings.fov)
+	_cycle(Rect2(67, 583, 412, 33), "SICHTFELD: %d°" % int(Settings.fov), func():
+		Settings.fov = fovs[(maxi(fi, 0) + 1) % fovs.size()])
+
+
+func _page_sound() -> void:
+	_label(Rect2(67, 149, 383, 18), text(2425), 16, TEXT_COLOR)
+	_label(Rect2(67, 179, 337, 18), text(2426), 14, TEXT_COLOR)
+	_slider(201, Settings.master_volume, 0.0, 1.0, func(v: float): Settings.master_volume = v)
+	_label(Rect2(67, 267, 337, 18), text(2428), 14, TEXT_COLOR)
+	_slider(288, Settings.music_volume, 0.0, 1.0, func(v: float): Settings.music_volume = v)
+
+
+func _page_controls() -> void:
+	_label(Rect2(67, 149, 383, 18), text(2441), 16, TEXT_COLOR)
+	var kb := _cycle(Rect2(105, 201, 336, 33), text(2442), func(): options_page = "keys")
+	kb.name = "bkeys"
+	_label(Rect2(67, 267, 383, 18), text(2443), 14, TEXT_COLOR)
+	_yesno(289, text(2444), Settings.invert_y, func(v: bool): Settings.invert_y = v)
+	_label(Rect2(67, 355, 383, 18), text(2445), 14, TEXT_COLOR)
+	_slider(376, Settings.mouse_sensitivity, 0.03, 0.4, func(v: float): Settings.mouse_sensitivity = v)
+	_label(Rect2(67, 556, 383, 18), text(2447), 14, TEXT_DISABLED)
+	_yesno(626, text(2449), false, func(_v): pass, false)
+	_yesno(671, text(2450), false, func(_v): pass, false)
+
+
+const KEY_CATEGORIES := [
+	[2452, ["move_forward", "move_back", "move_left", "move_right", "run", "stance_stand", "stance_crouch",
+		"stance_prone", "lean_left", "lean_right"]],
+	[2453, ["fire", "aim", "reload", "fire_mode", "weapon_1", "weapon_2", "weapon_3", "weapon_next", "weapon_prev"]],
+	[2454, ["interact", "binoculars", "medkit", "camera_toggle", "objectives", "tactical_map", "quicksave",
+		"quickload", "pause"]],
+	[2455, ["soldier_1", "soldier_2", "soldier_3", "soldier_4", "soldier_next", "order_move", "order_follow",
+		"order_hold", "order_roe", "order_formation", "order_stance", "order_grenade"]],
+]
+
+
+func _page_keys() -> void:
+	_label(Rect2(67, 179, 383, 18), text(2451), 14, TEXT_COLOR)
+	var cat: Array = KEY_CATEGORIES[_keys_category]
+	_cycle(Rect2(105, 201, 336, 33), text(cat[0]), func(): _keys_category = (_keys_category + 1) % KEY_CATEGORIES.size())
+	var y := 244.0
+	for action: String in cat[1]:
+		var b := Button.new()
+		b.name = ("key_" + action).validate_node_name()
+		b.position = Vector2(70, y)
+		b.size = Vector2(406, 29)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var waiting := _waiting_action == action
+		b.text = "%s:   %s" % [InputSetup.display_name(action), "… Taste drücken …" if waiting else InputSetup.binding_text(action)]
+		b.add_theme_font_size_override("font_size", 14)
+		b.add_theme_color_override("font_color", TEXT_HOVER if waiting else TEXT_COLOR)
+		b.add_theme_color_override("font_hover_color", TEXT_HOVER)
+		for st in ["normal", "hover", "pressed", "focus"]:
+			var sb := StyleBoxFlat.new()
+			sb.bg_color = Color(0.55, 0.47, 0.33, 0.3) if st == "hover" or waiting else Color(0, 0, 0, 0)
+			b.add_theme_stylebox_override(st, sb)
+		b.pressed.connect(func():
+			_waiting_action = action
+			show_menu("options"))
+		stage.add_child(b)
+		y += 30.0
+	_cycle(Rect2(67, 626, 412, 33), text(2457), func(): InputSetup.reset_defaults())
+	_cycle(Rect2(67, 670, 412, 33), text(2458), func():
+		_waiting_action = ""
+		options_page = "controls")
+
+
+func _input(event: InputEvent) -> void:
+	# Tastenbelegung: nächste Taste/Maustaste für die gewählte Aktion übernehmen
+	if _waiting_action == "" or current_menu != "options":
+		return
+	if (event is InputEventKey and event.pressed and not event.echo) or (event is InputEventMouseButton and event.pressed):
+		if event is InputEventKey and (event as InputEventKey).physical_keycode == KEY_ESCAPE:
+			_waiting_action = ""
+		else:
+			InputSetup.rebind(_waiting_action, event)
+			InputSetup.save_bindings()
+			_waiting_action = ""
+		get_viewport().set_input_as_handled()
+		show_menu.call_deferred("options")
+
+
+func _page_game() -> void:
+	_label(Rect2(67, 149, 383, 18), text(2461), 16, TEXT_COLOR)
+	_yesno(201, text(2462), Settings.subtitles, func(v: bool): Settings.subtitles = v)
+	# v1.12: der frühere Punkt "Kindersicherung" heißt "FADENKREUZ ZULASSEN" (Text 20212)
+	_yesno(289, text(20212) if texts.has("20212") else "FADENKREUZ ZULASSEN", Settings.crosshair,
+		func(v: bool): Settings.crosshair = v)
+
+
+# --- Profile (Original change_profile.4ds) ---------------------------------------
+
+func _profile_menu() -> void:
+	_background("change_profile")
+	var prof := Game.has_profile()
+	_label(_rect_of(_item("change_profile", "text_current profile and save"), Rect2(71.2, 114.5, 414.1, 23.2)),
+		text(2191), 14, TEXT_COLOR)
+	_label(Rect2(80, 140, 400, 34), Game.profile_name if prof else text(2020), 18, TEXT_COLOR)
+	_label(_rect_of(_item("change_profile", "text_date and time"), Rect2(256.0, 177.1, 229.3, 23.2)),
+		_last_save_text() if prof else "", 12, TEXT_COLOR, HORIZONTAL_ALIGNMENT_RIGHT)
+	_label(_rect_of(_item("change_profile", "text_list of profiles"), Rect2(71.2, 232.8, 414.1, 23.2)),
+		text(2192), 14, TEXT_COLOR)
+	var y := 268.0
+	for n in Game.list_profiles():
+		var b := Button.new()
+		b.name = ("profile_" + n).validate_node_name()
+		b.text = n
+		b.position = Vector2(125, y)
+		b.size = Vector2(346, 30)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.add_theme_font_size_override("font_size", 16)
+		var cur := n == Game.profile_name
+		b.add_theme_color_override("font_color", TEXT_HOVER if cur else TEXT_COLOR)
+		b.add_theme_color_override("font_hover_color", TEXT_HOVER)
+		for st in ["normal", "hover", "pressed", "focus"]:
+			var sb := StyleBoxFlat.new()
+			sb.bg_color = Color(0.55, 0.47, 0.33, 0.35) if cur or st == "hover" else Color(0, 0, 0, 0)
+			b.add_theme_stylebox_override(st, sb)
+		b.pressed.connect(func():
+			_click.play()
+			Game.select_profile(n)
+			show_menu("change_profile"))
+		stage.add_child(b)
+		y += 31.0
+		if y > 660.0:
+			break
+	# rechts: Schwierigkeitsgrad + Profilinfo + Verwaltung
+	_label(_rect_of(_item("change_profile", "text_difficulty"), Rect2(525.4, 114.5, 414.0, 23.2)), text(2193), 14, TEXT_COLOR)
+	var diff_ids := ["beasy-war never was so fun!", "bnormal-loosing illusions!", "bhard-cannon fodder!",
+		"bvery hard-hidden and dangerous"]
+	for i in 4:
+		var d := i + 1
+		var b := _button("change_profile", diff_ids[i], text(Game.DIFFICULTY_TEXT[d]),
+			Rect2(BTN_X, 137.7 + i * 39.4, BTN_W, BTN_H), _set_difficulty.bind(d), prof)
+		if prof and Game.difficulty() == d:
+			b.add_theme_stylebox_override("normal", b.get_theme_stylebox("hover"))
+			b.add_theme_color_override("font_color", TEXT_HOVER)
+	var info := _label(_rect_of(_item("change_profile", "text01"), Rect2(525.4, 304.1, 414.0, 228.4)),
+		_profile_info(), 13, TEXT_COLOR)
+	info.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	_button("change_profile", "bcreate profile", text(2152), Rect2(BTN_X, 550.7, BTN_W, BTN_H), _create_profile_dialog)
+	_button("change_profile", "brename profile", text(2154), Rect2(BTN_X, 590.2, BTN_W, BTN_H), _rename_profile_dialog, prof)
+	_button("change_profile", "bdelete profile", text(2155), Rect2(BTN_X, 629.6, BTN_W, BTN_H), _delete_profile_dialog, prof)
+	_button("change_profile", "bback", text(2156), Rect2(BTN_X, 669.0, BTN_W, BTN_H), func(): show_menu("main_menu"))
+
+
+func _set_difficulty(d: int) -> void:
+	Game.set_difficulty(d)
+	show_menu("change_profile")
+
+
+func _create_profile_dialog() -> void:
+	_name_dialog(text(2152), "", func(n: String):
+		if Game.create_profile(n, 2):
+			show_menu("change_profile")
+		else:
+			Events.say("Name ungültig oder schon vergeben.", 2.0))
+
+
+func _rename_profile_dialog() -> void:
+	_name_dialog(text(2154), Game.profile_name, func(n: String):
+		Game.rename_profile(Game.profile_name, n)
+		show_menu("change_profile"))
+
+
+func _delete_profile_dialog() -> void:
+	_confirm(text(2004), func():
+		Game.delete_profile(Game.profile_name)
+		show_menu("change_profile"))
+
+
+func _profile_info() -> String:
+	if not Game.has_profile():
+		return text(2020)
+	var p := Game.profile
+	var secs := int(float(p.get("playtime", 0.0)))
+	var lines: PackedStringArray = [
+		text(2163),
+		"%s %s" % [text(2164), _last_save_text()],
+		"%s %s" % [text(2165), text(Game.DIFFICULTY_TEXT[Game.difficulty()])],
+		"%s %d:%02d:%02d" % [text(2166), secs / 3600, (secs / 60) % 60, secs % 60],
+		"%s %d" % [text(2168), int(p.get("enemies_killed", 0))],
+		"%s %d" % [text(2169), int(p.get("shots", 0))],
+		"Abgeschlossene Einsätze: %d" % Game.campaign.get("completed", []).size(),
+	]
+	return "\n".join(lines)
+
+
+## Eingabedialog (Profilname) auf Papier-Optik
+func _name_dialog(title: String, preset: String, on_ok: Callable) -> void:
+	var dlg := _dialog_box(title)
+	var le := LineEdit.new()
+	le.name = "NameEdit"
+	le.text = preset
+	le.max_length = 24
+	le.position = Vector2(30, 70)
+	le.size = Vector2(340, 36)
+	le.add_theme_font_size_override("font_size", 18)
+	dlg.add_child(le)
+	le.grab_focus.call_deferred()
+	var ok := func():
+		var n := le.text.strip_edges()
+		dlg.get_parent().queue_free()
+		if n != "":
+			on_ok.call(n)
+	le.text_submitted.connect(func(_t): ok.call())
+	_dialog_button(dlg, text(2013), Vector2(30, 126), ok)
+	_dialog_button(dlg, text(2008), Vector2(210, 126), func(): dlg.get_parent().queue_free())
+
+
+func _confirm(question: String, on_yes: Callable) -> void:
+	var dlg := _dialog_box(question)
+	_dialog_button(dlg, text(2001), Vector2(30, 126), func():
+		dlg.get_parent().queue_free()
+		on_yes.call())
+	_dialog_button(dlg, text(2008), Vector2(210, 126), func(): dlg.get_parent().queue_free())
+
+
+func _dialog_box(title: String) -> Panel:
+	var shade := ColorRect.new()
+	shade.name = "Dialog"
+	shade.color = Color(0, 0, 0, 0.45)
+	shade.size = REF
+	stage.add_child(shade)
+	var p := Panel.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.82, 0.77, 0.64)
+	sb.border_color = Color(0.25, 0.2, 0.14)
+	sb.set_border_width_all(3)
+	p.add_theme_stylebox_override("panel", sb)
+	p.position = Vector2(312, 290)
+	p.size = Vector2(400, 190)
+	shade.add_child(p)
+	var l := Label.new()
+	l.text = title
+	l.position = Vector2(20, 18)
+	l.size = Vector2(360, 40)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.add_theme_font_size_override("font_size", 18)
+	l.add_theme_color_override("font_color", TEXT_COLOR)
+	p.add_child(l)
+	return p
+
+
+func _dialog_button(dlg: Panel, label: String, pos: Vector2, cb: Callable) -> void:
+	var it := {"normal": {"texture": "X_NMNBTN.BMP", "uv_rect": [0.001, 0.0011, 0.2041, 0.2814]},
+		"hover": {"texture": "X_NMNBTN.BMP", "uv_rect": [0.0011, 0.2824, 0.2041, 0.5591]}}
+	var b := Button.new()
+	b.name = ("dlg_" + label).validate_node_name()
+	b.text = label
+	b.position = pos
+	b.size = Vector2(160, 36)
+	b.add_theme_font_size_override("font_size", 16)
+	b.add_theme_color_override("font_color", TEXT_COLOR)
+	b.add_theme_color_override("font_hover_color", TEXT_HOVER)
+	b.add_theme_stylebox_override("normal", _atlas_style(it, "normal"))
+	b.add_theme_stylebox_override("hover", _atlas_style(it, "hover"))
+	b.add_theme_stylebox_override("pressed", _atlas_style(it, "hover"))
+	b.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	b.pressed.connect(func():
+		_click.play()
+		cb.call())
+	dlg.add_child(b)
 
 
 # --- Mitwirkende (Original: Text\german\Subtitles\credits.txt + credits.ogg) ----
@@ -476,6 +900,7 @@ func _load_ogg(file: String) -> AudioStream:
 func _setup_audio() -> void:
 	_music = AudioStreamPlayer.new()
 	_music.volume_db = -6.0
+	_music.bus = &"Music"
 	add_child(_music)
 	_click = AudioStreamPlayer.new()
 	var cp := _menu_dir + "/audio/button.wav"

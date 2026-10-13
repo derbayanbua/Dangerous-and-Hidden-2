@@ -127,6 +127,8 @@ func reset_defaults() -> void:
 
 
 func save_bindings() -> void:
+	if "--autoplay" in " ".join(OS.get_cmdline_user_args()):
+		return   # Tests verändern die Tastenbelegung nicht
 	var cfg := ConfigFile.new()
 	cfg.load(PATH)
 	for action: String in ACTIONS:

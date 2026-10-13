@@ -283,6 +283,7 @@ func _run() -> void:
 	hale.health = hale.max_health
 
 	# --- Squad: Folgen, Halten, Bewegen ---
+	isolate_enemies([])     # Befehlstest ohne Gefecht (Sprint trägt den Anführer sonst in Feindreichweite)
 	await tap("order_follow")
 	var target_pos := hale.global_position + hale.forward() * 25.0
 	Input.action_press("run")

@@ -31,8 +31,25 @@ func _run() -> void:
 	check(Game.briefing_text("a1_blizzard").begins_with("Operation Schneeball"), "Briefing aus Originaltexten",
 		Game.briefing_text("a1_blizzard").substr(0, 60))
 
+	# Start über die Oberfläche wie ein Spieler: Kampagne -> Mission wählen -> START -> Einsatz beginnen
+	var menu := get_tree().current_scene
+	var b1 := find_button("1.")
+	check(b1 != null and not b1.disabled, "Kampagnenliste: Teil 1A wählbar", b1.text if b1 else "-")
+	check(menu._start_btn != null and menu._start_btn.disabled, "START gesperrt, solange keine Mission gewählt ist")
+	b1.pressed.emit()
+	await frames(2)
+	check(not menu._start_btn.disabled, "START nach Auswahl freigegeben")
+	menu._start_btn.pressed.emit()
+	await frames(3)
+	check(menu._brief_root != null and is_instance_valid(menu._brief_root), "START öffnet die Einsatzbesprechung")
+	var go := find_button("Einsatz beginnen")
+	check(go != null, "Knopf „Einsatz beginnen“ vorhanden")
+
 	# Teil 1A mit einem Gefallenen abschließen (Ziele wie per SetObjectiveStatus gesetzt)
-	Game.start_mission("a1_blizzard")
+	if go:
+		go.pressed.emit()
+	else:
+		Game.start_mission("a1_blizzard")
 	var m := await wait_mission() as OrigMission
 	check(m != null and m.squad.members.size() == 4, "Arctic 1A mit vollem Kader")
 	isolate_enemies([])

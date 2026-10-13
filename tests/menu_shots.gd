@@ -23,8 +23,12 @@ func _run() -> void:
 	await shot("02_singleplayer")
 	menu.show_menu("campaign")
 	await shot("03_campaign")
-	menu.show_menu("options")
-	await shot("04_options")
+	menu.show_menu("change_profile")
+	await shot("04_profile")
+	for page in ["graphics", "sound", "controls", "keys", "game"]:
+		menu.options_page = page
+		menu.show_menu("options")
+		await shot("05_options_" + page)
 	menu._show_briefing("a1_blizzard")
-	await shot("05_briefing")
+	await shot("06_briefing")
 	get_tree().quit()
