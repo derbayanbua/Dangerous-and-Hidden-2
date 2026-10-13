@@ -74,13 +74,62 @@ func _run() -> void:
 		btn(page).pressed.emit()
 		await frames(2)
 	check(menu.options_page == "graphics", "Alle Einstellungsseiten aufrufbar")
-	var q0 := Settings.quality
-	for b in get_tree().root.find_children("*", "Button", true, false):
-		if (b as Button).text.begins_with("GRAFIK-DETAILS"):
-			(b as Button).pressed.emit()
-			break
+	# Original-Grafikseite: 7 Schalter (2418–2424) + Detailstufe (2414–2417)
+	var old_detail := {}
+	for k in ["shadows", "morphing", "decals", "blood", "grass", "dynamic_lights", "high_models", "quality"]:
+		old_detail[k] = Settings.get(k)
+	var labels := []
+	for l in get_tree().root.find_children("*", "Label", true, false):
+		labels.append((l as Label).text)
+	var all_found := true
+	for tid in range(2418, 2425):
+		if not labels.has(menu.text(tid)):
+			all_found = false
+	check(all_found, "Grafikseite: alle 7 Original-Schalter (SCHATTEN … MODELLE MIT HOHER AUFLÖSUNG)")
+	Settings.set_detail_preset(0)
+	menu.show_menu("options")
 	await frames(2)
-	check(Settings.quality == (q0 + 1) % 4, "Grafikdetails umschaltbar", "%d -> %d" % [q0, Settings.quality])
+	check(btn("bdetail").text == menu.text(2414) and not Settings.shadows and not Settings.grass,
+		"Detailstufe NIEDRIG setzt die Schalter", btn("bdetail").text)
+	btn("bdetail").pressed.emit()
+	await frames(2)
+	check(Settings.detail_level() == 1 and not Settings.shadows and Settings.morphing and Settings.blood and not Settings.grass, "Detailstufe MITTEL (Original-Tabelle)", btn("bdetail").text)
+	btn("bdetail").pressed.emit()
+	await frames(2)
+	check(Settings.detail_level() == 2 and Settings.grass and Settings.high_models, "Detailstufe HOCH", btn("bdetail").text)
+	Settings.blood = false
+	menu.show_menu("options")
+	await frames(2)
+	check(btn("bdetail").text == menu.text(2417), "Einzelschalter geändert -> „%s“" % menu.text(2417), btn("bdetail").text)
+	btn("bdisplay").pressed.emit()
+	await frames(2)
+	check(menu.options_page == "display", "Unterseite Anzeige & Setup erreichbar")
+	# Optionen aus dem Original-Setup (setup.exe)
+	var old_setup := [Settings.vsync_mode, Settings.aa_mode, Settings.texture_quality, Settings.max_fps, Settings.anisotropy]
+	btn("baa").pressed.emit()
+	await frames(2)
+	check(Settings.aa_mode == (old_setup[1] + 1) % 6, "Kantenglättung umschaltbar (Original „Fullscene-Antialiasing“)",
+		Settings.AA_NAMES[Settings.aa_mode])
+	btn("bvsync").pressed.emit()
+	await frames(2)
+	check(Settings.vsync_mode == (old_setup[0] + 1) % 4, "VSync-Modus inkl. Dreifachpuffer (Original „Triple-Buffering“)",
+		Settings.VSYNC_NAMES[Settings.vsync_mode])
+	btn("bfps").pressed.emit()
+	await frames(2)
+	check(Settings.max_fps != old_setup[3] and Engine.max_fps == Settings.max_fps, "Bildratenbegrenzung wirkt", str(Engine.max_fps))
+	btn("btex").pressed.emit()
+	await frames(2)
+	check(Settings.texture_quality == (old_setup[2] + 1) % 3, "Texturqualität umschaltbar (Original „Text.-Qual.“)",
+		Settings.TEXTURE_NAMES[Settings.texture_quality])
+	Settings.vsync_mode = old_setup[0]
+	Settings.aa_mode = old_setup[1]
+	Settings.texture_quality = old_setup[2]
+	Settings.max_fps = old_setup[3]
+	Settings.anisotropy = old_setup[4]
+	Settings.apply()
+	menu.options_page = "graphics"
+	for k in old_detail:
+		Settings.set(k, old_detail[k])
 	btn("bgame setup").pressed.emit()
 	await frames(2)
 	Settings.subtitles = false
@@ -113,9 +162,16 @@ func _run() -> void:
 	await frames(2)
 	check(InputSetup.binding_text("reload") != before and InputSetup.binding_text("reload").contains("P"),
 		"Taste neu belegt (Nachladen -> P)", InputSetup.binding_text("reload"))
-	InputSetup.reset_defaults()
-	InputSetup.save_bindings()
-	check(InputSetup.binding_text("reload") == before, "Standardbelegung wiederhergestellt")
+	check(menu.KEY_CATEGORIES.size() == 5 and menu.text(menu.KEY_CATEGORIES[4][0]) == menu.text(2456),
+		"Tastenbelegung: 5 Original-Kategorien (inkl. %s)" % menu.text(2456))
+	btn("bdefault2").pressed.emit()
+	await frames(2)
+	check(InputSetup.binding_text("move_forward").contains("Up") or InputSetup.binding_text("move_forward").contains("Oben")
+		or InputSetup.binding_text("move_forward").contains("↑"), "„%s“ (Pfeiltasten)" % menu.text(2459), InputSetup.binding_text("move_forward"))
+	btn("bdefault1").pressed.emit()
+	await frames(2)
+	check(InputSetup.binding_text("reload") == before and InputSetup.binding_text("move_forward") == "W",
+		"„%s“ stellt die Standardbelegung her" % menu.text(2457))
 	# Einstellungen zurücksetzen (Test soll nichts dauerhaft verstellen)
 	Settings.subtitles = old[0]
 	Settings.crosshair = old[1]

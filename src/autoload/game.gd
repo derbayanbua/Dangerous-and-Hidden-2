@@ -15,7 +15,7 @@ const MISSION_SCENE := "res://scenes/mission.tscn"
 var profiles_dir := "user://profiles"   ## Tests: --profiles_dir=user://test_profiles
 
 ## Missionsregister: id -> Daten. script = Skript, das die Welt aufbaut.
-const MISSIONS := {
+var MISSIONS := {
 	# Originalmission 1 (Arctic): Titel/Briefing kommen aus den Originaltexten (orig_texts)
 	"a1_blizzard": {
 		"title": "Arctic 1A – Erster Angriff",
@@ -73,9 +73,48 @@ const SQUAD_SIZE := 4
 var loadouts := {}
 
 ## Kampagne: Reihenfolge, Freischaltung, gefallene Kadermitglieder.
-const CAMPAIGN_ORDER := ["a1_blizzard", "a2_erkundung", "a3_rendezvous"]
+var CAMPAIGN_ORDER: Array = ["a1_blizzard", "a2_erkundung", "a3_rendezvous"]
+
+## Original-Kampagne (Hidden & Dangerous 2): [id, Missionsordner, k] mit k = Index der Original-Texttabelle
+## (Titel 4501+10k …). Teile ohne eigenes Skript laufen über src/missions/orig_generic.gd.
+const ORIG_CAMPAIGN := [
+	["a4_eisberg", "ARCTIC4", 3],
+	["af1_spaghetti_airport", "AFRICA1", 4], ["af2_flugschau", "AFRICA2", 5], ["af3_gaeste", "AFRICA3", 6],
+	["af4_karawane", "AFRICA4", 7], ["af5_whiskey_bar", "AFRICA5", 8], ["af6_raubvoegel", "AFRICA6", 9],
+	["nw1_dampfleitung", "NORWAY", 10],
+	["bu1_ameisenhuegel", "BURMA1", 11], ["bu2_bergkoenig", "BURMA2", 12],
+	["al1_waldgeister", "ALPS1", 13], ["al2_makler", "ALPS2", 14],
+	["no1_leuchtturm", "NORMANDY", 16], ["no2_schwerttaenzer", "NORMANDY2", 17],
+	["cz1_eintrittsgeld", "CZECH1", 18], ["cz2_maulwurf", "CZECH2", 19], ["cz3_geschaeft", "CZECH3", 20],
+	["cz4_volksfest", "CZECH4", 21], ["cz5_trink_aus", "CZECH5", 22], ["cz6_abrechnung", "CZECH6", 23],
+]
+const ORIG_TRAINING := ["training", "TUTORIAL", 24]
+
+
+## Original-Missionen anmelden (Titel aus den Originaltexten; fehlt der Cache, bleibt der Ordnername).
+func _register_orig_missions() -> void:
+	var texts = null
+	var f := FileAccess.open(OrigLevel.cache_root() + "/texts_german.json", FileAccess.READ)
+	if f:
+		texts = JSON.parse_string(f.get_as_text())
+	for e in ORIG_CAMPAIGN + [ORIG_TRAINING]:
+		var k: int = e[2]
+		var title: String = e[1]
+		if typeof(texts) == TYPE_DICTIONARY and texts.has(str(4501 + 10 * k)):
+			title = String(texts[str(4501 + 10 * k)])
+		MISSIONS[e[0]] = {"title": title, "script": "res://src/missions/orig_generic.gd", "orig": e[1], "k": k,
+			"orig_texts": [4501 + 10 * k, 4502 + 10 * k, 4503 + 10 * k, 4504 + 10 * k, 4505 + 10 * k,
+				4506 + 10 * k, 4507 + 10 * k, 4508 + 10 * k], "briefing": ""}
+		if e != ORIG_TRAINING and not CAMPAIGN_ORDER.has(e[0]):
+			CAMPAIGN_ORDER.append(e[0])
+	if not PRACTICE_MISSIONS.has(ORIG_TRAINING[0]):
+		PRACTICE_MISSIONS.insert(0, ORIG_TRAINING[0])
+	# Titel der Teile 1A–1C ebenfalls aus den Originaltexten
+	for pair in [["a1_blizzard", 4501], ["a2_erkundung", 4511], ["a3_rendezvous", 4521]]:
+		if typeof(texts) == TYPE_DICTIONARY and texts.has(str(pair[1])):
+			MISSIONS[pair[0]]["title"] = String(texts[str(pair[1])])
 ## Eigene Prototyp-Einsätze (kein Original-Leveldesign): jederzeit wählbar, nicht Teil der Kampagne.
-const PRACTICE_MISSIONS := ["m01_funkfeuer", "m02_nordlicht", "m03_sandsturm"]
+var PRACTICE_MISSIONS: Array = ["m01_funkfeuer", "m02_nordlicht", "m03_sandsturm"]
 var campaign := {}
 
 
@@ -142,6 +181,7 @@ func create_profile(n: String, diff: int = 2) -> bool:
 		save_profile()
 	new_campaign()
 	_remember_current()
+	_use_profile_options()
 	return true
 
 
@@ -159,6 +199,7 @@ func select_profile(n: String) -> bool:
 	DirAccess.make_dir_recursive_absolute(profile_dir() + "/saves")
 	load_campaign()
 	_remember_current()
+	_use_profile_options()
 	return true
 
 
@@ -199,6 +240,7 @@ func delete_profile(n: String) -> bool:
 			select_profile(rest[0])
 		else:
 			_remember_current()
+			_use_profile_options()
 	return true
 
 
@@ -239,15 +281,15 @@ func _load_current_profile() -> void:
 	if cli.has("autoplay") and cli.has("profiles_dir"):
 		# Test mit echten Profildateien in einem eigenen, frisch geleerten Ordner (Start ohne Profil)
 		profiles_dir = String(cli["profiles_dir"])
-		_remove_dir(profiles_dir)
-		return
-	if cli.has("autoplay"):
+		_remove_dir(profiles_dir)   # danach normal weiter (Import, sofern nicht --noimport)
+	elif cli.has("autoplay"):
 		_memory_profile = true
 		profile_name = "Test"
 		profile = {"name": "Test", "difficulty": int(cli.get("difficulty", "3")), "playtime": 0.0,
 			"kills": 0, "enemies_killed": 0, "shots": 0, "missions": 0}
 		campaign = {"unlocked": [CAMPAIGN_ORDER[0]], "completed": [], "fallen": []}
 		return
+	_import_orig_profiles()
 	var cur := ""
 	if FileAccess.file_exists(profiles_dir + "/current.txt"):
 		cur = FileAccess.get_file_as_string(profiles_dir + "/current.txt").strip_edges()
@@ -255,6 +297,83 @@ func _load_current_profile() -> void:
 		var all := list_profiles()
 		if not all.is_empty():
 			select_profile(all[0])
+
+
+func _use_profile_options() -> void:
+	if _memory_profile:
+		return
+	Settings.use_profile(profile_dir() + "/options.cfg" if has_profile() else "")
+	InputSetup.load_bindings()
+
+
+## Original-Profile (HD2_orig\PlayersProfiles, entschlüsselt von tools/fmt_profile.py -> orig_cache/
+## profiles_import.json) beim ersten Start übernehmen: Name, Schwierigkeit, Kampagnenfortschritt
+## (Missionsnummer: Training 0, ARCTIC1 1 … in Kampagnenreihenfolge), letzter Spielstand, Options.bin.
+## Nicht übernommen: Tastenbelegung (DirectInput-Codes) und Original-Spielstände (anderes Engine-Format).
+func _import_orig_profiles() -> void:
+	if _memory_profile or cli.has("noimport") or FileAccess.file_exists(profiles_dir + "/orig_import_done"):
+		return
+	var f := FileAccess.open(OrigLevel.cache_root() + "/profiles_import.json", FileAccess.READ)
+	if f == null:
+		return
+	var data = JSON.parse_string(f.get_as_text())
+	if typeof(data) != TYPE_DICTIONARY:
+		return
+	DirAccess.make_dir_recursive_absolute(profiles_dir)
+	var best := ""
+	var best_prog := -2
+	for e in data.get("profiles", []):
+		var pr: Dictionary = e.get("profile", {})
+		var n := String(pr.get("name", e.get("folder", ""))).strip_edges()
+		if n == "" or list_profiles().has(n):
+			continue
+		var diff := int(pr.get("difficulty", {}).get("value", 2))
+		if not create_profile(n, clampi(diff, 1, 4)):
+			continue
+		var prog := int(pr.get("progress", {}).get("original", {}).get("max_ordinal", -1))
+		if prog >= 1:
+			var upto := mini(prog, CAMPAIGN_ORDER.size())
+			campaign["unlocked"] = CAMPAIGN_ORDER.slice(0, upto)
+			campaign["completed"] = CAMPAIGN_ORDER.slice(0, upto - 1)
+			save_campaign()
+		var ls: Dictionary = pr.get("last_save", {})
+		if ls.get("parts") is Dictionary:
+			profile["orig_last_save"] = "%s – %s (%s)" % [ls["parts"].get("mode", ""), ls["parts"].get("mission", ""),
+				ls["parts"].get("date", "")]
+		profile["imported_from"] = "Hidden & Dangerous 2 (PlayersProfiles/%s)" % e.get("folder", n)
+		save_profile()
+		_import_orig_options(e.get("options", {}))
+		if prog > best_prog:
+			best_prog = prog
+			best = n
+	var mark := FileAccess.open(profiles_dir + "/orig_import_done", FileAccess.WRITE)
+	if mark:
+		mark.store_string(Time.get_datetime_string_from_system())
+	if best != "":
+		select_profile(best)
+
+
+func _import_orig_options(o: Dictionary) -> void:
+	var s: Dictionary = o.get("settings", {})
+	if s.is_empty():
+		return
+	var pc := ConfigFile.new()
+	var t: Dictionary = s.get("detail_toggles", {})
+	var g := {"gamma": 0.6 + float(s.get("gamma", 50.0)) / 100.0 * 0.8,
+		"shadows": t.get("shadows", true), "morphing": t.get("morphing", true), "decals": t.get("footprints_decorations", true),
+		"blood": t.get("bloodstains", true), "grass": t.get("grass", true), "dynamic_lights": t.get("dynamics", true),
+		"high_models": t.get("high_res_models", true), "quality": clampi(int(s.get("detail_preset", {}).get("index", 2)), 0, 2)}
+	for k in g:
+		pc.set_value("graphics", k, g[k])
+	pc.set_value("audio", "master_volume", clampf(float(s.get("sound_volume", 80.0)) / 100.0, 0.0, 1.0))
+	pc.set_value("audio", "music_volume", clampf(float(s.get("music_volume", 70.0)) / 100.0, 0.0, 1.0))
+	# Original-Mausempfindlichkeit 0–100 (Standard 66,6) -> eigene Skala (Standard 0,12)
+	pc.set_value("controls", "mouse_sensitivity", clampf(0.12 * float(s.get("mouse_sensitivity", 66.6)) / 66.6, 0.03, 0.4))
+	pc.set_value("controls", "invert_y", bool(s.get("invert_mouse", false)))
+	pc.set_value("game", "subtitles", bool(s.get("subtitles", true)))
+	pc.set_value("game", "crosshair", bool(s.get("allow_crosshair", true)))
+	pc.save(profile_dir() + "/options.cfg")
+	Settings.use_profile(profile_dir() + "/options.cfg")
 
 
 ## Statistik fürs Profil (Original-Profilinfo: Spielzeit, Getötete, Munition)
@@ -341,8 +460,273 @@ func is_fallen(pid: String) -> bool:
 	return campaign.get("fallen", []).has(pid)
 
 
+# --- Original-Kader (SAS, src/campaign/sas.gd) --------------------------------------
+## Originalkampagne: 30 SAS-Soldaten mit Werten, Rang, Erfahrung; Team (bis 4) und Inventare je Profil
+## in campaign["sas"], ["team"], ["inv"], ["storage"]. Teamauswahl nur, wo das Original sie vorsieht.
+
+const ORIG_FOLDER_1 := {"a1_blizzard": "ARCTIC1", "a2_erkundung": "ARCTIC2", "a3_rendezvous": "ARCTIC3"}
+
+
+func orig_folder(id: String) -> String:
+	if ORIG_FOLDER_1.has(id):
+		return ORIG_FOLDER_1[id]
+	return String(MISSIONS.get(id, {}).get("orig", ""))
+
+
+func uses_sas(id: String) -> bool:
+	return CAMPAIGN_ORDER.has(id) and orig_folder(id) != "" and SAS.available()
+
+
+func sas_states() -> Dictionary:
+	if not campaign.has("sas") or typeof(campaign["sas"]) != TYPE_DICTIONARY or campaign["sas"].is_empty():
+		campaign["sas"] = SAS.new_states()
+	return campaign["sas"]
+
+
+func sas_team() -> Array:
+	var out: Array = []
+	for i in campaign.get("team", []):
+		out.append(int(i))
+	return out
+
+
+func sas_inventory(idx: int) -> Dictionary:
+	var invs: Dictionary = campaign.get("inv", {})
+	if not invs.has(str(idx)):
+		invs[str(idx)] = SAS.new_inventory()
+		campaign["inv"] = invs
+	return invs[str(idx)]
+
+
+func set_sas_team(team: Array) -> void:
+	campaign["team"] = team.duplicate()
+
+
+## Teamauswahl im Menü erforderlich? „select“ = freie Auswahl, „refill“ = Gefallene ersetzen.
+func sas_team_mode(id: String) -> String:
+	var mode := SAS.team_mode(SAS.mission_info(orig_folder(id)))
+	if sas_team().is_empty():
+		return "select"
+	if mode == "keep" and sas_team().size() < SQUAD_SIZE and _alive_team().size() == 0:
+		return "select"
+	return mode
+
+
+func _alive_team() -> Array:
+	var st := sas_states()
+	return sas_team().filter(func(i): return st.has(str(i)) and not st[str(i)]["dead"])
+
+
+## Vor einem Kampagneneinsatz: Team gültig machen (Gefallene raus; automatische Auswahl, falls nötig),
+## Lager nach Gamedata00.gdt befüllen, Inventare neuer Mitglieder mit der Original-Empfehlung ausstatten,
+## Missionsgegenstände (miss_itm.def „essentials“) sicherstellen. Mehrfach aufrufbar (nur einmal je Mission).
+func prepare_sas(id: String, force := false) -> void:
+	if not uses_sas(id):
+		return
+	if campaign.get("sas_prepared", "") == id and not force:
+		return
+	var info := SAS.mission_info(orig_folder(id))
+	var st := sas_states()
+	var team := _alive_team()
+	var mode := sas_team_mode(id)
+	var new_storage := String(info.get("equipment_screen", "")) == "equipment_new_storage"
+	if team.is_empty() or mode in ["select", "refill"]:
+		team = SAS.auto_select(st, SQUAD_SIZE, team if mode != "select" or not team.is_empty() else [])
+	set_sas_team(team)
+	campaign["storage"] = SAS.mission_storage(info, campaign.get("storage", []))
+	var rec := SAS.recommended_presets(info)
+	# Empfohlene Presets: schwerstes Preset an den kräftigsten Soldaten (Traglast = Kraft)
+	var need: Array = []
+	for i in team.size():
+		var inv := sas_inventory(team[i])
+		var empty: bool = int(inv.get("hands", -1)) < 0 and inv.get("items", []).is_empty()
+		if empty or (new_storage and mode == "select"):
+			need.append(team[i])
+	var presets: Array = []
+	for i in need.size():
+		presets.append(SAS.preset_inventory(rec[i % rec.size()] if not rec.is_empty() else 1))
+	presets.sort_custom(func(a, b): return SAS.inv_weight(a) > SAS.inv_weight(b))
+	need.sort_custom(func(a, b): return float(st[str(a)]["stats"]["strength"]) > float(st[str(b)]["stats"]["strength"]))
+	for i in need.size():
+		campaign["inv"][str(need[i])] = presets[i]
+	ensure_essentials(id)
+	for idx in team:
+		fit_inventory(idx, id)
+	campaign["sas_prepared"] = id
+	save_campaign()
+
+
+## Überladung abbauen (Original sperrt das Fortsetzen bei Überladung): zuerst Munition/Kleinteile aus dem
+## Inventar ins Lager, dann die Schulterwaffe. Benötigte Missionsgegenstände bleiben.
+func fit_inventory(idx: int, id: String = current_mission_id) -> void:
+	var inv := sas_inventory(idx)
+	var strength := float(sas_states()[str(idx)]["stats"]["strength"])
+	var keep: Array = SAS.essentials(SAS.mission_info(orig_folder(id))).map(func(e): return e[0])
+	if not campaign.has("storage"):
+		campaign["storage"] = []
+	var store := {"items": campaign["storage"]}
+	var guard := 200
+	while SAS.overloaded(inv, strength) and guard > 0:
+		guard -= 1
+		var victim := -1
+		for i in range(inv["items"].size() - 1, -1, -1):
+			if not keep.has(int(inv["items"][i][0])):
+				victim = int(inv["items"][i][0])
+				break
+		if victim >= 0:
+			SAS.add_item(store, victim, SAS.remove_item(inv, victim, 1))
+		elif int(inv.get("shoulder", -1)) >= 0:
+			SAS.add_item(store, int(inv["shoulder"]), 1)
+			inv["shoulder"] = -1
+		else:
+			break
+
+
+## Benötigte Gegenstände der Mission (z. B. Arctic1: Drahtschere, Fotoapparat) ins Team-Inventar
+func ensure_essentials(id: String) -> void:
+	var team := sas_team()
+	if team.is_empty():
+		return
+	for e in SAS.essentials(SAS.mission_info(orig_folder(id))):
+		var have := 0
+		for idx in team:
+			have += SAS.count_of(sas_inventory(idx), e[0])
+		if have >= e[1]:
+			continue
+		var target: int = team[0]
+		for idx in team:
+			if SAS.can_add(sas_inventory(idx), float(sas_states()[str(idx)]["stats"]["strength"]), e[0], e[1] - have):
+				target = idx
+				break
+		SAS.add_item(sas_inventory(target), e[0], e[1] - have)
+
+
+func is_sas_pid(pid: String) -> bool:
+	return pid.begins_with("sas_")
+
+
+func sas_index(pid: String) -> int:
+	return int(pid.substr(4)) if is_sas_pid(pid) else -1
+
+
+func _sas_entry(idx: int) -> Dictionary:
+	var st: Dictionary = sas_states().get(str(idx), {})
+	return {"pid": "sas_%d" % idx, "name": SAS.short_name(idx, int(st.get("rank", 0))), "sas": idx}
+
+
+## Kaderwerte, Inventar und Ausrüstung eines SAS-Soldaten auf die Spielfigur übertragen
+## (Gesundheit wie Gegner mit Mission.HP-Skala 0,5; Magazine/Granaten/Verbände aus dem Inventar).
+func apply_sas(s: Soldier, pid: String) -> void:
+	var idx := sas_index(pid)
+	var st: Dictionary = sas_states().get(str(idx), {})
+	if st.is_empty():
+		return
+	var stats: Dictionary = st["stats"]
+	s.max_health = clampf(float(stats.get("health", 500)) * 0.5, 50.0, 500.0)
+	s.health = s.max_health
+	s.skill_shooting = float(stats.get("shooting", 50))
+	s.skill_stealth = float(stats.get("stealth", 50))
+	s.skill_endurance = float(stats.get("endurance", 50))
+	s.skill_first_aid = float(stats.get("first_aid", 50))
+	var lo := SAS.to_loadout(sas_inventory(idx))
+	s.medkits = int(lo["medkits"])
+	s.has_binoculars = bool(lo["binoculars"])
+	s.set_meta("orig_items", lo["items"])
+	s.set_meta("sas", idx)
+	s.set_meta("lockpick", float(stats.get("lockpick", 50)))
+	for w in s.weapons:
+		if w == null:
+			continue
+		if w.data.slot == WeaponData.Slot.GRENADE:
+			var n := int(lo["grenades"])
+			w.in_mag = 1 if n > 0 else 0
+			w.reserve = maxi(n - 1, 0)
+		else:
+			var mags := int(lo["mags"].get(String(w.data.id), 0))
+			w.in_mag = w.data.magazine_size
+			w.reserve = w.data.magazine_size * maxi(mags, 0)
+
+
+## Nach dem Einsatz: Verbrauch ins Inventar zurückschreiben (Magazine, Granaten, Verbände), Training,
+## Erfahrung, Beförderungen, Gefallene. Ergebnis für die Nachbesprechung.
+func finish_sas(members: Array, success: bool) -> Dictionary:
+	var st := sas_states()
+	var gains := {}
+	var xp := {}
+	var fallen: Array = []
+	var team := sas_team()
+	for s in members:
+		var sol := s as Soldier
+		if sol == null or not is_sas_pid(sol.persistent_id):
+			continue
+		var idx := sas_index(sol.persistent_id)
+		if not st.has(str(idx)):
+			continue
+		if not sol.alive:
+			st[str(idx)]["dead"] = true
+			fallen.append(idx)
+			continue
+		gains[idx] = SAS.training_gain(sol.training)
+		xp[idx] = SAS.experience_gain(sol.training, true, success)
+		_write_back_inventory(sol, idx)
+	var before := {}
+	for idx in gains:
+		before[idx] = (st[str(idx)]["stats"] as Dictionary).duplicate()
+	var promoted := SAS.apply_mission(st, team.filter(func(i): return not fallen.has(i)), gains, xp)
+	set_sas_team(team.filter(func(i): return not fallen.has(i)))
+	var improved := {}
+	for idx in before:
+		var diff := {}
+		for k in before[idx]:
+			var d := float(st[str(idx)]["stats"][k]) - float(before[idx][k])
+			if d > 0.0005:
+				diff[k] = d
+		improved[SAS.short_name(idx, int(st[str(idx)]["rank"]))] = diff
+	campaign["sas_prepared"] = ""
+	save_campaign()
+	return {"promoted": promoted.map(func(i): return [SAS.display_name(i), SAS.rank_name(int(st[str(i)]["rank"]))]),
+		"improved": improved, "fallen": fallen.map(func(i): return SAS.display_name(i))}
+
+
+func _write_back_inventory(s: Soldier, idx: int) -> void:
+	var inv := sas_inventory(idx)
+	var lo := SAS.to_loadout(inv)
+	# Originalnummer der Waffe je WeaponData (Hände, Schulter, Inventar)
+	var orig_of := {}
+	var wids: Array = [int(inv.get("hands", -1)), int(inv.get("shoulder", -1))]
+	for e in inv["items"]:
+		wids.append(int(e[0]))
+	for wid in wids:
+		if wid >= 0 and SAS.item_kind(wid) == "weapon":
+			var wd := WeaponDB.from_orig(wid)
+			if wd and not orig_of.has(wd.id):
+				orig_of[wd.id] = wid
+	for w in s.weapons:
+		if w == null or not orig_of.has(w.data.id):
+			continue
+		var wid: int = orig_of[w.data.id]
+		if w.data.slot == WeaponData.Slot.GRENADE:
+			for e in inv["items"]:
+				if int(e[0]) == wid:
+					e[1] = w.in_mag + w.reserve
+		else:
+			var ammo := SAS.ammo_of(wid)
+			for e in inv["items"]:
+				if int(e[0]) == ammo:
+					e[1] = int(ceil(float(w.reserve) / maxf(w.data.magazine_size, 1)))
+	var used_med := int(lo["medkits"]) - s.medkits
+	for m in SAS.MEDKITS:
+		if used_med > 0:
+			used_med -= SAS.remove_item(inv, m, used_med)
+	inv["items"] = inv["items"].filter(func(e): return int(e[1]) > 0)
+
+
 ## Einsatzfähiger Trupp: überlebender Stammkader, aufgefüllt aus der Reserve.
+## Originalkampagne: das SAS-Team (Gefallene fehlen; aufgefüllt nur, wo das Original es vorsieht).
 func alive_roster() -> Array:
+	if uses_sas(current_mission_id):
+		prepare_sas(current_mission_id)
+		return _alive_team().map(func(i): return _sas_entry(i))
 	var r := ROSTER.filter(func(x): return not is_fallen(x["pid"]))
 	for x in RESERVE:
 		if r.size() >= SQUAD_SIZE:
@@ -353,6 +737,8 @@ func alive_roster() -> Array:
 
 
 func roster_entry(pid: String) -> Dictionary:
+	if is_sas_pid(pid):
+		return _sas_entry(sas_index(pid))
 	for x in ROSTER + RESERVE:
 		if x["pid"] == pid:
 			return x
@@ -385,6 +771,7 @@ func _ready() -> void:
 		if arg.begins_with("--"):
 			var kv := arg.substr(2).split("=", true, 1)
 			cli[kv[0]] = kv[1] if kv.size() > 1 else "1"
+	_register_orig_missions()
 	_load_current_profile()
 	if cli.has("screenshot"):
 		_screenshot_after(int(cli.get("frames", "120")), cli["screenshot"])
@@ -402,7 +789,20 @@ func _ready() -> void:
 		get_tree().root.add_child.call_deferred(t)
 
 
+## Original-Setup „Wenn inakt. aussetz.“: Mission pausieren, wenn das Fenster den Fokus verliert
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and Settings.pause_unfocused and not cli.has("autoplay"):
+		var m := current_mission()
+		if m and not get_tree().paused:
+			var pm := m.get_node_or_null("PauseMenu")
+			if pm and pm.has_method("open"):
+				pm.open()
+
+
 func loadout_for(pid: String) -> Array:
+	if is_sas_pid(pid):
+		var lo: Array = SAS.to_loadout(sas_inventory(sas_index(pid)))["loadout"]
+		return lo if lo[0] != "" or lo[1] != "" else ["", "colt", ""]
 	if loadouts.has(pid):
 		return loadouts[pid]
 	var e := roster_entry(pid)
@@ -414,6 +814,7 @@ func start_mission(id: String) -> void:
 		push_error("Unbekannte Mission: %s" % id)
 		return
 	current_mission_id = id
+	prepare_sas(id)
 	get_tree().paused = false
 	get_tree().change_scene_to_file(MISSION_SCENE)
 

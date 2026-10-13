@@ -36,6 +36,33 @@ func _run() -> void:
 	check(ex != null and ex.stats.tracks >= 5, "Original-Spuren (tracks.dat)", str(ex.stats.tracks) if ex else "-")
 	check(ex != null and ex.music.stream != null and ex.mission_music.get("normal", "") == "ar1.ogg",
 		"Missionsmusik ar1.ogg (Musiktabelle Eintrag 19)")
+	# Original-Grafikoptionen wirken im Level: GRAS (Vegetation) und DYNAMIK (dynamische Lichter)
+	check(m.orig.grass_nodes.size() > 20, "Gras-Objekte erkannt (Option GRAS)", str(m.orig.grass_nodes.size()))
+	# Texturqualität „HD (KI)“: Originaltexturen sind höchstens 512 px, KI-Fassungen bis 2048 px
+	var max_w := 0
+	for mi in m.orig.root.find_children("*", "MeshInstance3D", true, false):
+		var mesh := (mi as MeshInstance3D).mesh
+		if mesh == null:
+			continue
+		for si in mini(mesh.get_surface_count(), 2):
+			var mat := mesh.surface_get_material(si) as BaseMaterial3D
+			if mat and mat.albedo_texture:
+				max_w = maxi(max_w, mat.albedo_texture.get_width())
+		if max_w > 512:
+			break
+	check(max_w > 512, "Level nutzt KI-HD-Texturen (Option Texturqualität)", "größte Breite %d px" % max_w)
+	Settings.grass = false
+	Settings.dynamic_lights = false
+	Settings.changed.emit()
+	await frames(2)
+	var grass_off: bool = m.orig.grass_nodes.all(func(g): return not g.visible)
+	var lights_off: bool = ex._lights.all(func(l): return not l.visible)
+	check(grass_off and lights_off and ex._lights.size() > 50, "GRAS/DYNAMIK aus: Vegetation und Lichter ausgeblendet")
+	Settings.grass = true
+	Settings.dynamic_lights = true
+	Settings.changed.emit()
+	await frames(2)
+	check(m.orig.grass_nodes.all(func(g): return g.visible), "GRAS wieder an")
 	var lamp_ok := m.light_at(m.lamps[0][0]) > m.light_factor if m.lamps.size() > 0 else false
 	check(lamp_ok, "Original-Lichter erhellen ihre Umgebung für die Sicht-Erkennung")
 	var gg := rt.actors.get("GATE_GUARD") as Soldier
@@ -53,7 +80,7 @@ func _run() -> void:
 	var kan := rt.actors.get("KANISTERNIK") as Soldier
 	check(kan != null and kan.weapons[0] != null and kan.weapons[0].data.id == &"mp40", "Kanisternik mit MP 40 (items.dat)")
 	var rebel := rt.actors.get("REBEL") as Soldier
-	check(rebel != null and rebel.team == Soldier.TEAM_ALLIED, "Sygurd (Rebel) gespawnt")
+	check(rebel != null and rebel.team == Soldier.TEAM_NEUTRAL, "Sygurd (Rebel) gespawnt, neutral (Original-Seite 4)")
 	check(gg.model.orig_figure != null and gg.model.orig_figure.find_child("Skeleton3D", true, false) != null,
 		"Torwache als Original-Figur mit Skelett (ge01*)")
 	check(m.squad.members[0].model.orig_figure != null, "Kommandos als Original-Figur (en01)")

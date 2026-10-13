@@ -109,13 +109,16 @@ func _open_doors_ahead(delta: float, dir: Vector3) -> void:
 		return
 	_door_check = 0.3
 	for n in soldier.get_tree().get_nodes_in_group("interactables"):
-		var door := n as Door
-		if door == null or door.is_open:
+		var door := n as Node3D
+		if not (n is Door or n is OrigInteractive.OrigDoor) or n.is_open:
 			continue
 		var to := door.global_position - soldier.global_position
 		to.y = 0.0
 		if to.length() < 1.8 and (to.length() < 0.7 or to.normalized().dot(dir) > 0.3):
-			door.interact(soldier)
+			if n is OrigInteractive.OrigDoor:
+				n.ai_open(soldier)
+			else:
+				n.interact(soldier)
 
 
 func _turn_towards_dir(dir: Vector3, delta: float, speed: float) -> void:

@@ -97,6 +97,8 @@ func impact(pos: Vector3, normal: Vector3) -> void:
 
 
 func blood(pos: Vector3, normal: Vector3) -> void:
+	if not Settings.blood:
+		return   # Original-Option „BLUTFLECKEN“
 	_puff(pos, normal, Color(0.4, 0.03, 0.03, 0.9), 5)
 
 
@@ -181,6 +183,8 @@ func _puff(pos: Vector3, normal: Vector3, color: Color, amount: int) -> void:
 
 
 func _decal(pos: Vector3, normal: Vector3, tex: Texture2D, size: float) -> void:
+	if not Settings.decals:
+		return   # Original-Option „FUSSSPUREN, DEKORATIONEN“
 	var parent := _parent()
 	if parent == null:
 		return

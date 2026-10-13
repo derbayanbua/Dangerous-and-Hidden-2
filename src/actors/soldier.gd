@@ -23,6 +23,9 @@ enum MoveMode { WALK, RUN, SNEAK, JOG }
 
 const TEAM_ALLIED := 0
 const TEAM_AXIS := 1
+## Neutral (Original actors.bin Seite 3/4: Zivilisten, Gefangene, Sonderfiguren): wird von keiner Seite
+## gezielt angegriffen und greift selbst nicht an, bis ein Skript ihn dem Team zuordnet (SetNPCTeamStatus).
+const TEAM_NEUTRAL := 2
 
 ## Geschwindigkeiten m/s [Stance][MoveMode] (Designwerte)
 const SPEEDS := [
@@ -92,6 +95,24 @@ var heal_target: Soldier
 const HEAL_DURATION := 3.0
 const HEAL_AMOUNT := 45.0
 
+## Original-Fähigkeiten des SAS-Kaders (0–100, roster.json); < 0 = ohne Kaderwerte (neutral).
+## Wirkung (Annahme, Größenordnung am Original orientiert): Schießen -> Streuung, Tarnung -> Erkennbarkeit,
+## Ausdauer -> Sprintverbrauch, Erste Hilfe -> Wirkung eines Verbands.
+var skill_shooting := -1.0
+var skill_stealth := -1.0
+var skill_endurance := -1.0
+var skill_first_aid := -1.0
+## Trainingszähler der laufenden Mission (SAS.training_gain): kills, sneak_s, sprint_s, heals, locks, unseen_kills
+var training := {}
+
+
+static func skill_k(v: float, at0: float, at100: float) -> float:
+	return 1.0 if v < 0.0 else lerpf(at0, at100, clampf(v / 100.0, 0.0, 1.0))
+
+
+func train(key: String, amount: float = 1.0) -> void:
+	training[key] = training.get(key, 0.0) + amount
+
 
 ## Verband anlegen: Kamerad vor sich (≤ 2 m, verletzt) oder sich selbst.
 func start_heal(candidates: Array) -> bool:
@@ -127,8 +148,10 @@ func _update_heal(delta: float) -> void:
 	if heal_time_left <= 0.0:
 		heal_time_left = 0.0
 		medkits -= 1
-		heal_target.heal(HEAL_AMOUNT)
-		Events.say("%s versorgt %s (+%d)." % [soldier_name, "sich selbst" if heal_target == self else heal_target.soldier_name, int(HEAL_AMOUNT)], 2.5)
+		var amount := HEAL_AMOUNT * skill_k(skill_first_aid, 0.7, 1.4)
+		heal_target.heal(amount)
+		train("heals")
+		Events.say("%s versorgt %s (+%d)." % [soldier_name, "sich selbst" if heal_target == self else heal_target.soldier_name, int(amount)], 2.5)
 
 
 ## Tarnung (Original: Mission_SetUniformDisguise). Gegner erkennen einen
@@ -368,8 +391,11 @@ func _update_movement(delta: float) -> void:
 	# Ausdauer: Rennen kostet, Gewicht der Ausrüstung erhöht den Verbrauch.
 	var moving := current_speed() > 0.3
 	if moving and mode == MoveMode.RUN and stance == Stance.STAND:
-		stamina = maxf(stamina - (10.0 + _carried_weight() * 0.4) * delta, 0.0)
+		stamina = maxf(stamina - (10.0 + _carried_weight() * 0.4) * delta * skill_k(skill_endurance, 1.4, 0.7), 0.0)
+		train("sprint_s", delta)
 	else:
+		if moving and stance != Stance.STAND:
+			train("sneak_s", delta)
 		stamina = minf(stamina + (12.0 if not moving else 6.0) * delta, 100.0)
 
 	# Schrittgeräusche für die Gehör-KI
@@ -404,6 +430,13 @@ func jump_or_climb() -> void:
 		return
 	if _climb_t > 0.0 or not is_on_floor() or vehicle != null:
 		return
+	# Original-Leiter in Reichweite: Springen klettert sie hinauf/hinunter (moderne Steuerung)
+	for l in get_tree().get_nodes_in_group("ladders"):
+		var ln := l as Node3D
+		var dxz := Vector2(ln.global_position.x - global_position.x, ln.global_position.z - global_position.z).length()
+		if dxz < 1.3 and l.can_interact(self):
+			l.climb(self)
+			return
 	if not try_climb():
 		_jump_request = true
 
@@ -471,6 +504,17 @@ func _fits(at: Vector3) -> bool:
 	params.collision_mask = 1
 	params.exclude = [get_rid()]
 	return get_world_3d().direct_space_state.intersect_shape(params, 1).is_empty()
+
+
+## Kletterbewegung entlang eines Pfades (z. B. Original-Leitern): erst zu mid (60 %), dann zu to
+func start_path_climb(from: Vector3, mid: Vector3, to: Vector3, duration: float) -> void:
+	_climb_from = from
+	_climb_mid = mid
+	_climb_to = to
+	_climb_dur = maxf(duration, 0.2)
+	_climb_t = _climb_dur
+	velocity = Vector3.ZERO
+	Events.emit_noise(global_position, 6.0, self, team, &"climb")
 
 
 func _update_climb(delta: float) -> void:
@@ -554,7 +598,8 @@ func current_spread() -> float:
 	var stance_k := [1.0, 0.75, 0.5][stance] as float
 	var move_k := clampf(current_speed() / 2.0, 0.0, 1.0) * w.data.spread_move_add
 	var fatigue := (1.0 - stamina / 100.0) * (0.6 if aiming else 0.3)
-	return base * stance_k + move_k + w.bloom * (0.6 if aiming else 1.0) + fatigue + extra_spread
+	var skill := skill_k(skill_shooting, 1.5, 0.7)
+	return (base * stance_k + move_k + w.bloom * (0.6 if aiming else 1.0) + fatigue) * skill + extra_spread
 
 
 static func _apply_spread(dir: Vector3, spread_deg: float) -> Vector3:

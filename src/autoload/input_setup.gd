@@ -14,8 +14,8 @@ var ACTIONS := {
 	"move_left": ["Links", KEY_A],
 	"move_right": ["Rechts", KEY_D],
 	"run": ["Sprinten (halten)", KEY_SHIFT],
-	"stance_crouch": ["Hocken", KEY_C],
-	"stance_prone": ["Hinlegen", KEY_Z],
+	"stance_crouch": ["Hocken / Schleichen", KEY_C],
+	"stance_prone": ["Hinlegen / Kriechen", KEY_Z],
 	"stance_stand": ["Springen / Klettern / Aufstehen", KEY_SPACE],
 	"lean_left": ["Lehnen links", KEY_Q],
 	"lean_right": ["Lehnen rechts", KEY_E],
@@ -119,6 +119,23 @@ func rebind(action: String, ev: InputEvent) -> void:
 	save_bindings()
 
 
+## Original „STANDARD-EINSTELLUNGEN 2“: alternative Belegung (Pfeiltasten, Strg hocken, Ende liegen)
+const PRESET_2 := {
+	"move_forward": KEY_UP, "move_back": KEY_DOWN, "move_left": KEY_LEFT, "move_right": KEY_RIGHT,
+	"run": KEY_SHIFT, "stance_crouch": KEY_CTRL, "stance_prone": KEY_END, "stance_stand": KEY_SPACE,
+	"lean_left": KEY_DELETE, "lean_right": KEY_PAGEDOWN, "reload": KEY_INSERT, "interact": KEY_ENTER,
+}
+
+
+func apply_preset(n: int) -> void:
+	reset_defaults()
+	if n == 2:
+		for action: String in PRESET_2:
+			InputMap.action_erase_events(action)
+			_add_event(action, PRESET_2[action])
+		save_bindings()
+
+
 func reset_defaults() -> void:
 	for action: String in ACTIONS:
 		InputMap.action_erase_events(action)
@@ -126,21 +143,30 @@ func reset_defaults() -> void:
 	save_bindings()
 
 
+## Tastenbelegung gehört wie im Original zum Profil (Options.bin) -> <Profil>/options.cfg
+func bindings_path() -> String:
+	return Settings.profile_path if Settings.profile_path != "" else PATH
+
+
 func save_bindings() -> void:
 	if "--autoplay" in " ".join(OS.get_cmdline_user_args()):
 		return   # Tests verändern die Tastenbelegung nicht
 	var cfg := ConfigFile.new()
-	cfg.load(PATH)
+	cfg.load(bindings_path())
 	for action: String in ACTIONS:
 		var evs := InputMap.action_get_events(action)
 		if evs.size() > 0:
 			cfg.set_value("keys", action, spec_from_event(evs[0]))
-	cfg.save(PATH)
+	cfg.save(bindings_path())
 
 
 func load_bindings() -> void:
+	# erst Standard, dann die gespeicherte Belegung (Profilwechsel übernimmt nichts vom vorherigen Profil)
+	for action: String in ACTIONS:
+		InputMap.action_erase_events(action)
+		_add_event(action, ACTIONS[action][1])
 	var cfg := ConfigFile.new()
-	if cfg.load(PATH) != OK or not cfg.has_section("keys"):
+	if cfg.load(bindings_path()) != OK or not cfg.has_section("keys"):
 		return
 	for action: String in cfg.get_section_keys("keys"):
 		if not ACTIONS.has(action):

@@ -42,27 +42,48 @@ func _run() -> void:
 	menu._start_btn.pressed.emit()
 	await frames(3)
 	check(menu._brief_root != null and is_instance_valid(menu._brief_root), "START öffnet die Einsatzbesprechung")
-	var go := find_button("Einsatz beginnen")
-	check(go != null, "Knopf „Einsatz beginnen“ vorhanden")
+	var go := find_button("Team und Ausrüstung")
+	check(go != null, "Knopf „Team und Ausrüstung“ vorhanden (Originalkader)")
 
-	# Teil 1A mit einem Gefallenen abschließen (Ziele wie per SetObjectiveStatus gesetzt)
+	# Original-Ablauf: Teamauswahl (Arctic1 = Kampagnenbeginn) -> Inventar-Auswahl -> Einsatz
+	var started := false
 	if go:
 		go.pressed.emit()
-	else:
+		await frames(3)
+		var scr: SasScreen = menu.sas_screen
+		check(scr != null and scr.page == "team" and Game.sas_team().size() == 4, "Teamauswahl mit 4 SAS-Soldaten",
+			"%s %s" % [scr.page if scr else "-", Game.sas_team()])
+		if scr:
+			var cont := scr.find_child("Continue", true, false) as Button
+			check(cont != null and not cont.disabled, "FORTSETZEN (Text 2653) aktiv")
+			if cont:
+				cont.pressed.emit()
+			await frames(3)
+			check(scr.page == "equip" and scr.can_start() == "", "Ausrüstung: empfohlene Auswahl, nicht überladen", scr.can_start())
+			started = scr.try_start()
+	if not started:
 		Game.start_mission("a1_blizzard")
 	var m := await wait_mission() as OrigMission
 	check(m != null and m.squad.members.size() == 4, "Arctic 1A mit vollem Kader")
+	check(m != null and Game.is_sas_pid(m.squad.members[0].persistent_id) and m.squad.members[0].skill_shooting > 0.0,
+		"Trupp = Original-SAS-Soldaten mit Werten", m.squad.members[0].soldier_name if m else "-")
 	isolate_enemies([])
 	var second: Soldier = m.squad.members[1]
 	var second_name := second.soldier_name
 	var second_pid := second.persistent_id
 	second.die(null)
 	m.runtime.game_values[30] = 99      # wie SaveGameValue(30, 99) im Originalskript
-	for i in range(1, 5):
-		m.set_orig_objective(i, 1)
-	await frames(2)
+	# Originalskript r_arc1a_objectives: OnCutscene(1) aktiviert Ziel 3 erst mit der Intro-Sequenz –
+	# vorher gesetzte Ziele würden zurückgesetzt. Darauf warten.
+	for attempt in 6:
+		for i in range(1, 5):
+			m.set_orig_objective(i, 1)
+		await seconds(3.5)   # Siegbedingung muss 3 s stabil sein
+		if m.finished:
+			break
 	check(Game.last_result.get("mission", "") == "a1_blizzard" and Game.last_result.get("success", false),
-		"Arctic 1A erfolgreich (alle Pflichtziele)", str(Game.last_result.get("reason", "")))
+		"Arctic 1A erfolgreich (alle Pflichtziele)", str(Game.last_result.get("reason", "")) + " | " +
+		str(m.objectives.map(func(o): return "%s:%d%s" % [o.id, o.state, "o" if o.optional else ""])) + " " + str(m.orig_objectives))
 	check(Game.is_unlocked("a2_erkundung"), "Teil 1B freigeschaltet")
 	check(Game.is_fallen(second_pid), "Gefallener im Kader vermerkt")
 	check(Game.last_result.get("fallen", []).has(second_name), "Nachbesprechung nennt Gefallenen")
@@ -78,7 +99,9 @@ func _run() -> void:
 	var m3 := await wait_mission() as OrigMission
 	var names := m3.squad.members.map(func(s): return s.soldier_name)
 	check(not names.has(second_name), "Folgeteil ohne Gefallenen", ", ".join(names))
-	check(m3.squad.members.size() == 4, "Ersatzmann aus der Reserve rückt nach", ", ".join(names))
+	# Original (Gamedata00.gdt): vor Arctic 1C kein Auffüllen – erst vor Arctic 2 („refill“)
+	check(m3.squad.members.size() == 3, "Arctic 1C: Team bleibt ohne Ersatz (Original)", ", ".join(names))
+	check(Game.sas_team_mode("a4_eisberg") == "refill", "Vor Arctic 2 (Eisberg): Team wieder auffüllen")
 	check(m3.runtime.game_values.get(30) == 99, "_LoadGameValue(30) liefert Wert aus Teil 1A")
 	Game.return_to_menu()
 	await frames(30)

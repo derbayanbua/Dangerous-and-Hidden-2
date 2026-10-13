@@ -273,7 +273,9 @@ func spawn_roster(start: Vector3, yaw: float, offsets: Array, max_count := -1) -
 	for i in roster.size():
 		var r: Dictionary = roster[i]
 		var off: Vector3 = offsets[i] if i < offsets.size() else Vector3(i * 1.5, 0, 0)
-		spawn_squad_member(start + Basis(Vector3.UP, yaw) * off, yaw, r["name"], Game.loadout_for(r["pid"]), r["pid"])
+		var sm := spawn_squad_member(start + Basis(Vector3.UP, yaw) * off, yaw, r["name"], Game.loadout_for(r["pid"]), r["pid"])
+		if Game.is_sas_pid(r["pid"]):
+			Game.apply_sas(sm, r["pid"])     # Originalwerte und Inventar des SAS-Soldaten
 
 
 func spawn_squad_member(pos: Vector3, yaw: float, sname: String, loadout: Array, pid: String) -> Soldier:
@@ -355,8 +357,9 @@ func set_orig_objective(index: int, status: int) -> void:
 	if o == null:
 		return
 	match status:
-		0, 2:
-			# 0 = in Arbeit, 2 = wieder offen (z. B. Beweisstück aus dem Inventar entfernt)
+		0, 2, 4:
+			# 0 = in Arbeit, 2 = wieder offen (z. B. Beweisstück aus dem Inventar entfernt),
+			# 4 = angezeigt, nachrangig (Skriptkommentare: „optional“/„must survive“)
 			if o.state != Objective.State.ACTIVE:
 				o.state = Objective.State.ACTIVE
 				Events.objective_updated.emit(id)
@@ -370,13 +373,32 @@ func set_orig_objective(index: int, status: int) -> void:
 	_check_orig_completion()
 
 
-func _check_orig_completion() -> void:
-	if finished or orig_objectives.is_empty():
-		return
+## Siegbedingung der Originalmissionen (abgeleitet aus den Skripten, nicht im Code belegt):
+## alle AKTIVIERTEN Pflichtziele erfüllt (nicht aktivierte zählen nicht – z. B. alternative Sammelpunkte),
+## mindestens eines erfüllt, und der Zustand bleibt 3 s stabil (Skripte schalten nach einem Erfolg oft
+## sofort das nächste Ziel frei).
+var _completion_pending := false
+
+
+func _orig_complete_now() -> bool:
+	var any := false
 	for o in objectives:
-		if not o.optional and o.state != Objective.State.DONE:
-			return
-	finish(true, "Alle Einsatzziele erfüllt.")
+		if o.optional or o.state == Objective.State.INACTIVE:
+			continue
+		if o.state != Objective.State.DONE:
+			return false
+		any = true
+	return any
+
+
+func _check_orig_completion() -> void:
+	if finished or orig_objectives.is_empty() or _completion_pending or not _orig_complete_now():
+		return
+	_completion_pending = true
+	await get_tree().create_timer(3.0, false).timeout
+	_completion_pending = false
+	if not finished and _orig_complete_now():
+		finish(true, "Alle Einsatzziele erfüllt.")
 
 
 func required_done(except: StringName = &"") -> bool:
@@ -407,6 +429,12 @@ func _on_soldier_died(s: Node, attacker: Node) -> void:
 	if s is Soldier and (s as Soldier).team == Soldier.TEAM_AXIS and attacker is Soldier \
 			and (attacker as Soldier).team == Soldier.TEAM_ALLIED:
 		stats["kills"] += 1
+		# Training (Original 0x5A0BE0): Abschuss; Gegner ahnungslos (nicht im Kampf/Suche) -> Tarnung
+		var att := attacker as Soldier
+		att.train("kills")
+		var eb: EnemyBrain = s.get_node_or_null("EnemyBrain")
+		if eb and eb.state in [EnemyBrain.State.GUARD, EnemyBrain.State.PATROL]:
+			att.train("unseen_kills")
 	if squad.all_dead():
 		finish(false, "Der gesamte Trupp ist gefallen.")
 
@@ -437,6 +465,8 @@ func finish(success: bool, reason: String) -> void:
 		"objectives": objectives.map(func(o): return [o.text, o.state, o.optional]),
 		"mission": Game.current_mission_id,
 	}
+	if Game.uses_sas(Game.current_mission_id):
+		Game.last_result["sas"] = Game.finish_sas(squad.members, success)
 	var fallen := []
 	for mm in squad.members:
 		if not mm.alive:

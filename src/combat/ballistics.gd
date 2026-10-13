@@ -102,6 +102,8 @@ func _step(p: Projectile, delta: float) -> bool:
 	else:
 		# Zerstörbare Objekte (z. B. Suchscheinwerfer) bieten on_bullet_hit an
 		var target: Node = collider as Node
+		if target and target.has_meta("hit_proxy") and is_instance_valid(target.get_meta("hit_proxy")):
+			target = target.get_meta("hit_proxy")     # z. B. zerstörbare Originalobjekte (OrigInteractive)
 		for i in 3:
 			if target == null or target.has_method("on_bullet_hit"):
 				break

@@ -27,6 +27,23 @@ func _ready() -> void:
 	lines.append("Alarm ausgelöst: %s" % ("ja" if st.get("alarm", false) else "nein"))
 	var fallen: Array = r.get("fallen", [])
 	lines.append("Gefallen: %s" % (", ".join(fallen) if not fallen.is_empty() else "niemand"))
+	# Originalkader: Beförderungen (Text 2769) und Werteverbesserungen (2770) nach dem Einsatz
+	var sas: Dictionary = r.get("sas", {})
+	for p in sas.get("promoted", []):
+		lines.append("%s %s %s" % [p[0], SAS.text(2769, "Befördert zum"), p[1]])
+	var imp: Dictionary = sas.get("improved", {})
+	if not imp.is_empty():
+		lines.append(SAS.text(2770, "Status-Verbesserung") + ":")
+		var names := {}
+		for e in SAS.STAT_PANEL:
+			names[e[0]] = SAS.text(e[1], e[0])
+		for who in imp:
+			var parts: Array = []
+			for k in imp[who]:
+				if names.has(k):
+					parts.append("%s +%.2f" % [names[k], imp[who][k]])
+			if not parts.is_empty():
+				lines.append("  %s: %s" % [who, ", ".join(parts)])
 	var idx := Game.CAMPAIGN_ORDER.find(r.get("mission", ""))
 	if r.get("success", false) and idx >= 0 and idx + 1 < Game.CAMPAIGN_ORDER.size():
 		lines.append("")

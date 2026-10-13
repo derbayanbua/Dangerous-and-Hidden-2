@@ -10,12 +10,15 @@ $suites = @(
   @{ name = "test_m02";      args = "--headless -- --mission=m02_nordlicht --autoplay=test_m02" },
   @{ name = "test_m03";      args = "--headless -- --mission=m03_sandsturm --autoplay=test_m03" },
   @{ name = "test_campaign"; args = "--headless -- --autoplay=test_campaign" },
-  @{ name = "test_menu";     args = "--headless -- --autoplay=test_menu --profiles_dir=user://test_profiles" },
+  @{ name = "test_menu";     args = "--headless -- --autoplay=test_menu --profiles_dir=user://test_profiles --noimport" },
+  @{ name = "test_profile_import"; args = "--headless -- --autoplay=test_profile_import --profiles_dir=user://test_import" },
   @{ name = "test_vehicles"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_vehicles" },
   @{ name = "test_ls_compiler"; args = "--headless -- --autoplay=test_ls_compiler --scripts=res://orig_cache" },
   @{ name = "test_a1";       args = "--headless -- --mission=a1_blizzard --autoplay=test_a1" },
   @{ name = "test_a2";       args = "--headless -- --mission=a2_erkundung --autoplay=test_orig_part --commandos=1" },
-  @{ name = "test_a3";       args = "--headless -- --mission=a3_rendezvous --autoplay=test_orig_part --commandos=4" }
+  @{ name = "test_a3";       args = "--headless -- --mission=a3_rendezvous --autoplay=test_orig_part --commandos=4" },
+  @{ name = "test_sas";      args = "--headless -- --autoplay=test_sas" },
+  @{ name = "test_interactive"; args = "--headless -- --mission=a1_blizzard --autoplay=test_interactive" }
 )
 $failed = 0
 if (-not $Exe) {

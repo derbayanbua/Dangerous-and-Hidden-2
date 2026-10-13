@@ -13,6 +13,7 @@ func _init() -> void:
 	text_place_time = 4512
 	objective_text_base = 6010
 	optional_objectives = [5, 6, 7]
+	light_factor = 0.5          # Nacht
 	enemy_uniform = Color(0.36, 0.38, 0.33)   # Feldgrau (Innenanlage)
 
 
