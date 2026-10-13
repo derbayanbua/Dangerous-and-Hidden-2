@@ -152,7 +152,8 @@ func _physics_process(delta: float) -> void:
 				var d := distance_to(slot)
 				if d > 1.5:
 					var mode := Soldier.MoveMode.RUN if d > 8.0 else leader.move_mode
-					if leader.move_mode == Soldier.MoveMode.SNEAK and d < 15.0:
+					# Anführer schleicht (geduckt/liegend) -> Kameraden schleichen mit
+					if (leader.move_mode == Soldier.MoveMode.SNEAK or leader.stance != Soldier.Stance.STAND) and d < 15.0:
 						mode = Soldier.MoveMode.SNEAK
 					move_to(slot, mode)
 				elif not has_move_target():

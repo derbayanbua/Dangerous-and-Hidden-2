@@ -1,4 +1,4 @@
-﻿# Release: Tests -> Pipeline-Skripte uebernehmen -> Version setzen -> Commit, Tag, Push nach GitHub.
+# Release: Tests -> Pipeline-Skripte uebernehmen -> Version setzen -> Commit, Tag, Push nach GitHub.
 # Aufruf: powershell -File tools\release.ps1 -Version 0.2.0 -Message "Kurzbeschreibung" [-SkipTests]
 # Vorgabe des Auftraggebers: JEDER Release wird nach GitHub committet
 # (Repo derbayanbua/Dangerous-Hidden-2-, Deploy-Key D:\Workspace_D\.ssh_hd2\id_rsa_hd2, nicht im Repo).
@@ -21,7 +21,7 @@ if (-not $SkipTests) {
 # Konverter-/RE-Skripte (eigener Code) ins Repo; keine Spieldaten (wav_tables.json stammt aus rw_data.dll)
 $pipe = "$proj\pipeline"
 New-Item -ItemType Directory -Force $pipe | Out-Null
-Get-ChildItem $tools -File -Filter *.py | ForEach-Object { Copy-Item $_.FullName $pipe -Force }
+Get-ChildItem $tools -File -Filter *.py | Where-Object { -not $_.Name.StartsWith("_") } | ForEach-Object { Copy-Item $_.FullName $pipe -Force }   # _*.py = Analyse-Hilfen
 
 # Version in project.godot
 $pg = [IO.File]::ReadAllText("$proj\project.godot")

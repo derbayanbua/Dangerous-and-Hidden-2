@@ -31,6 +31,7 @@ var _alarm_label: Label
 var _center_label: Label
 var _font_size := 16
 var _binoc_mask: TextureRect
+var orig_hud: OrigHud
 
 
 ## Schwarze Maske mit zwei überlappenden Kreisen (Fernglas-Optik).
@@ -97,6 +98,16 @@ func setup(m: Mission) -> void:
 	_binoc_mask.visible = false
 	_root.add_child(_binoc_mask)
 	_root.move_child(_binoc_mask, 0)
+	# Original-HUD (gameinterface.4ds) ersetzt Trupp-, Waffen-, Status-Panel und Textkompass
+	if OrigHud.available():
+		orig_hud = OrigHud.new()
+		_root.add_child(orig_hud)
+		_root.move_child(orig_hud, 1)
+		orig_hud.setup(mission)
+		for n: Control in [_team_box.get_parent(), _weapon_label.get_parent().get_parent(),
+				_stance_label.get_parent().get_parent(), _compass]:
+			n.visible = false
+		_msg_box.position.y = -230    # über der Truppleiste
 	Events.message.connect(_on_message)
 	Events.mission_finished.connect(_on_finished)
 	Events.objective_updated.connect(func(_id): _refresh_objectives())
@@ -275,7 +286,7 @@ func _process(_delta: float) -> void:
 		_ammo_label.text = ""
 		_mode_label.text = ""
 	var stance_txt: String = ["Stehend", "Hockend", "Liegend"][s.stance]
-	var move_txt: String = ["Gehen", "Rennen", "Schleichen"][s.move_mode]
+	var move_txt: String = ["Gehen", "Sprint", "Schleichen", "Laufen"][s.move_mode]
 	var cam_txt := "1. Person" if mission.rig.mode == CameraRig.Mode.FIRST else "3. Person"
 	if s.using_binoculars:
 		cam_txt = "Fernglas"

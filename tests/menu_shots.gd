@@ -17,16 +17,14 @@ func shot(name: String) -> void:
 
 
 func _run() -> void:
-	await shot("01_main")
 	var menu := get_tree().current_scene
-	menu._show_briefing("m01_funkfeuer")
-	await shot("02_briefing")
-	menu._brief_root.queue_free()
-	menu._menu.get_parent().get_parent().visible = true
-	menu._options()
-	await shot("03_options")
-	var opts := menu.get_child(menu.get_child_count() - 1)
-	var tabs: TabContainer = opts.find_children("*", "TabContainer", true, false)[0]
-	tabs.current_tab = 2
-	await shot("04_keys")
+	await shot("01_main")
+	menu.show_menu("singleplayer")
+	await shot("02_singleplayer")
+	menu.show_menu("campaign")
+	await shot("03_campaign")
+	menu.show_menu("options")
+	await shot("04_options")
+	menu._show_briefing("a1_blizzard")
+	await shot("05_briefing")
 	get_tree().quit()

@@ -16,6 +16,19 @@ func _run() -> void:
 	var rt: LsRuntime = m.runtime
 	check(rt != null and rt.vms.size() >= 100, "Originalskripte laufen", "%d VMs" % rt.vms.size())
 	check(rt.waypoints.size() > 200, "KI-Wegpunkte aus check2.bin", str(rt.waypoints.size()))
+	var oh: OrigHud = m.hud.orig_hud if m.hud else null
+	check(oh != null and oh.elements.size() > 80, "Original-HUD (gameinterface.4ds) aktiv", "%d Elemente" % (oh.elements.size() if oh else 0))
+	await frames(3)
+	if oh:
+		check(oh.elements.has("player00") and (oh.elements["player00"]["node"] as Control).visible
+			and not (oh.elements["player01"]["node"] as Control).visible, "HUD markiert aktiven Soldaten (Feld 1)")
+		check(not (oh.elements["soldier05"]["node"] as Control).visible, "HUD: freie Felder 5–6 ausgeblendet (4 Kommandos)")
+		var hb: Control = oh.elements["health00"]["node"]
+		var full_h := hb.size.y
+		m.squad.members[0].health = m.squad.members[0].max_health * 0.5
+		oh._process(0.016)   # headless tickt fast nur Physikframes -> HUD-Aktualisierung direkt auslösen
+		check(absf(hb.size.y - full_h * 0.5) < 2.0, "HUD-Gesundheitsleiste folgt der Gesundheit", "%.1f von %.1f px" % [hb.size.y, full_h])
+		m.squad.members[0].health = m.squad.members[0].max_health
 	var ex := rt.extras
 	check(ex != null and ex.stats.lights + ex.stats.spots > 60, "Original-Lichter (scene2 0x4040)",
 		"%d Punkt, %d Spot" % [ex.stats.lights, ex.stats.spots] if ex else "-")

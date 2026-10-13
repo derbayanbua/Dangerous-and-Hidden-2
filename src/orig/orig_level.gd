@@ -175,6 +175,16 @@ func model_instance(name: String) -> Node3D:
 	return _model(name.to_lower())
 
 
+## Modellvorlagen (verwaiste Knoten außerhalb des Baums) freigeben; sonst bleiben Mesh-Instanzen bis zum
+## Programmende bestehen (Leck, im Release-Export Absturz beim Beenden).
+func release() -> void:
+	for k in _model_cache:
+		var n = _model_cache[k]
+		if is_instance_valid(n) and not (n as Node).is_inside_tree():
+			(n as Node).free()
+	_model_cache.clear()
+
+
 ## Original-Figur mit Skelett und Animationen (tools/export_characters.py); null wenn nicht vorhanden.
 func character_instance(model: String) -> Node3D:
 	var key := "char:" + model.to_lower()

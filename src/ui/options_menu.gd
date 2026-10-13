@@ -53,7 +53,7 @@ func _display_tab() -> Control:
 	var res := OptionButton.new()
 	for i in Settings.RESOLUTIONS.size():
 		var r: Vector2i = Settings.RESOLUTIONS[i]
-		res.add_item("%d × %d" % [r.x, r.y], i)
+		res.add_item(Settings.resolution_name(r), i)
 		if r == Settings.resolution:
 			res.select(i)
 	res.item_selected.connect(func(i): Settings.resolution = Settings.RESOLUTIONS[i])

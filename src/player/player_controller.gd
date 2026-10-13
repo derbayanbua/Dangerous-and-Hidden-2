@@ -46,7 +46,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("stance_prone"):
 		active.stance_request = Soldier.Stance.CROUCH if active.stance_request == Soldier.Stance.PRONE else Soldier.Stance.PRONE
 	elif event.is_action_pressed("stance_stand"):
-		active.stance_request = Soldier.Stance.STAND
+		active.jump_or_climb()
 	elif event.is_action_pressed("reload"):
 		active.reload()
 	elif event.is_action_pressed("weapon_1"):
@@ -144,12 +144,8 @@ func _physics_process(_delta: float) -> void:
 		return
 	var basis := Basis(Vector3.UP, active.look_yaw)
 	active.move_input = basis * Vector3(iv.x, 0, iv.y)
-	if Input.is_action_pressed("run"):
-		active.move_mode = Soldier.MoveMode.RUN
-	elif Input.is_action_pressed("sneak"):
-		active.move_mode = Soldier.MoveMode.SNEAK
-	else:
-		active.move_mode = Soldier.MoveMode.WALK
+	# Moderne Steuerung: immer Laufschritt, Shift = Sprint; leise = geduckt/liegend
+	active.move_mode = Soldier.MoveMode.RUN if Input.is_action_pressed("run") else Soldier.MoveMode.JOG
 	# Automatisierte Tests simulieren Eingaben ohne Mausfang
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or Game.cli.has("autoplay")
 	active.trigger = captured and Input.is_action_pressed("fire")

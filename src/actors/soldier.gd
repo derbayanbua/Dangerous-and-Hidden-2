@@ -17,22 +17,28 @@ signal stance_changed(stance: int)
 signal shot_fired(weapon: Weapon)
 
 enum Stance { STAND, CROUCH, PRONE }
-enum MoveMode { WALK, RUN, SNEAK }
+## WALK/SNEAK: KI und Originalskripte (Patrouille, HUMAN_SETMODE_*); JOG: Normaltempo des
+## Spielers (moderne Steuerung: immer Laufschritt, Shift = Sprint/RUN, leise nur geduckt/liegend)
+enum MoveMode { WALK, RUN, SNEAK, JOG }
 
 const TEAM_ALLIED := 0
 const TEAM_AXIS := 1
 
 ## Geschwindigkeiten m/s [Stance][MoveMode] (Designwerte)
 const SPEEDS := [
-	[1.7, 4.6, 0.95],   # stehen: gehen, rennen, schleichen
-	[1.1, 2.3, 0.7],    # hocken
-	[0.45, 0.75, 0.35], # liegen (kriechen)
+	[1.7, 5.4, 0.95, 3.3],   # stehen: gehen, sprinten, schleichen, normal
+	[1.1, 2.3, 0.7, 1.3],    # hocken (normal = leises Schleichen)
+	[0.45, 0.75, 0.35, 0.6], # liegen (kriechen)
 ]
 const EYE_HEIGHT := [1.62, 1.05, 0.32]
 const CAPSULE_HEIGHT := [1.8, 1.2, 0.6]
 const STANCE_TIME := [0.0, 0.35, 0.9]   ## Wechselzeit in Haltung X hinein
 ## Schrittgeräusch-Radius in m [Stance][MoveMode]
-const STEP_NOISE := [[7.0, 18.0, 2.5], [4.0, 9.0, 1.5], [1.5, 2.5, 1.0]]
+const STEP_NOISE := [[7.0, 20.0, 2.5, 11.0], [4.0, 9.0, 1.5, 2.5], [1.5, 2.5, 1.0, 1.2]]
+const JUMP_VELOCITY := 4.2
+## Klettern/Überspringen beim Sprung vor einem Hindernis (Höhe über den Füßen, m)
+const CLIMB_MIN := 0.45
+const CLIMB_MAX := 2.3
 
 @export var soldier_name := "Soldat"
 @export var team := TEAM_ALLIED
@@ -333,8 +339,11 @@ func stance_transitioning() -> bool:
 
 func _update_movement(delta: float) -> void:
 	var mode := move_mode
-	if mode == MoveMode.RUN and (stamina < 5.0 or aiming):
-		mode = MoveMode.WALK
+	if mode == MoveMode.RUN and (stamina < 5.0 or aiming or stance != Stance.STAND):
+		mode = MoveMode.JOG if is_player_controlled else MoveMode.WALK
+	if _climb_t > 0.0:
+		_update_climb(delta)
+		return
 	var wish := move_input.limit_length(1.0)
 	var speed: float = SPEEDS[stance][mode]
 	if aiming:
@@ -347,10 +356,13 @@ func _update_movement(delta: float) -> void:
 	var accel := 10.0 if is_on_floor() else 2.0
 	velocity.x = move_toward(velocity.x, target.x, accel * delta * maxf(speed, 1.0))
 	velocity.z = move_toward(velocity.z, target.z, accel * delta * maxf(speed, 1.0))
-	if is_on_floor():
+	if is_on_floor() and _jump_request:
+		velocity.y = JUMP_VELOCITY
+	elif is_on_floor():
 		velocity.y = -0.5
 	else:
 		velocity.y -= _gravity * delta
+	_jump_request = false
 	move_and_slide()
 
 	# Ausdauer: Rennen kostet, Gewicht der Ausrüstung erhöht den Verbrauch.
@@ -369,6 +381,107 @@ func _update_movement(delta: float) -> void:
 			Events.emit_noise(global_position, r, self, team, &"step")
 			if r > 3.0:
 				Effects.play(&"step", global_position, -18.0 if mode != MoveMode.RUN else -10.0, 1.0, 30.0)
+
+
+# --- Springen / Klettern (moderne Steuerung: Sprungtaste vor Hindernis = klettern) ---
+var _jump_request := false
+var _climb_t := 0.0
+var _climb_dur := 0.0
+var _climb_from := Vector3.ZERO
+var _climb_mid := Vector3.ZERO
+var _climb_to := Vector3.ZERO
+
+
+func is_climbing() -> bool:
+	return _climb_t > 0.0
+
+
+## Sprungtaste: aus Hocke/Liegen aufstehen; stehend vor einem Hindernis hinaufklettern bzw.
+## darüber steigen, sonst springen.
+func jump_or_climb() -> void:
+	if stance != Stance.STAND:
+		stance_request = Stance.STAND
+		return
+	if _climb_t > 0.0 or not is_on_floor() or vehicle != null:
+		return
+	if not try_climb():
+		_jump_request = true
+
+
+func try_climb() -> bool:
+	var space := get_world_3d().direct_space_state
+	var fwd := forward()
+	fwd.y = 0.0
+	if fwd.length() < 0.1:
+		return false
+	fwd = fwd.normalized()
+	var feet := global_position
+	var ex: Array[RID] = exclude_rids()
+	# 1. Hindernis vor dem Soldaten (Knie- oder Brusthöhe)
+	var hit := {}
+	for h in [0.5, 1.2, 1.9]:
+		var q := PhysicsRayQueryParameters3D.create(feet + Vector3.UP * h, feet + Vector3.UP * h + fwd * 1.0, 1, ex)
+		hit = space.intersect_ray(q)
+		if not hit.is_empty():
+			break
+	if hit.is_empty():
+		return false
+	var wall: Vector3 = hit.position
+	wall.y = feet.y
+	# 2. Oberkante direkt hinter der Vorderseite
+	var top := _ray_down(space, wall + fwd * 0.12, feet.y + CLIMB_MAX + 0.4, feet.y + 0.2, ex)
+	if not top.is_finite():
+		return false
+	var h_top := top.y - feet.y
+	if h_top < CLIMB_MIN or h_top > CLIMB_MAX:
+		return false
+	# 3a. Dünnes Hindernis (Zaun, Mauer): dahinter landen
+	var beyond := _ray_down(space, wall + fwd * 0.9, top.y + 0.5, feet.y - 1.5, ex)
+	var on_top := _ray_down(space, wall + fwd * 0.45, top.y + 0.5, top.y - 0.25, ex)
+	var dest := Vector3.INF
+	if on_top.is_finite() and _fits(on_top):
+		dest = on_top                                   # breite Kante: hinaufklettern
+	elif beyond.is_finite() and h_top <= 1.4 and _fits(beyond):
+		dest = beyond                                   # über Zaun/Mauer steigen
+	if not dest.is_finite():
+		return false
+	_climb_from = feet
+	_climb_mid = Vector3(feet.x, top.y + 0.15, feet.z) + fwd * 0.25
+	_climb_to = dest + Vector3.UP * 0.02
+	_climb_dur = 0.35 + h_top * 0.35
+	_climb_t = _climb_dur
+	velocity = Vector3.ZERO
+	Events.emit_noise(global_position, 6.0, self, team, &"climb")
+	return true
+
+
+func _ray_down(space: PhysicsDirectSpaceState3D, at: Vector3, from_y: float, to_y: float, ex: Array[RID]) -> Vector3:
+	var q := PhysicsRayQueryParameters3D.create(Vector3(at.x, from_y, at.z), Vector3(at.x, to_y, at.z), 1, ex)
+	var r := space.intersect_ray(q)
+	return r.position if not r.is_empty() else Vector3.INF
+
+
+func _fits(at: Vector3) -> bool:
+	var params := PhysicsShapeQueryParameters3D.new()
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.26
+	cap.height = CAPSULE_HEIGHT[Stance.STAND] - 0.1
+	params.shape = cap
+	params.transform = Transform3D(Basis(), at + Vector3(0, cap.height * 0.5 + 0.08, 0))
+	params.collision_mask = 1
+	params.exclude = [get_rid()]
+	return get_world_3d().direct_space_state.intersect_shape(params, 1).is_empty()
+
+
+func _update_climb(delta: float) -> void:
+	_climb_t = maxf(_climb_t - delta, 0.0)
+	var k := 1.0 - _climb_t / _climb_dur
+	# erst hoch (60 %), dann nach vorn auf/über die Kante
+	if k < 0.6:
+		global_position = _climb_from.lerp(_climb_mid, k / 0.6)
+	else:
+		global_position = _climb_mid.lerp(_climb_to, (k - 0.6) / 0.4)
+	velocity = Vector3.ZERO
 
 
 func _carried_weight() -> float:

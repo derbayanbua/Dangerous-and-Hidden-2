@@ -532,7 +532,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"PLAYSOUND":
 			if args.size() > 0:
 				var v = vm.value(args[0])
-				if v is int or v is float:
+				# 8-stellige Werte = Sprachaufnahmen; kleine Zahlen = Effektklänge der Soundtabelle (noch nicht zugeordnet)
+				if (v is int or v is float) and int(v) >= 1000000:
 					speak(vm.me, v)
 			return null
 		"HUMAN_SETWAITFORPLAYER":

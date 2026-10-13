@@ -238,6 +238,12 @@ func _setup_objectives() -> void:
 		Events.say(t.call(text_title) + " – " + t.call(text_place_time), 6.0)
 
 
+func _exit_tree() -> void:
+	super._exit_tree()
+	if orig:
+		orig.release()
+
+
 ## Missionsende: SaveGameValue-Werte für den nächsten Teil sichern.
 func finish(success: bool, reason: String) -> void:
 	if runtime and success:

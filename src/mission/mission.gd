@@ -237,6 +237,12 @@ func _setup_objectives() -> void:
 	pass
 
 
+func _exit_tree() -> void:
+	# Statischer Materialcache hält GPU-Ressourcen; vor dem Herunterfahren der Server freigeben
+	# (sonst Absturz beim Beenden im Release-Export, 0xC0000374)
+	SoldierModel._mat_cache.clear()
+
+
 func spawn_soldier(pos: Vector3, yaw: float, team: int, sname: String, loadout: Array,
 		color: Color, helmet: String, pid: String) -> Soldier:
 	var s := Soldier.new()
