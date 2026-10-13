@@ -291,6 +291,8 @@ def model_to_gltf(model, textures, tex_rel, out_path, collision_hint=False):
         node = {"name": fr["name"] or ("frame%d" % fr["index"]),
                 "translation": cpos(fr["pos"]), "rotation": crot_xyzw(fr["rot"]), "scale": list(fr["scale"])}
         extras = {"type": fr["type"]}
+        if "visual" in fr:
+            extras["visual"] = fr["visual"]     # Visual-Typ (fmt_4ds.VIS_*), z. B. 6 Glow, 8 Spiegel
         if fr.get("params"):
             extras["params"] = fr["params"]
         if fr["type"] in SKIP_FRAMES:
@@ -319,6 +321,9 @@ def model_to_gltf(model, textures, tex_rel, out_path, collision_hint=False):
     return len(g.j.get("meshes", []))
 
 
+EXTRA_MODELS = {"AFRICA6": ["la_Bf109Canyon"]}
+
+
 def convert(mission):
     mdir = mission.upper()
     out = os.path.join(CACHE, mdir.lower())
@@ -336,6 +341,7 @@ def convert(mission):
     # 2. Objekte (scene2.bin)
     _, objs = fmt_scene2.parse(mission_file("scene2.bin"))
     models = sorted({o["model"] for o in objs if o.get("model")})
+    n_scene_models = len(models)
     ok = 0
     failed = []
     for name in models:
@@ -372,10 +378,14 @@ def convert(mission):
             actors.append(a)
             if o.get("model") and o["model"].lower() not in [m.lower() for m in models]:
                 models.append(o["model"])
+        done_now = {m.lower() for m in models[:n_scene_models]}
         for name in sorted({a.get("model") for a in actors if a.get("model")}):
             dst = os.path.join(out, "models", name + ".glb")
-            if os.path.exists(dst):
+            # nur in diesem Lauf bereits geschriebene überspringen – vorhandene Dateien aus
+            # älteren Läufen (z. B. alte Quaternion-Konvention) werden neu erzeugt
+            if name.lower() in done_now:
                 continue
+            done_now.add(name.lower())
             data = read_file("models/%s.4ds" % name, ["Models.dta"])
             if data is None:
                 failed.append(name + " (fehlt)")
@@ -385,6 +395,17 @@ def convert(mission):
                 failed.append("%s (%s)" % (name, mdl["stop"][:40]))
             model_to_gltf(mdl, textures, "../../textures/", dst)
         print("Akteure: %d (%d mit Definition)" % (len(actors), sum(1 for a in actors if "actor_type" in a)))
+
+    # 3a. Modelle, die nur im Programmcode erzeugt werden (nicht in scene2/actors), z. B. AFRICA6 Bf 109
+    #     als Unterobjekt der Ju 88 (docs/re_notes_ju88.md)
+    for name in EXTRA_MODELS.get(mdir, []):
+        data = read_file("models/%s.4ds" % name, ["Models.dta"])
+        if data is None:
+            failed.append(name + " (fehlt)")
+            continue
+        model_to_gltf(fmt_4ds.read_model(data, quiet=True), textures, "../../textures/",
+                      os.path.join(out, "models", name.lower() + ".glb"))
+        print("Zusatzmodell:", name)
 
     # 3b. KI-Wegpunkte (check2.bin): benannte Punkte für HUMAN_Move("GG_3") usw.
     waypoints = {}

@@ -4,7 +4,8 @@ extends Node
 ## Belege: docs/re_notes_interactive.md): Türen/Tore (6) und Schranken (28), Leitern (8), Schalter (13),
 ## Funkgeräte (7), Sprengplätze (22), zerstörbare Objekte (25 „Animation“), Kisten (9), Fotoplätze (15),
 ## Dokumentplätze (23). Skriptschnittstelle: SetActorState / _ACTOR_GetState / DOOR_Lock / OnUse / OnDeath.
-## Nicht umgesetzt: MG-/Flak-Stellungen (21, Waffe je Modell unbekannt), Fässer (5), Zerstörungsanimationen (.i3d).
+## Waffenstellungen (21): Waffe aus dem Modellnamen (ANNAHME, im Original nicht in den Parametern), Munition aus
+## dem items.dat-Inventar der Stellung. Nicht umgesetzt: Fässer (5), Zerstörungsanimationen (.i3d).
 
 const TXT_OPEN := 7023
 const TXT_CLOSE := 7041
@@ -19,7 +20,7 @@ const TXT_AMMO := 7053
 var mission: Node
 var runtime: LsRuntime
 var orig: OrigLevel
-var stats := {"doors": 0, "ladders": 0, "switches": 0, "explosives": 0, "destructibles": 0, "crates": 0,
+var stats := {"emplacements": 0, "doors": 0, "ladders": 0, "switches": 0, "explosives": 0, "destructibles": 0, "crates": 0,
 	"photos": 0, "documents": 0, "radios": 0, "missing": 0}
 var controls := {}        ## Name (groß) -> Steuerobjekt
 
@@ -47,6 +48,8 @@ func setup(m: Node, rt: LsRuntime, o: OrigLevel) -> void:
 		_destructible(e)
 	for e in d.get("crates", []):
 		_crate(e)
+	for e in d.get("emplacements", []):
+		_emplacement(e)
 	for e in d.get("photo_places", []):
 		_place(e, "photos", TXT_PHOTO, 229)
 	for e in d.get("document_places", []):
@@ -753,3 +756,126 @@ class OrigPlace extends Interactable:
 
 	func deserialize(d: Dictionary) -> void:
 		set_actor_state(int(d.get("state", 0)))
+
+
+# --- Waffenstellungen (Typ 21) -------------------------------------------------------
+
+## Modellname -> Waffe (Originalnummer bzw. eigene ID) und Haltung des Schützen [ANNAHME nach Modellnamen]
+const EMPLACEMENT_WEAPONS := [["w_mg42lie", 33, 2], ["w_mg42", 33, 1], ["w_97crouch", 30, 1], ["w_97", 30, 0],
+	["la_flak4x38", "flak38", 0], ["la_flak", "flak38", 0], ["la_boatgun", 37, 0], ["la_pancer_vez", 48, 0]]
+
+
+func _emplacement(e: Dictionary) -> void:
+	var f := _frame(e)
+	if f == null:
+		return
+	var model := String(e.get("model", "")).to_lower()
+	var wid = null
+	var stance := 1
+	for row in EMPLACEMENT_WEAPONS:
+		if model.begins_with(row[0]):
+			wid = row[1]
+			stance = row[2]
+			break
+	if wid == null:
+		return
+	var wd: WeaponData = WeaponDB.from_orig(int(wid), true) if wid is int else WeaponDB.get_weapon(StringName(wid))
+	if wd == null:
+		return
+	var x := OrigEmplacement.new()
+	x.name = "Emplacement_" + String(e["name"]).validate_node_name()
+	mission.dynamic_root.add_child(x)
+	x.init(self, f, e, wd, stance)
+	_register(e, f, x)
+	stats.emplacements += 1
+
+
+class OrigEmplacement extends Interactable:
+	var host: OrigInteractive
+	var frame: Node3D
+	var data: WeaponData
+	var stance := 1
+	var ammo_mags := 0
+	var gunner: Soldier
+	var _saved: Array = []
+	var _saved_slot := 0
+	var destroyed := false
+
+	func init(h: OrigInteractive, f: Node3D, e: Dictionary, wd: WeaponData, st: int) -> void:
+		host = h
+		frame = f
+		data = wd
+		stance = st
+		persistent_id = "oempl_" + String(e["name"])
+		ammo_mags = maxi((e.get("inventory", []) as Array).size(), 2)
+		global_position = frame.global_position + Vector3.UP * 0.5
+		frame.set_meta("actor_state", 3)
+		prompt = "%s: %s" % [data.display_name, OrigInteractive.text(TXT_USE, "Benutzen")]
+
+	func can_interact(s: Soldier) -> bool:
+		return enabled and not destroyed and (gunner == null or gunner == s) and s.vehicle == null
+
+	func interact(s: Soldier) -> void:
+		if gunner == s:
+			dismount()
+		else:
+			mount(s)
+		super.interact(s)
+
+	## Besetzen: Schütze hinter der Waffe (Modelle blicken nach −Z), Waffe der Stellung in der Hand
+	func mount(s: Soldier) -> void:
+		gunner = s
+		s.mounted = self
+		_saved = s.weapons.duplicate()
+		_saved_slot = s.current_slot
+		var w := Weapon.new(data, false)
+		w.in_mag = data.magazine_size if ammo_mags > 0 else 0
+		w.reserve = data.magazine_size * maxi(ammo_mags - 1, 0)
+		var arr: Array[Weapon] = [w, null, null]
+		s.weapons = arr
+		s.current_slot = 0
+		s.global_position = frame.global_position + frame.global_basis.z.normalized() * 0.9 + Vector3.UP * 0.1
+		s.look_yaw = frame.global_basis.get_euler().y
+		s.stance_request = stance
+		s._on_weapon_switched()
+		prompt = "%s: verlassen" % data.display_name
+
+	func dismount() -> void:
+		if gunner == null:
+			return
+		var s := gunner
+		if s.weapons.size() > 0 and s.weapons[0] != null:
+			ammo_mags = int(ceil(float(s.weapons[0].in_mag + s.weapons[0].reserve) / maxf(data.magazine_size, 1)))
+		var arr: Array[Weapon] = []
+		for x in _saved:
+			arr.append(x)
+		s.weapons = arr
+		s.current_slot = _saved_slot
+		s.mounted = null
+		s._on_weapon_switched()
+		gunner = null
+		prompt = "%s: %s" % [data.display_name, OrigInteractive.text(TXT_USE, "Benutzen")]
+
+	func _physics_process(_delta: float) -> void:
+		if gunner and (not is_instance_valid(gunner) or not gunner.alive):
+			if is_instance_valid(gunner):
+				dismount()
+			gunner = null
+
+	## Original: SetActorState(w, 2) = zerstört (Bediener erhalten Schaden)
+	func set_actor_state(n: int) -> void:
+		frame.set_meta("actor_state", n)
+		if n == 2 and not destroyed:
+			destroyed = true
+			var g := gunner
+			dismount()
+			Effects.explosion(frame.global_position, 3.0)
+			if g and g.alive:
+				g.apply_hit(60.0, &"torso", null, Vector3.UP)
+
+	func serialize() -> Dictionary:
+		return {"ammo": ammo_mags, "destroyed": destroyed}
+
+	func deserialize(d: Dictionary) -> void:
+		ammo_mags = int(d.get("ammo", ammo_mags))
+		destroyed = bool(d.get("destroyed", false))

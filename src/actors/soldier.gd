@@ -84,6 +84,7 @@ var _hitbox_rids: Array[RID] = []
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)
 var last_attacker: Node = null
 var vehicle: Node = null            ## Fahrzeug, in dem der Soldat sitzt
+var mounted: Node = null            ## besetzte Waffenstellung (OrigInteractive.OrigEmplacement)
 var seat_index := -1
 
 ## Ausrüstung (Original-Inventar: ii_aid/ii_aidbig, ii_binoc)
@@ -366,6 +367,9 @@ func _update_movement(delta: float) -> void:
 		mode = MoveMode.JOG if is_player_controlled else MoveMode.WALK
 	if _climb_t > 0.0:
 		_update_climb(delta)
+		return
+	if mounted != null:
+		velocity = Vector3.ZERO      # an der Waffenstellung: nur Drehen und Schießen
 		return
 	var wish := move_input.limit_length(1.0)
 	var speed: float = SPEEDS[stance][mode]

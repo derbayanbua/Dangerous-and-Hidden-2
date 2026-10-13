@@ -529,7 +529,7 @@ func prepare_sas(id: String, force := false) -> void:
 	var st := sas_states()
 	var team := _alive_team()
 	var mode := sas_team_mode(id)
-	var new_storage := String(info.get("equipment_screen", "")) == "equipment_new_storage"
+	var new_storage: bool = info.get("equipment_screen") == "equipment_new_storage"   # null = kein Ausrüstungsbildschirm
 	if team.is_empty() or mode in ["select", "refill"]:
 		team = SAS.auto_select(st, SQUAD_SIZE, team if mode != "select" or not team.is_empty() else [])
 	set_sas_team(team)

@@ -155,7 +155,8 @@ static func mission_info(folder: String) -> Dictionary:
 ## Original: Teamauswahl nur bei Kampagnenbeginn bzw. wo die Mission sie vorsieht („select“),
 ## Auffüllen gefallener Plätze („refill“), sonst bleibt das Team („keep“).
 static func team_mode(info: Dictionary) -> String:
-	return String(info.get("team_selection", "keep"))
+	var t = info.get("team_selection")
+	return t if t is String else "keep"
 
 
 static func recommended_presets(info: Dictionary) -> Array:
@@ -372,7 +373,7 @@ static func to_loadout(inv: Dictionary) -> Dictionary:
 ## Lager vor einer Mission (Original Gamedata00.gdt: Typ 3 = neu befüllen aus den 0x18-Sätzen, Typ 4 = behalten).
 ## Satz mit Flag „ammo_of_weapon“: Anzahl = Magazine der Munition dieser Waffe (resolved_item).
 static func mission_storage(info: Dictionary, current: Array) -> Array:
-	if String(info.get("equipment_screen", "")) != "equipment_new_storage" and not current.is_empty():
+	if info.get("equipment_screen") != "equipment_new_storage" and not current.is_empty():
 		return current
 	var out: Array = []
 	for r in info.get("storage_items_campaign", []):
