@@ -360,6 +360,7 @@ func set_orig_objective(index: int, status: int) -> void:
 		0, 2, 4:
 			# 0 = in Arbeit, 2 = wieder offen (z. B. Beweisstück aus dem Inventar entfernt),
 			# 4 = angezeigt, nachrangig (Skriptkommentare: „optional“/„must survive“)
+			o.secondary = status == 4
 			if o.state != Objective.State.ACTIVE:
 				o.state = Objective.State.ACTIVE
 				Events.objective_updated.emit(id)
@@ -383,7 +384,7 @@ var _completion_pending := false
 func _orig_complete_now() -> bool:
 	var any := false
 	for o in objectives:
-		if o.optional or o.state == Objective.State.INACTIVE:
+		if o.optional or o.state == Objective.State.INACTIVE or (o.secondary and o.state == Objective.State.ACTIVE):
 			continue
 		if o.state != Objective.State.DONE:
 			return false

@@ -89,6 +89,8 @@ const ORIG_CAMPAIGN := [
 	["cz4_volksfest", "CZECH4", 21], ["cz5_trink_aus", "CZECH5", 22], ["cz6_abrechnung", "CZECH6", 23],
 ]
 const ORIG_TRAINING := ["training", "TUTORIAL", 24]
+## Teile mit eigener Mechanik (sonst orig_generic.gd)
+const ORIG_SPECIAL_SCRIPTS := {"af6_raubvoegel": "res://src/missions/af6_raubvoegel.gd"}
 
 
 ## Original-Missionen anmelden (Titel aus den Originaltexten; fehlt der Cache, bleibt der Ordnername).
@@ -102,7 +104,7 @@ func _register_orig_missions() -> void:
 		var title: String = e[1]
 		if typeof(texts) == TYPE_DICTIONARY and texts.has(str(4501 + 10 * k)):
 			title = String(texts[str(4501 + 10 * k)])
-		MISSIONS[e[0]] = {"title": title, "script": "res://src/missions/orig_generic.gd", "orig": e[1], "k": k,
+		MISSIONS[e[0]] = {"title": title, "script": ORIG_SPECIAL_SCRIPTS.get(e[0], "res://src/missions/orig_generic.gd"), "orig": e[1], "k": k,
 			"orig_texts": [4501 + 10 * k, 4502 + 10 * k, 4503 + 10 * k, 4504 + 10 * k, 4505 + 10 * k,
 				4506 + 10 * k, 4507 + 10 * k, 4508 + 10 * k], "briefing": ""}
 		if e != ORIG_TRAINING and not CAMPAIGN_ORDER.has(e[0]):

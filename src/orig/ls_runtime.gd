@@ -678,7 +678,13 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"_ITEMINRANGE":
 			# Gegenstand (Nummer) in Reichweite: Original-Weltgegenstände noch ohne Inventarsystem -> nein
 			return 0
-		"DECORATOR_SETON", "SETUPJUNKERS88", "HUMAN_SETIGNORECIRCUMVENTIONFLAG":
+		"SETUPJUNKERS88":
+			# AFRICA6: a·0,01 = Schadensfaktor an der Ju 88, b·0,01 = Teiler des Trefferschadens an Jägern
+			if mission.has_method("setup_junkers88"):
+				mission.setup_junkers88(float(vm.value(args[0])) if args.size() > 0 else 60.0,
+					float(vm.value(args[1])) if args.size() > 1 else 100.0)
+			return null
+		"DECORATOR_SETON", "HUMAN_SETIGNORECIRCUMVENTIONFLAG":
 			return null    # Zwischensequenz-Dekoration / Ju-88-Angriff (Flugmechanik) noch nicht umgesetzt
 		"SETWHENEVERTIME", "SETUPTACTICALMODE", "FRM_SETTARGET":
 			return null    # Prüfintervall / Taktikmodus / Zielmarke: ohne sichtbare Wirkung

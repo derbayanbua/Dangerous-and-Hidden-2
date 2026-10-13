@@ -7,6 +7,7 @@ enum State { ACTIVE, DONE, FAILED, INACTIVE }   ## INACTIVE: noch nicht freigesc
 var id: StringName
 var text := ""
 var optional := false
+var secondary := false     ## Original-Status 4 („angezeigt, nachrangig“, z. B. „alle müssen überleben“): blockiert den Sieg nicht
 var state: int = State.ACTIVE
 
 

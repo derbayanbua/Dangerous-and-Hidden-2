@@ -18,7 +18,8 @@ $suites = @(
   @{ name = "test_a2";       args = "--headless -- --mission=a2_erkundung --autoplay=test_orig_part --commandos=1" },
   @{ name = "test_a3";       args = "--headless -- --mission=a3_rendezvous --autoplay=test_orig_part --commandos=4" },
   @{ name = "test_sas";      args = "--headless -- --autoplay=test_sas" },
-  @{ name = "test_interactive"; args = "--headless -- --mission=a1_blizzard --autoplay=test_interactive" }
+  @{ name = "test_interactive"; args = "--headless -- --mission=a1_blizzard --autoplay=test_interactive" },
+  @{ name = "test_af6";      args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" }
 )
 $failed = 0
 if (-not $Exe) {
