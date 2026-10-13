@@ -398,7 +398,21 @@ def convert(mission):
 
     # 3a. Modelle, die nur im Programmcode erzeugt werden (nicht in scene2/actors), z. B. AFRICA6 Bf 109
     #     als Unterobjekt der Ju 88 (docs/re_notes_ju88.md)
-    for name in EXTRA_MODELS.get(mdir, []):
+    extra = list(EXTRA_MODELS.get(mdir, []))
+    # Weltmodelle frei liegender Gegenstände (items.dat ohne Besitzer, Modell aus items.sav), z. B. „item_slozka3“
+    try:
+        import fmt_actors_items as fai
+        idat, _ = fai.read_orig("MISSIONS\\%s\\items.dat" % mdir, "Missions.dta")
+        isav, _ = fai.read_orig("TABLES\\items.sav", "others.DTA")
+        if idat and isav:
+            by_id = {it["id"]: it for it in fai.parse_items(isav)}
+            for r in fai.parse_items_dat(idat):
+                m = by_id.get(r["item"], {}).get("model", "")
+                if not r["owner"] and "pos" in r and m and m not in extra:
+                    extra.append(m)
+    except Exception as ex:   # Gegenstandsmodelle sind optional (Platzhalter im Spiel)
+        print("Gegenstandsmodelle:", ex)
+    for name in extra:
         data = read_file("models/%s.4ds" % name, ["Models.dta"])
         if data is None:
             failed.append(name + " (fehlt)")

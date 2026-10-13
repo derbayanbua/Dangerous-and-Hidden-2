@@ -26,13 +26,15 @@ func _run() -> void:
 		want = clampi(want, 1, 4)
 	check(m.squad.members.size() == want, "Kommandos laut Original", "%d von %d" % [m.squad.members.size(), want])
 	var rt := m.runtime
-	check(rt != null and rt.vms.size() > 50, "Originalskripte laufen", "%d VMs" % (rt.vms.size() if rt else 0))
-	check(rt.waypoints.size() > 50, "KI-Wegpunkte", str(rt.waypoints.size()))
+	# AFRICA6 ist ein Bordschützen-Einsatz: im Original 13 Skripte, keine Bodengegner/Wegpunkte (Jäger: test_af6)
+	var flight := Game.current_mission_id == "af6_raubvoegel"
+	check(rt != null and rt.vms.size() > (10 if flight else 50), "Originalskripte laufen", "%d VMs" % (rt.vms.size() if rt else 0))
+	check(rt.waypoints.size() > 50 or flight, "KI-Wegpunkte", str(rt.waypoints.size()))
 	var enemies := 0
 	for a in rt.actors.values():
 		if a is Soldier and (a as Soldier).team == Soldier.TEAM_AXIS:
 			enemies += 1
-	check(enemies > 0 or Game.current_mission_id == "training", "Gegner aus actors.bin", str(enemies))
+	check(enemies > 0 or flight or Game.current_mission_id == "training", "Gegner aus actors.bin", str(enemies))
 	var mid := Game.current_mission_id
 	rt.auto_skip = true
 	if rt.in_cutscene:
