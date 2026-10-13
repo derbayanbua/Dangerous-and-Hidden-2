@@ -24,8 +24,10 @@ func _run() -> void:
 	await frames(10)
 	check(Game.is_unlocked("a1_blizzard") and not Game.is_unlocked("a2_erkundung"), "Neue Kampagne: nur Arctic 1A frei")
 	check(Game.is_unlocked("m01_funkfeuer"), "Übungseinsätze ohne Freischaltung wählbar")
+	get_tree().current_scene.show_menu("campaign")      # Einzelspieler -> Kampagne (Original-Menüaufbau)
+	await frames(3)
 	var b2 := find_button("2.")
-	check(b2 != null and b2.disabled, "Hauptmenü: Teil 1B gesperrt", b2.text if b2 else "-")
+	check(b2 != null and b2.disabled, "Kampagnenliste: Teil 1B gesperrt", b2.text if b2 else "-")
 	check(Game.briefing_text("a1_blizzard").begins_with("Operation Schneeball"), "Briefing aus Originaltexten",
 		Game.briefing_text("a1_blizzard").substr(0, 60))
 
@@ -63,6 +65,8 @@ func _run() -> void:
 	check(m3.runtime.game_values.get(30) == 99, "_LoadGameValue(30) liefert Wert aus Teil 1A")
 	Game.return_to_menu()
 	await frames(30)
+	get_tree().current_scene.show_menu("campaign")
+	await frames(3)
 	var b2b := find_button("2.")
-	check(b2b != null and not b2b.disabled, "Hauptmenü: Teil 1B jetzt wählbar", b2b.text if b2b else "-")
+	check(b2b != null and not b2b.disabled, "Kampagnenliste: Teil 1B jetzt wählbar", b2b.text if b2b else "-")
 	_finish()

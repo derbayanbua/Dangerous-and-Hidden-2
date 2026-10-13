@@ -94,7 +94,7 @@ func _visibility(t: Soldier, dist: float, ang: float, half_fov: float) -> float:
 	var stance_k := [1.0, 0.55, 0.25][t.stance] as float
 	var move_k := 0.6
 	if t.is_moving():
-		move_k = 1.6 if t.move_mode == Soldier.MoveMode.RUN else (0.8 if t.move_mode == Soldier.MoveMode.SNEAK else 1.1)
+		move_k = 1.6 if t.move_mode == Soldier.MoveMode.RUN else (0.8 if t.move_mode == Soldier.MoveMode.SNEAK or t.stance != Soldier.Stance.STAND else 1.1)
 	if t.trigger and t.current_weapon() and t.current_weapon().cooldown > 0.0:
 		move_k = 2.0   # Mündungsfeuer
 	var dist_k := clampf(1.0 - dist / sight_range, 0.0, 1.0)

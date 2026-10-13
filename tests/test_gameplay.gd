@@ -105,24 +105,62 @@ func _run() -> void:
 
 	isolate_enemies(["e_gate", "e_cp1"])
 
-	# --- Bewegung ---
+	# --- Bewegung (moderne Steuerung: Normaltempo, Shift = Sprint, leise = geduckt) ---
+	var start_pos := hale.global_position
+	var start_yaw := hale.look_yaw
 	var p0 := hale.global_position
 	await hold("move_forward", 1.5)
 	var walked := p0.distance_to(hale.global_position)
-	check(walked > 1.5 and walked < 3.5, "Gehen vorwärts ~1.7 m/s", "%.2f m in 1.5 s" % walked)
+	check(walked > 3.5 and walked < 6.0, "Normaltempo ~3.3 m/s (immer Laufschritt)", "%.2f m in 1.5 s" % walked)
 	p0 = hale.global_position
 	Input.action_press("run")
 	await hold("move_forward", 1.5)
 	Input.action_release("run")
 	var ran := p0.distance_to(hale.global_position)
-	check(ran > walked * 1.8, "Rennen schneller als Gehen", "%.2f m" % ran)
-	check(hale.stamina < 100.0, "Rennen verbraucht Ausdauer", "%.1f" % hale.stamina)
+	check(ran > walked * 1.3, "Sprint schneller als Normaltempo", "%.2f m" % ran)
+	check(hale.stamina < 100.0, "Sprint verbraucht Ausdauer", "%.1f" % hale.stamina)
+	await tap("stance_crouch")
+	await seconds(0.6)
 	p0 = hale.global_position
-	Input.action_press("sneak")
 	await hold("move_forward", 1.5)
-	Input.action_release("sneak")
 	var snuck := p0.distance_to(hale.global_position)
-	check(snuck < walked, "Schleichen langsamer als Gehen", "%.2f m" % snuck)
+	check(snuck < walked * 0.6 and snuck > 0.8, "Schleichen = geduckt (langsamer)", "%.2f m" % snuck)
+	check(Soldier.STEP_NOISE[Soldier.Stance.CROUCH][Soldier.MoveMode.JOG] < Soldier.STEP_NOISE[Soldier.Stance.STAND][Soldier.MoveMode.JOG] * 0.5,
+		"Geduckt deutlich leiser")
+	await tap("stance_stand")      # Sprungtaste in der Hocke = aufstehen
+	await seconds(0.6)
+	check(hale.stance == Soldier.Stance.STAND, "Sprungtaste in der Hocke: aufstehen")
+
+	# --- Springen und Klettern (Sprungtaste vor Hindernis) ---
+	var fwd := hale.forward()
+	fwd.y = 0
+	fwd = fwd.normalized()
+	var base := hale.global_position
+	var y0 := base.y
+	await tap("stance_stand")
+	await seconds(0.25)
+	check(hale.global_position.y > y0 + 0.3, "Springen ohne Hindernis", "%.2f m hoch" % (hale.global_position.y - y0))
+	await seconds(1.0)
+	var low := _test_block(base + fwd * 1.0, Vector3(3.0, 1.0, 0.3), hale.look_yaw)    # Mauer 1 m
+	await frames(3)
+	await tap("stance_stand")
+	await seconds(1.4)
+	var passed := (hale.global_position - base).dot(fwd)
+	check(passed > 1.3 and hale.is_on_floor(), "Über 1-m-Mauer gestiegen", "%.2f m weiter" % passed)
+	low.queue_free()
+	base = hale.global_position
+	var high := _test_block(base + fwd * 1.6, Vector3(3.0, 1.7, 3.0), hale.look_yaw)    # Block 1,7 m
+	await frames(3)
+	await tap("stance_stand")
+	await seconds(1.6)
+	check(hale.global_position.y > base.y + 1.5, "Auf 1,7-m-Block geklettert", "%.2f m höher" % (hale.global_position.y - base.y))
+	high.queue_free()
+	await seconds(1.0)
+	# zurück zum Startpunkt: die Bewegungsproben sollen den Anführer nicht in Feindnähe bringen
+	hale.global_position = start_pos + Vector3.UP * 0.2
+	hale.look_yaw = start_yaw
+	hale.health = hale.max_health
+	await seconds(0.5)
 
 	# --- Haltungen ---
 	await tap("stance_crouch")
@@ -264,10 +302,12 @@ func _run() -> void:
 	check(max_d < 14.0, "Trupp folgt dem Anführer", "max. Abstand %.1f m" % max_d)
 	await tap("order_hold")
 	var held_ok := true
+	var info := []
 	for mm in m.squad.members:
-		if mm != hale and m.squad.brain_of(mm).order != SquadBrain.Order.HOLD:
+		info.append("%s:%s%s" % [mm.soldier_name, m.squad.brain_of(mm).order if m.squad.brain_of(mm) else -1, "" if mm.alive else "(tot)"])
+		if mm != hale and mm.alive and m.squad.brain_of(mm).order != SquadBrain.Order.HOLD:
 			held_ok = false
-	check(held_ok, "Befehl Halten an alle")
+	check(held_ok, "Befehl Halten an alle", ", ".join(info))
 	await tap("order_formation")
 	check(m.squad.formation == SquadManager.Formation.LINE, "Formation wechseln (Linie)")
 	await tap("order_roe")
@@ -341,3 +381,22 @@ func _finish() -> void:
 		f.store_string("\n".join(log_lines) + "\nERGEBNIS: %d bestanden, %d fehlgeschlagen\n" % [passed, failed])
 	DirAccess.remove_absolute(Game.save_path("autotest"))
 	get_tree().quit(1 if failed > 0 else 0)
+
+
+## Testhindernis (Box) vor dem Soldaten, an der Blickrichtung ausgerichtet
+func _test_block(center_feet: Vector3, size: Vector3, yaw: float) -> StaticBody3D:
+	var b := StaticBody3D.new()
+	b.collision_layer = 1
+	var cs := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = size
+	cs.shape = bs
+	b.add_child(cs)
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	mi.mesh = bm
+	b.add_child(mi)
+	get_tree().current_scene.add_child(b)
+	b.global_transform = Transform3D(Basis(Vector3.UP, yaw), center_feet + Vector3.UP * size.y * 0.5)
+	return b
