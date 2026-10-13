@@ -1,0 +1,8 @@
+.godot/
+build/
+*.tmp
+test_output/
+# aus der Original-Installation des Nutzers erzeugt, nicht weitergeben
+orig_cache/
+re_work/
+*.log

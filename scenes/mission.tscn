@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://src/mission/mission_host.gd" id="1"]
+
+[node name="MissionHost" type="Node"]
+script = ExtResource("1")
