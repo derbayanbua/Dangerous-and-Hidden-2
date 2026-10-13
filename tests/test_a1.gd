@@ -44,6 +44,12 @@ func _run() -> void:
 	check(ggw.has("kar98k") and ggw.has("m24"), "Torwache: Karabiner 98K + Stielhandgranaten (items.dat)", str(ggw))
 	check(is_equal_approx(gg.max_health, 100.0) and is_equal_approx(gg.get_node("Perception").sight_range, 35.0),
 		"Torwache: Original-HP 200, Sichtweite 35 m (actors.bin)", "%.0f HP, %.0f m" % [gg.max_health, gg.get_node("Perception").sight_range])
+	# Schwierigkeitsgrad des Profils wirkt wie im Original auf Gegnerwerte (leicht ×0,7)
+	Game.profile["difficulty"] = 1
+	m._apply_orig_params(gg, "Gate_Guard")
+	check(is_equal_approx(gg.max_health, 70.0), "Schwierigkeit „leicht“: Torwache 200×0,7 HP", "%.1f HP" % gg.max_health)
+	Game.profile["difficulty"] = 3
+	m._apply_orig_params(gg, "Gate_Guard")
 	var kan := rt.actors.get("KANISTERNIK") as Soldier
 	check(kan != null and kan.weapons[0] != null and kan.weapons[0].data.id == &"mp40", "Kanisternik mit MP 40 (items.dat)")
 	var rebel := rt.actors.get("REBEL") as Soldier

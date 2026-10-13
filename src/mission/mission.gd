@@ -443,6 +443,7 @@ func finish(success: bool, reason: String) -> void:
 			fallen.append(mm.persistent_id)
 	Game.last_result["fallen"] = fallen.map(func(pid): return _name_of(pid))
 	Game.record_mission_result(Game.current_mission_id, success, fallen)
+	Game.add_profile_stats(elapsed, int(stats.get("kills", 0)), int(stats.get("shots", 0)))
 	Events.mission_finished.emit(success, reason)
 	controller.input_enabled = false
 	get_tree().create_timer(3.0, true, false, true).timeout.connect(func():

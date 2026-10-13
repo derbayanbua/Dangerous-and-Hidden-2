@@ -1,4 +1,4 @@
-# Führt alle automatisierten Tests headless aus und fasst zusammen.
+﻿# Führt alle automatisierten Tests headless aus und fasst zusammen.
 # Aufruf: powershell -File tools\run_tests.ps1 [-Exe build\DangerousHidden2.exe]
 param([string]$Exe = "")
 $proj = Split-Path $PSScriptRoot -Parent
@@ -10,6 +10,7 @@ $suites = @(
   @{ name = "test_m02";      args = "--headless -- --mission=m02_nordlicht --autoplay=test_m02" },
   @{ name = "test_m03";      args = "--headless -- --mission=m03_sandsturm --autoplay=test_m03" },
   @{ name = "test_campaign"; args = "--headless -- --autoplay=test_campaign" },
+  @{ name = "test_menu";     args = "--headless -- --autoplay=test_menu --profiles_dir=user://test_profiles" },
   @{ name = "test_vehicles"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_vehicles" },
   @{ name = "test_ls_compiler"; args = "--headless -- --autoplay=test_ls_compiler --scripts=res://orig_cache" },
   @{ name = "test_a1";       args = "--headless -- --mission=a1_blizzard --autoplay=test_a1" },

@@ -10,7 +10,9 @@ extends Node
 
 const MAIN_MENU := "res://scenes/main.tscn"
 const MISSION_SCENE := "res://scenes/mission.tscn"
-const SAVE_DIR := "user://saves"
+## Spielstände und Kampagne liegen je Profil unter user://profiles/<name>/ (Original: Profile mit
+## eigenem Fortschritt, Schwierigkeitsgrad und Statistik; change_profile.4ds, Texte 2151–2193).
+var profiles_dir := "user://profiles"   ## Tests: --profiles_dir=user://test_profiles
 
 ## Missionsregister: id -> Daten. script = Skript, das die Welt aufbaut.
 const MISSIONS := {
@@ -74,8 +76,197 @@ var loadouts := {}
 const CAMPAIGN_ORDER := ["a1_blizzard", "a2_erkundung", "a3_rendezvous"]
 ## Eigene Prototyp-Einsätze (kein Original-Leveldesign): jederzeit wählbar, nicht Teil der Kampagne.
 const PRACTICE_MISSIONS := ["m01_funkfeuer", "m02_nordlicht", "m03_sandsturm"]
-const CAMPAIGN_PATH := "user://campaign.json"
 var campaign := {}
+
+
+# --- Profile ---------------------------------------------------------------------
+
+## Schwierigkeitsgrade 1..4 = Original-Texte 2157–2160 (leicht, normal, schwer, sehr schwer)
+const DIFFICULTY_TEXT := {1: 2157, 2: 2158, 3: 2159, 4: 2160}
+var profile := {}               ## {name, difficulty, created, playtime, kills, enemies_killed, shots, missions}
+var profile_name := ""
+var _memory_profile := false    ## Tests: Profil nur im Speicher, nichts wird geschrieben
+
+
+func has_profile() -> bool:
+	return profile_name != ""
+
+
+func difficulty() -> int:
+	return int(profile.get("difficulty", 2))
+
+
+func profile_dir(n: String = profile_name) -> String:
+	return profiles_dir + "/" + _safe_name(n)
+
+
+func save_dir() -> String:
+	return profile_dir() + "/saves" if has_profile() else "user://saves"
+
+
+static func _safe_name(n: String) -> String:
+	var out := ""
+	for c in n.strip_edges():
+		out += c if c.is_valid_identifier() or c in "0123456789 -" else "_"
+	return out.substr(0, 40)
+
+
+func list_profiles() -> Array[String]:
+	var out: Array[String] = []
+	if _memory_profile:
+		if profile_name != "":
+			out.append(profile_name)
+		return out
+	var d := DirAccess.open(profiles_dir)
+	if d == null:
+		return out
+	for sub in d.get_directories():
+		var f := FileAccess.open(profiles_dir + "/" + sub + "/profile.json", FileAccess.READ)
+		if f:
+			var p = JSON.parse_string(f.get_as_text())
+			if typeof(p) == TYPE_DICTIONARY:
+				out.append(String(p.get("name", sub)))
+	out.sort()
+	return out
+
+
+func create_profile(n: String, diff: int = 2) -> bool:
+	n = n.strip_edges()
+	if n == "" or _safe_name(n) == "" or list_profiles().has(n):
+		return false
+	profile = {"name": n, "difficulty": diff, "created": Time.get_datetime_string_from_system(false, true),
+		"playtime": 0.0, "kills": 0, "enemies_killed": 0, "shots": 0, "missions": 0}
+	profile_name = n
+	if not _memory_profile:
+		DirAccess.make_dir_recursive_absolute(profile_dir() + "/saves")
+		save_profile()
+	new_campaign()
+	_remember_current()
+	return true
+
+
+func select_profile(n: String) -> bool:
+	if _memory_profile:
+		return n == profile_name
+	var f := FileAccess.open(profile_dir(n) + "/profile.json", FileAccess.READ)
+	if f == null:
+		return false
+	var p = JSON.parse_string(f.get_as_text())
+	if typeof(p) != TYPE_DICTIONARY:
+		return false
+	profile = p
+	profile_name = n
+	DirAccess.make_dir_recursive_absolute(profile_dir() + "/saves")
+	load_campaign()
+	_remember_current()
+	return true
+
+
+func rename_profile(old: String, n: String) -> bool:
+	n = n.strip_edges()
+	if n == "" or list_profiles().has(n) or not list_profiles().has(old):
+		return false
+	if not _memory_profile:
+		if DirAccess.rename_absolute(profile_dir(old), profile_dir(n)) != OK:
+			return false
+	if old == profile_name:
+		profile_name = n
+		profile["name"] = n
+		save_profile()
+		_remember_current()
+	elif not _memory_profile:
+		var f := FileAccess.open(profile_dir(n) + "/profile.json", FileAccess.READ)
+		var p = JSON.parse_string(f.get_as_text()) if f else {}
+		if typeof(p) == TYPE_DICTIONARY:
+			p["name"] = n
+			var w := FileAccess.open(profile_dir(n) + "/profile.json", FileAccess.WRITE)
+			if w:
+				w.store_string(JSON.stringify(p, "\t"))
+	return true
+
+
+func delete_profile(n: String) -> bool:
+	if not list_profiles().has(n):
+		return false
+	if not _memory_profile:
+		_remove_dir(profile_dir(n))
+	if n == profile_name:
+		profile_name = ""
+		profile = {}
+		campaign = {}
+		var rest := list_profiles()
+		if not rest.is_empty():
+			select_profile(rest[0])
+		else:
+			_remember_current()
+	return true
+
+
+func _remove_dir(path: String) -> void:
+	var d := DirAccess.open(path)
+	if d == null:
+		return
+	for f in d.get_files():
+		d.remove(f)
+	for sub in d.get_directories():
+		_remove_dir(path + "/" + sub)
+	DirAccess.remove_absolute(path)
+
+
+func set_difficulty(diff: int) -> void:
+	profile["difficulty"] = clampi(diff, 1, 4)
+	save_profile()
+
+
+func save_profile() -> void:
+	if _memory_profile or not has_profile():
+		return
+	var f := FileAccess.open(profile_dir() + "/profile.json", FileAccess.WRITE)
+	if f:
+		f.store_string(JSON.stringify(profile, "\t"))
+
+
+func _remember_current() -> void:
+	if _memory_profile:
+		return
+	DirAccess.make_dir_recursive_absolute(profiles_dir)
+	var f := FileAccess.open(profiles_dir + "/current.txt", FileAccess.WRITE)
+	if f:
+		f.store_string(profile_name)
+
+
+func _load_current_profile() -> void:
+	if cli.has("autoplay") and cli.has("profiles_dir"):
+		# Test mit echten Profildateien in einem eigenen, frisch geleerten Ordner (Start ohne Profil)
+		profiles_dir = String(cli["profiles_dir"])
+		_remove_dir(profiles_dir)
+		return
+	if cli.has("autoplay"):
+		_memory_profile = true
+		profile_name = "Test"
+		profile = {"name": "Test", "difficulty": int(cli.get("difficulty", "3")), "playtime": 0.0,
+			"kills": 0, "enemies_killed": 0, "shots": 0, "missions": 0}
+		campaign = {"unlocked": [CAMPAIGN_ORDER[0]], "completed": [], "fallen": []}
+		return
+	var cur := ""
+	if FileAccess.file_exists(profiles_dir + "/current.txt"):
+		cur = FileAccess.get_file_as_string(profiles_dir + "/current.txt").strip_edges()
+	if cur == "" or not select_profile(cur):
+		var all := list_profiles()
+		if not all.is_empty():
+			select_profile(all[0])
+
+
+## Statistik fürs Profil (Original-Profilinfo: Spielzeit, Getötete, Munition)
+func add_profile_stats(seconds: float, kills: int, shots: int) -> void:
+	if not has_profile():
+		return
+	profile["playtime"] = float(profile.get("playtime", 0.0)) + seconds
+	profile["enemies_killed"] = int(profile.get("enemies_killed", 0)) + kills
+	profile["kills"] = int(profile.get("kills", 0)) + kills
+	profile["shots"] = int(profile.get("shots", 0)) + shots
+	profile["missions"] = int(profile.get("missions", 0)) + 1
+	save_profile()
 
 
 func new_campaign() -> void:
@@ -83,12 +274,16 @@ func new_campaign() -> void:
 	save_campaign()
 
 
+func campaign_path() -> String:
+	return profile_dir() + "/campaign.json"
+
+
 func load_campaign() -> void:
 	# Automatisierte Tests arbeiten mit einer frischen Kampagne im Speicher
-	if cli.has("autoplay") or not FileAccess.file_exists(CAMPAIGN_PATH):
+	if _memory_profile or not has_profile() or not FileAccess.file_exists(campaign_path()):
 		campaign = {"unlocked": [CAMPAIGN_ORDER[0]], "completed": [], "fallen": []}
 		return
-	var d = JSON.parse_string(FileAccess.get_file_as_string(CAMPAIGN_PATH))
+	var d = JSON.parse_string(FileAccess.get_file_as_string(campaign_path()))
 	if typeof(d) == TYPE_DICTIONARY and d.has("unlocked"):
 		campaign = d
 	else:
@@ -96,9 +291,9 @@ func load_campaign() -> void:
 
 
 func save_campaign() -> void:
-	if cli.has("autoplay"):
+	if _memory_profile or not has_profile():
 		return
-	var f := FileAccess.open(CAMPAIGN_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(campaign_path(), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(campaign, "\t"))
 
@@ -190,8 +385,7 @@ func _ready() -> void:
 		if arg.begins_with("--"):
 			var kv := arg.substr(2).split("=", true, 1)
 			cli[kv[0]] = kv[1] if kv.size() > 1 else "1"
-	DirAccess.make_dir_recursive_absolute(SAVE_DIR)
-	load_campaign()
+	_load_current_profile()
 	if cli.has("screenshot"):
 		_screenshot_after(int(cli.get("frames", "120")), cli["screenshot"])
 	if cli.has("mission"):
@@ -237,7 +431,7 @@ func current_mission() -> Node:
 # --- Spielstände ---------------------------------------------------------
 
 func save_path(slot: String) -> String:
-	return "%s/%s.json" % [SAVE_DIR, slot]
+	return "%s/%s.json" % [save_dir(), slot]
 
 
 func save_game(slot: String = "quick") -> bool:
@@ -250,6 +444,7 @@ func save_game(slot: String = "quick") -> bool:
 		"timestamp": Time.get_datetime_string_from_system(),
 		"state": mission.serialize(),
 	}
+	DirAccess.make_dir_recursive_absolute(save_dir())
 	var f := FileAccess.open(save_path(slot), FileAccess.WRITE)
 	if f == null:
 		push_error("Speichern fehlgeschlagen: %s" % error_string(FileAccess.get_open_error()))

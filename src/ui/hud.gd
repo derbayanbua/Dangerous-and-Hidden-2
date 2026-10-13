@@ -318,7 +318,7 @@ func _process(_delta: float) -> void:
 	elif s.vehicle != null:
 		_prompt.text = "[%s] Aussteigen" % InputSetup.binding_text("interact")
 	_binoc_mask.visible = s.using_binoculars
-	_crosshair.visible = not s.using_binoculars
+	_crosshair.visible = not s.using_binoculars and (Settings.crosshair or s.aiming)
 	_crosshair.queue_redraw()
 
 

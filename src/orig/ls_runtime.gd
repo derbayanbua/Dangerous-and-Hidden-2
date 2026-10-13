@@ -696,7 +696,7 @@ func speak(who: Node3D, id) -> float:
 			add_child(p)
 		p.finished.connect(p.queue_free)
 		p.play()
-	if t != "":
+	if t != "" and Settings.subtitles:
 		subtitle.emit(t, dur + 0.5)
 		Events.say(t, dur + 0.5)
 	return dur

@@ -24,12 +24,21 @@ var render_scale := 1.0    ## 0.5..1.0 (FSR 1 bei < 1)
 var fov := 70.0
 var mouse_sensitivity := 0.12
 var invert_y := false
-var master_volume := 0.8
+var master_volume := 0.8      ## Original „Sound-Lautstärke“ (Gesamt)
+var music_volume := 0.7       ## Original „Musik-Lautstärke“ (Bus „Music“)
+var gamma := 1.0              ## Original „Gamma-Korrektur“ (0,6 … 1,6)
+var shadows := true           ## Original „SCHATTEN“
+var subtitles := true         ## Original „UNTERTITEL“
+var crosshair := true         ## Original v1.12 „FADENKREUZ ZULASSEN“
 
 var _cfg := ConfigFile.new()
 
 
 func _ready() -> void:
+	if AudioServer.get_bus_index("Music") < 0:
+		AudioServer.add_bus()
+		AudioServer.set_bus_name(AudioServer.bus_count - 1, "Music")
+		AudioServer.set_bus_send(AudioServer.bus_count - 1, "Master")
 	load_settings()
 	apply()
 
@@ -46,9 +55,16 @@ func load_settings() -> void:
 	mouse_sensitivity = _cfg.get_value("controls", "mouse_sensitivity", mouse_sensitivity)
 	invert_y = _cfg.get_value("controls", "invert_y", invert_y)
 	master_volume = _cfg.get_value("audio", "master_volume", master_volume)
+	music_volume = _cfg.get_value("audio", "music_volume", music_volume)
+	gamma = _cfg.get_value("graphics", "gamma", gamma)
+	shadows = _cfg.get_value("graphics", "shadows", shadows)
+	subtitles = _cfg.get_value("game", "subtitles", subtitles)
+	crosshair = _cfg.get_value("game", "crosshair", crosshair)
 
 
 func save_settings() -> void:
+	if "--autoplay" in " ".join(OS.get_cmdline_user_args()):
+		return   # Tests verändern die Benutzereinstellungen nicht
 	_cfg.load(PATH)  # vorhandene Sektionen (z. B. Tastenbelegung) erhalten
 	_cfg.set_value("display", "resolution", resolution)
 	_cfg.set_value("display", "fullscreen", fullscreen)
@@ -59,10 +75,16 @@ func save_settings() -> void:
 	_cfg.set_value("controls", "mouse_sensitivity", mouse_sensitivity)
 	_cfg.set_value("controls", "invert_y", invert_y)
 	_cfg.set_value("audio", "master_volume", master_volume)
+	_cfg.set_value("audio", "music_volume", music_volume)
+	_cfg.set_value("graphics", "gamma", gamma)
+	_cfg.set_value("graphics", "shadows", shadows)
+	_cfg.set_value("game", "subtitles", subtitles)
+	_cfg.set_value("game", "crosshair", crosshair)
 	_cfg.save(PATH)
 
 
 func apply() -> void:
+	_apply_audio()
 	if DisplayServer.get_name() == "headless":
 		changed.emit()
 		return
@@ -87,8 +109,14 @@ func apply() -> void:
 	var vp := get_viewport()
 	vp.scaling_3d_scale = clampf(scale_3d, 0.25, 1.0)
 	vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR if vp.scaling_3d_scale < 0.99 else Viewport.SCALING_3D_MODE_BILINEAR
-	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(master_volume, 0.0001)))
 	changed.emit()
+
+
+func _apply_audio() -> void:
+	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(master_volume, 0.0001)))
+	var mb := AudioServer.get_bus_index("Music")
+	if mb >= 0:
+		AudioServer.set_bus_volume_db(mb, linear_to_db(maxf(music_volume, 0.0001)))
 
 
 func effective_resolution() -> Vector2i:
@@ -119,13 +147,15 @@ static func _gcd(a: int, b: int) -> int:
 ## Wird von der Mission beim Laden und bei jeder Änderung aufgerufen.
 func apply_to_world(env: Environment, sun: DirectionalLight3D) -> void:
 	if env:
+		env.adjustment_enabled = not is_equal_approx(gamma, 1.0)
+		env.adjustment_brightness = gamma
 		env.ssao_enabled = quality >= 1
 		env.ssil_enabled = quality >= 3
 		env.sdfgi_enabled = quality >= 3
 		env.glow_enabled = quality >= 1
 		env.volumetric_fog_enabled = quality >= 2
 	if sun:
-		sun.shadow_enabled = true
+		sun.shadow_enabled = shadows
 		sun.directional_shadow_max_distance = [60.0, 120.0, 200.0, 300.0][quality]
 		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if quality == 0 else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	var vp := get_viewport()

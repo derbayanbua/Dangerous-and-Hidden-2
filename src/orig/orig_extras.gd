@@ -45,6 +45,7 @@ func setup(m: Mission, rt: LsRuntime, mission_dir: String) -> void:
 		mission_music = audio.get("mission_music", {})
 	music = AudioStreamPlayer.new()
 	music.volume_db = -8.0
+	music.bus = &"Music"
 	add_child(music)
 	Events.alarm_raised.connect(func(_p, _b): _play_mission_music("action"))
 	_play_mission_music("normal")

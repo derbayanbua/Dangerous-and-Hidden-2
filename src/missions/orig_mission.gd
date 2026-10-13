@@ -165,7 +165,16 @@ func _apply_orig_params(s: Soldier, nm: String) -> void:
 	var p: Dictionary = actor_params.get(nm, {}).get("params", {})
 	if p.is_empty():
 		return
-	s.max_health = clampf(float(p.get("health", 200)) * HP_SCALE, 25.0, 500.0)
+	# Schwierigkeitsgrad des Profils wie im Original (nur Gegner, Seite 2):
+	# 1 leicht ×0,7 · 2 normal ×0,85 · 3 schwer unverändert · 4 sehr schwer Fähigkeiten 100
+	var diff := Game.difficulty()
+	var k: float = {1: 0.7, 2: 0.85}.get(diff, 1.0)
+	var enemy := int(p.get("side", 2)) == 2
+	var hp := float(p.get("health", 200)) * (k if enemy else 1.0)
+	var shooting := float(p.get("shooting", 64))
+	if enemy:
+		shooting = 100.0 if diff >= 4 else shooting * k
+	s.max_health = clampf(hp * HP_SCALE, 25.0, 500.0)
 	s.health = s.max_health
 	var per: Perception = s.get_node_or_null("Perception")
 	if per:
@@ -173,7 +182,7 @@ func _apply_orig_params(s: Soldier, nm: String) -> void:
 		per.hear_range = float(p.get("hear_range", 80))
 	var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
 	if b:
-		b.accuracy_skill = clampf(float(p.get("shooting", 64)) / 100.0 * 0.7, 0.1, 0.9)
+		b.accuracy_skill = clampf(shooting / 100.0 * 0.7, 0.1, 0.9)
 	s.set_meta("orig_params", p)
 
 
