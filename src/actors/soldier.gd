@@ -371,6 +371,11 @@ func _update_movement(delta: float) -> void:
 	if mounted != null:
 		velocity = Vector3.ZERO      # an der Waffenstellung: nur Drehen und Schießen
 		return
+	var lvl := water_level()
+	if not is_nan(lvl) and global_position.y + 1.1 < lvl:
+		_update_swim(delta, lvl, mode)
+		return
+	swimming = false
 	var wish := move_input.limit_length(1.0)
 	var speed: float = SPEEDS[stance][mode]
 	if aiming:
@@ -508,6 +513,58 @@ func _fits(at: Vector3) -> bool:
 	params.collision_mask = 1
 	params.exclude = [get_rid()]
 	return get_world_3d().direct_space_state.intersect_shape(params, 1).is_empty()
+
+
+## --- Schwimmen / Tauchen (Original: NORWAY Magnetminen unter Wasser, TUTORIAL Tauchbecken; Tauchgerät
+## „akvalung“ = Gegenstand 231). Steuerung (moderne Vereinfachung): in Blickrichtung schwimmen/tauchen,
+## Springen = auftauchen; ohne Eingabe treibt der Soldat zur Oberfläche. Luft 30 s ohne Tauchgerät.
+const AIR_MAX := 30.0
+var swimming := false
+var air := AIR_MAX
+var _mission_ref: Node
+
+
+func water_level() -> float:
+	if not is_instance_valid(_mission_ref):
+		_mission_ref = Game.current_mission()
+	if _mission_ref and _mission_ref.has_method("water_level_at"):
+		return _mission_ref.water_level_at(global_position)
+	return NAN
+
+
+func head_under_water() -> bool:
+	var lvl := water_level()
+	return not is_nan(lvl) and global_position.y + 1.45 < lvl
+
+
+func _update_swim(delta: float, lvl: float, mode: int) -> void:
+	swimming = true
+	stance_request = Stance.STAND
+	var wish := move_input.limit_length(1.0)
+	var speed := 2.2 if mode == MoveMode.RUN else 1.4
+	var v := wish * speed
+	if wish.length() > 0.1:
+		v.y = sin(look_pitch) * speed      # tauchen/aufsteigen in Blickrichtung
+	else:
+		v.y = 0.5                          # Auftrieb
+	if _jump_request:
+		v.y = 1.6
+	_jump_request = false
+	# an der Oberfläche schwimmen (Kopf über Wasser)
+	if global_position.y + 1.4 > lvl and v.y > 0.0:
+		v.y = 0.0
+	velocity = velocity.lerp(v, clampf(4.0 * delta, 0.0, 1.0))
+	move_and_slide()
+	trigger = false
+	aiming = false
+	if global_position.y + 1.45 < lvl and not get_meta("orig_items", []).has(231):
+		air -= delta
+		if air <= 0.0 and alive:
+			health -= 10.0 * delta     # ertrinken
+			if health <= 0.0:
+				die(null)
+	else:
+		air = minf(air + 6.0 * delta, AIR_MAX)
 
 
 ## Kletterbewegung entlang eines Pfades (z. B. Original-Leitern): erst zu mid (60 %), dann zu to

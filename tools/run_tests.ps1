@@ -19,7 +19,9 @@ $suites = @(
   @{ name = "test_a3";       args = "--headless -- --mission=a3_rendezvous --autoplay=test_orig_part --commandos=4" },
   @{ name = "test_sas";      args = "--headless -- --autoplay=test_sas" },
   @{ name = "test_interactive"; args = "--headless -- --mission=a1_blizzard --autoplay=test_interactive" },
-  @{ name = "test_af6";      args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" }
+  @{ name = "test_af6";      args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" },
+  @{ name = "test_items";    args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_items" },
+  @{ name = "test_water";    args = "--headless -- --mission=nw1_dampfleitung --autoplay=test_water" }
 )
 $failed = 0
 if (-not $Exe) {

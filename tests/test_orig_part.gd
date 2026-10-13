@@ -21,7 +21,8 @@ func _run() -> void:
 	var want := int(Game.cli.get("commandos", "0"))   # 0 = Anzahl laut actors.bin (commando1..4)
 	if want == 0:
 		for a in m.orig.actors:
-			if int(a.get("actor_type", -1)) == 10:
+			# Spielerstarts: Akteurtyp 10 bzw. „Spawnsingle*“ ohne Definition (NORMANDY, Start aus den Mini-U-Booten)
+			if int(a.get("actor_type", -1)) == 10 or String(a.get("name", "")).to_lower().begins_with("spawnsingle"):
 				want += 1
 		want = clampi(want, 1, 4)
 	check(m.squad.members.size() == want, "Kommandos laut Original", "%d von %d" % [m.squad.members.size(), want])

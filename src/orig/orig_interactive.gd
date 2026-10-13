@@ -20,7 +20,7 @@ const TXT_AMMO := 7053
 var mission: Node
 var runtime: LsRuntime
 var orig: OrigLevel
-var stats := {"emplacements": 0, "doors": 0, "ladders": 0, "switches": 0, "explosives": 0, "destructibles": 0, "crates": 0,
+var stats := {"world_items": 0, "emplacements": 0, "doors": 0, "ladders": 0, "switches": 0, "explosives": 0, "destructibles": 0, "crates": 0,
 	"photos": 0, "documents": 0, "radios": 0, "missing": 0}
 var controls := {}        ## Name (groß) -> Steuerobjekt
 
@@ -50,6 +50,7 @@ func setup(m: Node, rt: LsRuntime, o: OrigLevel) -> void:
 		_crate(e)
 	for e in d.get("emplacements", []):
 		_emplacement(e)
+	_world_items()
 	for e in d.get("photo_places", []):
 		_place(e, "photos", TXT_PHOTO, 229)
 	for e in d.get("document_places", []):
@@ -414,12 +415,16 @@ class OrigSwitch extends Interactable:
 		_show()
 
 	func can_interact(s: Soldier) -> bool:
-		return enabled and host.allowed(s, required_item)
+		return enabled and host.allowed(s, required_item) and (not radio or state == 1)
 
 	func interact(s: Soldier) -> void:
 		if not radio:
 			state = 2 if state == 1 else 1
 			_show()
+		else:
+			state = 2       # Original: benutztes Funkgerät -> Zustand 2 (Skripte prüfen _ACTOR_GetState == 2)
+			frame.set_meta("actor_state", state)
+			Events.say("Funkspruch abgesetzt.", 2.5)
 		Events.emit_noise(global_position, 5.0, s, s.team, &"door")
 		host.runtime.notify(frame, "ONUSE")
 		super.interact(s)
@@ -488,8 +493,9 @@ class OrigExplosive extends Interactable:
 		required_item = int(p.get("required_item", 68))
 		has_timer = bool(p.get("has_timer", true))
 		timer = float(p.get("timer_ms", 15000)) / 1000.0
-		radius = clampf(float(p.get("radius", 10000)) / 1000.0 if float(p.get("radius", 10.0)) > 100.0 else float(p.get("radius", 10.0)), 3.0, 30.0)
-		strength = float(p.get("strength", 12000))
+		var rr := float(p.get("radius", p.get("radius_?", 10.0)))
+		radius = clampf(rr / 1000.0 if rr > 100.0 else rr, 3.0, 30.0)
+		strength = float(p.get("strength", p.get("strength_?", 12000)))
 		label = OrigInteractive.text(int(p.get("label_text", 7161)), "Sprengplatz")
 		global_position = OrigInteractive.world_aabb(frame).get_center()
 		state = 3 if bool(p.get("hidden", false)) else (1 if bool(p.get("armed_at_start", false)) else 0)
@@ -549,8 +555,7 @@ class OrigExplosive extends Interactable:
 				(c as Node3D).visible = state == 1
 			elif nm.begins_with("explosive_off"):
 				(c as Node3D).visible = state == 0
-		if state == 2 or state == 3:
-			frame.visible = state != 3 and frame.visible
+		frame.visible = state != 3
 
 	func serialize() -> Dictionary:
 		return {"state": state, "countdown": countdown}
@@ -661,9 +666,33 @@ class OrigCrate extends Interactable:
 	var equipment := false
 	var items: Array = []
 
+	var destroyed := false
+
+	## Original: Kisten-Skripte reagieren auf OnDeath (BURMA1 bu1_ondeath*.scr) – durch Explosionen zerstörbar
+	func on_bullet_hit(d: float, by: Node) -> void:
+		if _is_target():
+			on_explosion(maxf(d, 20.0), by)
+
+	## Zielscheibe = Kiste, deren Skript auf OnDeath wartet (Original: Treffer → OnDeath)
+	func _is_target() -> bool:
+		var vm = host.runtime.vm_of.get(frame)
+		return vm != null and vm.code.handlers.has("ONDEATH")
+
+	func on_explosion(d: float, _by: Node) -> void:
+		if destroyed or d < 20.0:
+			return
+		destroyed = true
+		enabled = false
+		frame.visible = false
+		frame.set_meta("actor_state", 0)
+		host.runtime.notify(frame, "ONDEATH")
+
 	func init(h: OrigInteractive, f: Node3D, e: Dictionary) -> void:
 		host = h
 		frame = f
+		add_to_group("destructibles")
+		for b in frame.find_children("*", "StaticBody3D", true, false):
+			b.set_meta("hit_proxy", self)
 		var p: Dictionary = e.get("params", {})
 		persistent_id = "ocrate_" + String(e["name"])
 		take_limit = maxi(int(p.get("take_limit", 20)), 1)
@@ -693,7 +722,11 @@ class OrigCrate extends Interactable:
 			for w in s.weapons:
 				if w != null and w.data.slot != WeaponData.Slot.GRENADE:
 					got += w.add_ammo(w.data.magazine_size)
-			Events.say("Munition entnommen (%d Schuss)." % got, 2.0)
+			var names: Array = []
+			for it in items:
+				if int(it) >= 0:
+					names.append(OrigInteractive.give_item(s, int(it)))
+			Events.say("Munition entnommen (%d Schuss)%s." % [got, (": " + ", ".join(names)) if not names.is_empty() else ""], 2.0)
 		super.interact(s)
 
 	func serialize() -> Dictionary:
@@ -879,3 +912,122 @@ class OrigEmplacement extends Interactable:
 	func deserialize(d: Dictionary) -> void:
 		ammo_mags = int(d.get("ammo", ammo_mags))
 		destroyed = bool(d.get("destroyed", false))
+
+
+# --- Frei liegende Gegenstände (items.dat ohne Besitzer, actor_params.json „non_actor_stores“) ----------
+
+static var _items: Dictionary = {}     ## items.sav: Nummer -> Eintrag (Name, Weltmodell, Text, Art)
+
+
+static func item_info(id: int) -> Dictionary:
+	if _items.is_empty():
+		var d = LsRuntime._read_json(OrigLevel.cache_root() + "/items.json")
+		if typeof(d) == TYPE_DICTIONARY:
+			for it in d.get("items", []):
+				_items[int(it.get("id", -1))] = it
+	return _items.get(id, {})
+
+
+func _world_items() -> void:
+	var ap = LsRuntime._read_json(orig.mission_dir + "/actor_params.json")
+	if typeof(ap) != TYPE_DICTIONARY:
+		return
+	for r in ap.get("non_actor_stores", {}).get("", []):
+		var pa: Array = r.get("pos", [])
+		if pa.size() != 3:
+			continue
+		var it := OrigWorldItem.new()
+		it.host = self
+		it.item = int(r["item"])
+		mission.dynamic_root.add_child(it)
+		# items.dat-Positionen liegen in LS3D-Koordinaten (z gespiegelt wie scene.json)
+		it.global_position = Vector3(pa[0], pa[1], -float(pa[2]))
+		it.build()
+		stats.world_items += 1
+
+
+## Gegenstand (Nummer) im Umkreis: frei liegend oder bei einem Soldaten des Trupps (Original _ItemInRange)
+func item_in_range(id: int, pos: Vector3, r: float) -> bool:
+	for n in get_tree().get_nodes_in_group("world_items"):
+		var wi := n as OrigWorldItem
+		if wi and wi.item == id and wi.visible and wi.enabled and wi.global_position.distance_to(pos) <= r:
+			return true
+	if mission.squad:
+		for m in mission.squad.members:
+			if m.alive and has_item(m, id) and m.global_position.distance_to(pos) <= r:
+				return true
+	return false
+
+
+## Aufheben: Gegenstand ins Originalinventar; Munition/Granaten/Verband wirken sofort
+static func give_item(s: Soldier, id: int) -> String:
+	var inv: Array = s.get_meta("orig_items", [])
+	inv.append(id)
+	s.set_meta("orig_items", inv)
+	var info := item_info(id)
+	var nm := SAS.item_name(id) if SAS.item(id).size() > 0 else String(info.get("name", "#%d" % id))
+	if id in SAS.MEDKITS:
+		s.medkits += 1
+	var kind := String(info.get("kind", SAS.item_kind(id)))
+	if kind == "weapon":
+		var wd := WeaponDB.from_orig(id)
+		if wd:
+			var slot := int(wd.slot)
+			if slot < s.weapons.size() and s.weapons[slot] != null and s.weapons[slot].data == wd:
+				s.weapons[slot].add_ammo(wd.magazine_size)
+			elif slot < s.weapons.size() and s.weapons[slot] == null:
+				var w := Weapon.new(wd, false)
+				w.in_mag = wd.magazine_size if wd.slot != WeaponData.Slot.GRENADE else 1
+				s.weapons[slot] = w
+	elif kind == "ammo":
+		for w in s.weapons:
+			if w and w.data.slot != WeaponData.Slot.GRENADE:
+				for wid in WeaponDB.ORIG_IDS:
+					if WeaponDB.ORIG_IDS[wid] == w.data.id and SAS.ammo_of(wid) == id:
+						w.add_ammo(w.data.magazine_size)
+	return nm
+
+
+class OrigWorldItem extends Interactable:
+	var host: OrigInteractive
+	var item := -1
+
+	func build() -> void:
+		add_to_group("world_items")
+		var info := OrigInteractive.item_info(item)
+		var model := String(info.get("model", ""))
+		var vis: Node3D = host.orig.model_instance(model) if model != "" else null
+		if vis == null:
+			var mi := MeshInstance3D.new()
+			var bm := BoxMesh.new()
+			bm.size = Vector3(0.3, 0.08, 0.22)
+			mi.mesh = bm
+			vis = mi
+		add_child(vis)
+		var txt := int(info.get("text_id", -1))
+		prompt = "%s: %s" % [OrigInteractive.text(txt, String(info.get("name", "Gegenstand"))), "Aufheben"]
+		persistent_id = "oitem_%d_%d_%d" % [item, int(global_position.x * 10), int(global_position.z * 10)]
+		# Original: Frame trägt den Modellnamen (Skripte: FRM_FindFrame(x, "item_slozka3"); ITEM_Teleport)
+		if model != "":
+			name = model.validate_node_name()
+			host.runtime.register_actor(model, self)
+
+	func interact(s: Soldier) -> void:
+		var nm := OrigInteractive.give_item(s, item)
+		Events.say("%s aufgehoben: %s" % [s.soldier_name, nm], 2.5)
+		enabled = false
+		visible = false
+		super.interact(s)
+
+	func can_interact(_s: Soldier) -> bool:
+		return enabled and visible
+
+	func serialize() -> Dictionary:
+		return {"enabled": enabled, "pos": [global_position.x, global_position.y, global_position.z], "visible": visible}
+
+	func deserialize(d: Dictionary) -> void:
+		enabled = bool(d.get("enabled", true))
+		visible = bool(d.get("visible", true))
+		var pa: Array = d.get("pos", [])
+		if pa.size() == 3:
+			global_position = Vector3(pa[0], pa[1], pa[2])

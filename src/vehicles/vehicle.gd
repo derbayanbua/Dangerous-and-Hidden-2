@@ -206,15 +206,32 @@ func _visual_aabb(n: Node3D) -> AABB:
 	return out if not first else AABB(Vector3(-0.8, 0, -1.8), Vector3(1.6, 1.4, 3.6))
 
 
-## HUMAN_Drive: zum Punkt fahren (km/h). Kinematisch, damit die Skriptfahrt verl?sslich ist.
+## HUMAN_Drive: zum Punkt fahren (km/h). Kinematisch, damit die Skriptfahrt verlässlich ist.
 func drive_to(goal: Vector3, kmh: float) -> void:
-	if fuel <= 0.0 or wrecked:
+	drive_path([goal], kmh)
+
+
+## Fahrt über eine Punktfolge (Original-Fahrzeugnetz aus check2.bin, docs/re_notes_drive.md):
+## Geschwindigkeit kmh × 0,28 m/s, negative kmh = rückwärts; fertig bei < 2 m am letzten Punkt
+## oder wenn die Fahrt 5 s lang nicht vorankommt
+var _drive_path: Array = []
+var _drive_reverse := false
+var _stuck_t := 0.0
+var _best_dist := INF
+
+
+func drive_path(points: Array, kmh: float) -> void:
+	if fuel <= 0.0 or wrecked or points.is_empty():
 		return
 	script_driving = true
 	freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 	freeze = true
-	_drive_goal = goal
-	_drive_speed = maxf(kmh, 5.0) / 3.6
+	_drive_path = points.duplicate()
+	_drive_goal = _drive_path.pop_front()
+	_drive_reverse = kmh < 0.0
+	_drive_speed = maxf(absf(kmh) * 0.28, 1.5)
+	_stuck_t = 0.0
+	_best_dist = INF
 
 
 func drive_done() -> bool:
@@ -223,6 +240,7 @@ func drive_done() -> bool:
 
 func stop_drive() -> void:
 	_drive_goal = Vector3.INF
+	_drive_path.clear()
 	_drive_speed = 0.0
 
 
@@ -231,12 +249,24 @@ func _script_drive(delta: float) -> void:
 		return
 	var to := _drive_goal - global_position
 	to.y = 0.0
-	if to.length() < 2.0:
-		_drive_goal = Vector3.INF
+	if to.length() < (2.0 if _drive_path.is_empty() else 3.0):
+		_drive_goal = _drive_path.pop_front() if not _drive_path.is_empty() else Vector3.INF
+		_best_dist = INF
 		return
-	var yaw := atan2(to.x, to.z)
+	# festgefahren: 5 s ohne Annäherung -> Fahrt gilt als beendet (Original)
+	var rest := to.length()
+	if rest < _best_dist - 0.2:
+		_best_dist = rest
+		_stuck_t = 0.0
+	else:
+		_stuck_t += delta
+		if _stuck_t > 5.0:
+			stop_drive()
+			return
+	var dir := -to if _drive_reverse else to
+	var yaw := atan2(dir.x, dir.z)
 	global_rotation.y = lerp_angle(global_rotation.y, yaw, clampf(delta * 1.5, 0.0, 1.0))
-	var fwd := global_basis.z
+	var fwd := global_basis.z * (-1.0 if _drive_reverse else 1.0)
 	fwd.y = 0.0
 	var step := fwd.normalized() * minf(_drive_speed * delta, to.length())
 	var space := get_world_3d().direct_space_state
