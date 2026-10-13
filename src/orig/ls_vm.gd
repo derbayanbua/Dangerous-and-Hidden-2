@@ -26,6 +26,7 @@ var ended := false
 var atomic := false
 var signals := {}              ## empfangene Signalnummern
 var signals_disabled := false
+var disabled_signal_ids := {}   ## EnableSignal(n, false): einzelne Signalnummern sperren
 var whenevers_disabled := false
 var whenever_active := {}
 var events: Array[String] = []
@@ -43,7 +44,7 @@ func _init(compiled: LsCompiler, owner: Node3D, runtime, script_name := "") -> v
 
 ## Ereignis auslösen (z. B. "ONSIGNAL:5", "ONALARM", "ONDEATH").
 func fire(key: String) -> bool:
-	if key.begins_with("ONSIGNAL:") and signals_disabled:
+	if key.begins_with("ONSIGNAL:") and (signals_disabled or disabled_signal_ids.has(int(key.substr(9)))):
 		return false
 	if not code.handlers.has(key):
 		return false
@@ -56,7 +57,17 @@ func signal_received(n: int) -> void:
 	fire("ONSIGNAL:%d" % n)
 
 
+var _started := false
+
+
 func tick(delta: float) -> void:
+	# Erster Takt: zuerst den Skriptanfang ausführen (Deklarationen, FRM_FindFrame …), erst danach
+	# Ereignisse und Whenever-Bedingungen prüfen – sonst lösen Bedingungen mit noch leeren Variablen aus
+	# (z. B. „!_ACTOR_GetState(schumman)“ in AFRICA5 meldete Schumann sofort als tot).
+	if not _started:
+		_started = true
+		_run()
+		return
 	# Ereignisse unterbrechen (nicht während Block{})
 	if not atomic and not events.is_empty():
 		_enter(code.handlers[events.pop_front()])
@@ -163,6 +174,13 @@ func _call(fname: String, args: Array) -> void:
 			return
 		"DISABLESIGNALS":
 			signals_disabled = _truthy(_eval(args[0])) if args.size() > 0 else true
+			return
+		"ENABLESIGNAL":
+			var sid := int(_eval(args[0])) if args.size() > 0 else -1
+			if args.size() > 1 and not _truthy(_eval(args[1])):
+				disabled_signal_ids[sid] = true
+			else:
+				disabled_signal_ids.erase(sid)
 			return
 		"DISABLEWHENEVERS":
 			whenevers_disabled = _truthy(_eval(args[0])) if args.size() > 0 else true

@@ -73,10 +73,5 @@ func explode() -> void:
 			dmg *= 0.6   # liegend weniger Splitterfläche
 		sol.apply_hit(dmg, zone, thrower if is_instance_valid(thrower) else null, (target - pos).normalized())
 	# Fahrzeuge und Hunde (on_bullet_hit) nehmen Explosionsschaden ohne Deckungsprüfung
-	for n in get_tree().get_nodes_in_group("vehicles") + get_tree().get_nodes_in_group("dogs"):
-		var n3 := n as Node3D
-		var dv := pos.distance_to(n3.global_position + Vector3.UP * 0.5)
-		if dv < radius + 1.5:
-			var f := 1.0 - minf(dv / (radius + 1.5), 1.0)
-			n3.on_bullet_hit(data.damage * 2.5 * f, thrower if is_instance_valid(thrower) else null)
+	OrigInteractive.damage_objects(get_tree(), pos, radius, data.damage, thrower if is_instance_valid(thrower) else null)
 	queue_free()

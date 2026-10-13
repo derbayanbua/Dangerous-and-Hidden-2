@@ -26,7 +26,7 @@ const FALLBACK_TEXTS := {
 	2410: "ZURÜCK", 2102: "Datum und Zeit aktuell:", 2103: "Aktuelles Profil",
 	2104: "Datum und Zeit des letzten gespeicherten Spielstandes:", 2020: "KEIN AKTUELLES PROFIL",
 	2021: "KEIN GESPEICHERTER SPIELSTAND", 2117: "PROFIL ERSTELLEN", 2001: "JA", 2004: "SIND SIE SICHER?",
-	2008: "ANNULLIEREN", 2013: "OK",
+	2008: "ANNULLIEREN", 2013: "OK", 2030: "MINIMUM", 2031: "NORMAL", 2032: "MAXIMUM",
 }
 
 var spec := {}
@@ -97,7 +97,9 @@ func _tex(file: String) -> Texture2D:
 		return _tex_cache[file]
 	# beste verfügbare Fassung: KI-4K, KI-HD, Original (tools/upscale_textures.py -> <ordner>_4k/_hd)
 	var path := _menu_dir + "/" + file
-	for suffix: String in ["_4k", "_hd"]:
+	for suffix: String in Settings.texture_suffixes():
+		if suffix == "":
+			break
 		var alt := _menu_dir + "/" + file.get_base_dir() + suffix + "/" + file.get_file()
 		if file.get_base_dir() != "" and FileAccess.file_exists(alt):
 			path = alt
@@ -451,6 +453,8 @@ func _options_menu() -> void:
 			_page_controls()
 		"keys":
 			_page_keys()
+		"display":
+			_page_display()
 		"game":
 			_page_game()
 
@@ -517,14 +521,17 @@ func _slider(y: float, value: float, lo: float, hi: float, cb: Callable) -> HSli
 		cb.call(v)
 		_changed())
 	stage.add_child(s)
-	_label(Rect2(105, y + 34, 336, 18), text(2446) if texts.has("2446") else "minimum            normal            maximum",
-		12, TEXT_COLOR, HORIZONTAL_ALIGNMENT_CENTER)
+	_label(Rect2(105, y + 34, 112, 18), text(2030), 12, TEXT_COLOR, HORIZONTAL_ALIGNMENT_LEFT)
+	_label(Rect2(217, y + 34, 112, 18), text(2031), 12, TEXT_COLOR, HORIZONTAL_ALIGNMENT_CENTER)
+	_label(Rect2(329, y + 34, 112, 18), text(2032), 12, TEXT_COLOR, HORIZONTAL_ALIGNMENT_RIGHT)
 	return s
 
 
 ## Auswahlknopf über die volle Zeilenbreite (z. B. Grafikdetails, Auflösung)
-func _cycle(r: Rect2, label: String, cb: Callable, enabled := true) -> Button:
+func _cycle(r: Rect2, label: String, cb: Callable, enabled := true, node_name := "") -> Button:
 	var b := Button.new()
+	if node_name != "":
+		b.name = node_name
 	b.position = r.position
 	b.size = r.size
 	b.text = label
@@ -550,27 +557,73 @@ func _cycle(r: Rect2, label: String, cb: Callable, enabled := true) -> Button:
 
 
 func _page_graphics() -> void:
+	# Original options.4ds „graphics setup“ (Zuordnung Frame -> Text aus hd2.exe 0x61dbc0 ff.)
 	_label(Rect2(67, 149, 383, 18), text(2411), 16, TEXT_COLOR)
 	_label(Rect2(67, 179, 383, 18), text(2412), 14, TEXT_COLOR)
 	_slider(201, Settings.gamma, 0.6, 1.6, func(v: float): Settings.gamma = v)
-	var q_ids := [2414, 2415, 2416]
-	var q_text: String = text(q_ids[Settings.quality]) if Settings.quality < 3 else "GRAFIK-DETAILS - ULTRA"
-	_cycle(Rect2(105, 290, 336, 32), q_text, func(): Settings.quality = (Settings.quality + 1) % 4)
-	_label(Rect2(67, 336, 383, 18), text(2430) + " (moderne Ergänzungen)", 13, TEXT_COLOR)
-	_yesno(364, "VOLLBILD", Settings.fullscreen, func(v: bool): Settings.fullscreen = v)
-	_yesno(408, text(2418), Settings.shadows, func(v: bool): Settings.shadows = v)
-	_yesno(451, "VSYNC", Settings.vsync, func(v: bool): Settings.vsync = v)
+	var disp := _cycle(Rect2(105, 283, 336, 33), "ANZEIGE: AUFLÖSUNG, VOLLBILD …", func(): options_page = "display")
+	disp.name = "bdisplay"
+	disp.tooltip_text = "Moderne Ergänzung (nicht im Original)"
+	var lvl := Settings.detail_level()
+	var det := _cycle(Rect2(105, 333, 336, 32), text(2414 + lvl), func():
+		Settings.set_detail_preset((mini(Settings.detail_level(), 2) + 1) % 3))
+	det.name = "bdetail"
+	_label(Rect2(67, 390, 337, 18), text(2430), 14, TEXT_COLOR)
+	# Reihenfolge wie im Original: GD00..GD06 = Frames nextdetail, shadows, mirrors, morphing,
+	# dynamic lightning, light glow, use high models
+	var rows := [
+		[408, 2418, "shadows"], [451, 2419, "morphing"], [495, 2420, "decals"], [539, 2421, "blood"],
+		[583, 2422, "grass"], [626, 2423, "dynamic_lights"], [670, 2424, "high_models"]]
+	for r in rows:
+		var key: String = r[2]
+		_yesno(r[0], text(r[1]), Settings.get(key), func(v: bool): Settings.set(key, v))
+		if key == "morphing":
+			for k in [1, 2]:
+				(stage.get_child(stage.get_child_count() - k) as Control).tooltip_text = "Gesichtsanimation – im Nachbau noch ohne Wirkung"
+
+
+## Anzeige & Setup: Optionen aus dem Original-Setup (setup.exe), soweit heute sinnvoll, plus moderne Ergänzungen
+func _page_display() -> void:
+	_label(Rect2(67, 140, 412, 18), "Anzeige & Setup (aus dem Original-Setup):", 16, TEXT_COLOR)
+	_label(Rect2(67, 160, 412, 18), "Grafikkarte: " + RenderingServer.get_video_adapter_name(), 12, TEXT_COLOR)
+	var y := 184.0
 	var ri := Settings.RESOLUTIONS.find(Settings.resolution)
-	_cycle(Rect2(67, 495, 412, 33), "AUFLÖSUNG: " + Settings.resolution_name(Settings.resolution), func():
+	_cycle(Rect2(67, y, 412, 32), "AUFLÖSUNG: " + Settings.resolution_name(Settings.resolution), func():
 		Settings.resolution = Settings.RESOLUTIONS[(maxi(ri, 0) + 1) % Settings.RESOLUTIONS.size()])
+	y += 38
+	_yesno(y, "VOLLBILD", Settings.fullscreen, func(v: bool): Settings.fullscreen = v)
+	y += 38
+	_cycle(Rect2(67, y, 412, 32), "VSYNC: " + Settings.VSYNC_NAMES[Settings.vsync_mode], func():
+		Settings.vsync_mode = (Settings.vsync_mode + 1) % 4, true, "bvsync")
+	y += 38
+	var fi := Settings.FPS_STEPS.find(Settings.max_fps)
+	_cycle(Rect2(67, y, 412, 32), "BILDRATE: " + ("UNBEGRENZT" if Settings.max_fps == 0 else "MAX. %d" % Settings.max_fps), func():
+		Settings.max_fps = Settings.FPS_STEPS[(maxi(fi, 0) + 1) % Settings.FPS_STEPS.size()], true, "bfps")
+	y += 38
+	_cycle(Rect2(67, y, 412, 32), "KANTENGLÄTTUNG: " + Settings.AA_NAMES[Settings.aa_mode], func():
+		Settings.aa_mode = (Settings.aa_mode + 1) % Settings.AA_NAMES.size(), true, "baa")
+	y += 38
+	_cycle(Rect2(67, y, 412, 32), "TEXTUREN: " + Settings.TEXTURE_NAMES[Settings.texture_quality], func():
+		Settings.texture_quality = (Settings.texture_quality + 1) % 3, true, "btex")
+	y += 38
+	_cycle(Rect2(67, y, 412, 32), "ANISOTROPE FILTERUNG: " + Settings.ANISO_NAMES[Settings.anisotropy], func():
+		Settings.anisotropy = (Settings.anisotropy + 1) % 5, true, "baniso")
+	y += 38
 	var scales := [1.0, 0.85, 0.7, 0.5]
 	var si := scales.find(snappedf(Settings.render_scale, 0.05))
-	_cycle(Rect2(67, 539, 412, 33), "3D-RENDERSKALIERUNG: %d %%" % int(Settings.render_scale * 100.0), func():
+	_cycle(Rect2(67, y, 412, 32), "3D-RENDERSKALIERUNG: %d %%" % int(Settings.render_scale * 100.0), func():
 		Settings.render_scale = scales[(maxi(si, 0) + 1) % scales.size()])
+	y += 38
 	var fovs := [60.0, 70.0, 80.0, 90.0, 100.0]
-	var fi := fovs.find(Settings.fov)
-	_cycle(Rect2(67, 583, 412, 33), "SICHTFELD: %d°" % int(Settings.fov), func():
-		Settings.fov = fovs[(maxi(fi, 0) + 1) % fovs.size()])
+	var fo := fovs.find(Settings.fov)
+	_cycle(Rect2(67, y, 412, 32), "SICHTFELD: %d°" % int(Settings.fov), func():
+		Settings.fov = fovs[(maxi(fo, 0) + 1) % fovs.size()])
+	y += 38
+	_yesno(y, "BEI INAKTIVEM FENSTER PAUSIEREN", Settings.pause_unfocused, func(v: bool): Settings.pause_unfocused = v)
+	y += 38
+	_yesno(y, "ZUSATZEFFEKTE (SSIL, SDFGI)", Settings.quality >= 3, func(v: bool): Settings.quality = 3 if v else 2)
+	_cycle(Rect2(67, 670, 412, 33), text(2410), func(): options_page = "graphics")
+	_label(Rect2(67, 638, 412, 26), "Texturänderung wirkt beim nächsten Laden einer Mission.", 11, TEXT_COLOR)
 
 
 func _page_sound() -> void:
@@ -590,6 +643,8 @@ func _page_controls() -> void:
 	_label(Rect2(67, 355, 383, 18), text(2445), 14, TEXT_COLOR)
 	_slider(376, Settings.mouse_sensitivity, 0.03, 0.4, func(v: float): Settings.mouse_sensitivity = v)
 	_label(Rect2(67, 556, 383, 18), text(2447), 14, TEXT_DISABLED)
+	var cal := _cycle(Rect2(105, 580, 336, 33), text(2448), func(): pass, false)
+	cal.tooltip_text = "Joystick/Gamepad wird noch nicht unterstützt"
 	_yesno(626, text(2449), false, func(_v): pass, false)
 	_yesno(671, text(2450), false, func(_v): pass, false)
 
@@ -598,10 +653,9 @@ const KEY_CATEGORIES := [
 	[2452, ["move_forward", "move_back", "move_left", "move_right", "run", "stance_stand", "stance_crouch",
 		"stance_prone", "lean_left", "lean_right"]],
 	[2453, ["fire", "aim", "reload", "fire_mode", "weapon_1", "weapon_2", "weapon_3", "weapon_next", "weapon_prev"]],
-	[2454, ["interact", "binoculars", "medkit", "camera_toggle", "objectives", "tactical_map", "quicksave",
-		"quickload", "pause"]],
-	[2455, ["soldier_1", "soldier_2", "soldier_3", "soldier_4", "soldier_next", "order_move", "order_follow",
-		"order_hold", "order_roe", "order_formation", "order_stance", "order_grenade"]],
+	[2454, ["interact", "binoculars", "medkit", "camera_toggle", "objectives", "quicksave", "quickload", "pause"]],
+	[2455, ["order_move", "order_follow", "order_hold", "order_roe", "order_formation", "order_stance", "order_grenade"]],
+	[2456, ["tactical_map", "soldier_1", "soldier_2", "soldier_3", "soldier_4", "soldier_next"]],
 ]
 
 
@@ -630,7 +684,12 @@ func _page_keys() -> void:
 			show_menu("options"))
 		stage.add_child(b)
 		y += 30.0
-	_cycle(Rect2(67, 626, 412, 33), text(2457), func(): InputSetup.reset_defaults())
+	var d1 := _cycle(Rect2(67, 626, 204, 33), text(2457), func(): InputSetup.apply_preset(1))
+	d1.name = "bdefault1"
+	d1.add_theme_font_size_override("font_size", 12)
+	var d2 := _cycle(Rect2(275, 626, 204, 33), text(2459), func(): InputSetup.apply_preset(2))
+	d2.name = "bdefault2"
+	d2.add_theme_font_size_override("font_size", 12)
 	_cycle(Rect2(67, 670, 412, 33), text(2458), func():
 		_waiting_action = ""
 		options_page = "controls")
@@ -754,6 +813,10 @@ func _profile_info() -> String:
 		"%s %d" % [text(2169), int(p.get("shots", 0))],
 		"Abgeschlossene Einsätze: %d" % Game.campaign.get("completed", []).size(),
 	]
+	if p.has("imported_from"):
+		lines.append("Übernommen aus: " + String(p["imported_from"]))
+	if p.has("orig_last_save"):
+		lines.append("Original-Spielstand: " + String(p["orig_last_save"]))
 	return "\n".join(lines)
 
 
@@ -937,7 +1000,11 @@ func _show_briefing(id: String) -> void:
 	txt.scroll_active = true
 	v.add_child(txt)
 	v.add_child(HSeparator.new())
-	_build_loadout(v)
+	var sas := Game.uses_sas(id)
+	if sas:
+		_build_sas_summary(v, id)
+	else:
+		_build_loadout(v)
 	v.add_child(HSeparator.new())
 	var keys := Label.new()
 	keys.add_theme_font_size_override("font_size", 14)
@@ -951,7 +1018,44 @@ func _show_briefing(id: String) -> void:
 		_brief_root.queue_free()
 		_brief_root = null
 		stage.visible = true, row)
-	UIKit.button("Einsatz beginnen", func(): Game.start_mission(id), row)
+	if sas:
+		UIKit.button("Team und Ausrüstung", func(): _open_sas_screen(id), row).name = "TeamButton"
+	else:
+		UIKit.button("Einsatz beginnen", func(): Game.start_mission(id), row)
+
+
+var sas_screen: SasScreen
+
+
+## Original-Ablauf: Briefing -> (Teamauswahl, wo vorgesehen) -> Inventar-Auswahl -> Einsatz
+func _open_sas_screen(id: String) -> void:
+	if _brief_root:
+		_brief_root.visible = false
+	sas_screen = SasScreen.new()
+	sas_screen.name = "SasScreen"
+	add_child(sas_screen)
+	sas_screen.back_requested.connect(func():
+		sas_screen.queue_free()
+		sas_screen = null
+		if _brief_root:
+			_brief_root.visible = true)
+	sas_screen.start_requested.connect(func(): Game.start_mission(id))
+	sas_screen.open(id)
+
+
+func _build_sas_summary(parent: Control, id: String) -> void:
+	Game.prepare_sas(id)
+	var mode := Game.sas_team_mode(id)
+	var l := Label.new()
+	l.add_theme_font_size_override("font_size", 16)
+	var st := Game.sas_states()
+	var names: Array = Game.sas_team().map(func(i): return SAS.short_name(i, int(st[str(i)]["rank"])))
+	l.text = "%s %s\n%s" % [SAS.text(2706, "Team:"), ", ".join(names),
+		{"select": SAS.text(2651, "AUSWAHL DER TEAM-MITGLIEDER"), "refill": SAS.text(2652, "TEAM WIEDER AUFFÜLLEN")}.get(mode,
+		"Das Team bleibt für diesen Einsatz zusammen.")]
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size.x = 760
+	parent.add_child(l)
 
 
 ## Ausrüstung je Soldat: Primärwaffe und Granaten (Seitenwaffe fest: Colt).

@@ -86,7 +86,9 @@ func _load(file: String) -> Texture2D:
 	if _tex_cache.has(file):
 		return _tex_cache[file]
 	var path := dir + "/" + file
-	for suffix: String in ["_4k", "_hd"]:
+	for suffix: String in Settings.texture_suffixes():
+		if suffix == "":
+			break
 		var alt := dir + "/" + file.get_base_dir() + suffix + "/" + file.get_file()
 		if FileAccess.file_exists(alt):
 			path = alt
@@ -215,7 +217,9 @@ func _process(delta: float) -> void:
 		_fill("disguise" + sfx, 1.0 if m.disguised else 0.0)
 		var photo: Dictionary = elements.get("photo" + sfx, {})
 		if photo:
-			var want := "faces/x_fc_death.png" if not m.alive else "faces/x_f_%03d.png" % (i + 1)
+			var want := "faces/x_fc_death.png" if not m.alive else (
+				"faces/x_f_%s.png" % String(SAS.store(int(m.get_meta("sas"))).get("portrait_id", "001"))
+				if m.has_meta("sas") else "faces/x_f_%03d.png" % (i + 1))
 			if photo.get("face", "") != want:
 				photo["face"] = want
 				(photo["node"] as TextureRect).texture = _load(want)

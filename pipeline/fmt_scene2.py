@@ -49,16 +49,15 @@ def parse_object(d, a, b):
 def parse_actor_defs(d):
     """actors.bin, Chunk 0xAE20: Akteursdefinitionen {Name: (Typ, Parameterbytes)}.
     Typen (beobachtet): 3 Mensch (NPC/Gegner), 4 Fahrzeug, 10 Spielerkommando."""
+    # Definitionen 0xAE21 liegen meist direkt unter 0xAE20 (z. B. ARCTIC1), in anderen Missionen aber
+    # verschachtelt in den Objekt-Chunks 0x4010 (z. B. BURMA1, CZECH3) -> rekursiv suchen.
     defs = {}
-    for t, s, e in chunks(d, 0, len(d)):
-        if t != 0x4C53:
-            continue
-        for t2, s2, e2 in chunks(d, s, e):
-            if t2 != 0xAE20:
-                continue
-            for t3, s3, e3 in chunks(d, s2, e2):
-                if t3 != 0xAE21:
-                    continue
+
+    def visit(s, e, depth):
+        if depth > 6:
+            return
+        for t3, s3, e3 in chunks(d, s, e):
+            if t3 == 0xAE21:
                 name, typ, params = "", -1, b""
                 for t4, s4, e4 in chunks(d, s3, e3):
                     if t4 == 0xAE23:
@@ -67,7 +66,14 @@ def parse_actor_defs(d):
                         typ = struct.unpack_from("<I", d, s4)[0]
                     elif t4 == 0xAE24:
                         params = d[s4:e4]
-                defs[name] = (typ, params)
+                if name and name not in defs:
+                    defs[name] = (typ, params)
+            if e3 - s3 > 6 and t3 in (0xAE20, 0xAE21, 0x4010, 0x4000):
+                visit(s3, e3, depth + 1)
+
+    for t, s, e in chunks(d, 0, len(d)):
+        if t == 0x4C53:
+            visit(s, e, 0)
     return defs
 
 

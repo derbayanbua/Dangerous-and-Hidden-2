@@ -71,7 +71,41 @@ func _load_glb(path: String) -> Node3D:
 	if doc.append_from_file(path, state) != OK:
 		push_error("glTF nicht ladbar: " + path)
 		return null
+	_swap_textures(state)
 	return doc.generate_scene(state) as Node3D
+
+
+## Texturqualität (Original-Setup „Text.-Qual.“): Bilddaten der referenzierten Original-PNG gegen die
+## KI-Fassung aus textures_hd/textures_4k tauschen (gleicher Dateiname); glTF-Dateien bleiben unverändert.
+static var _hq_cache := {}
+
+func _swap_textures(state: GLTFState) -> void:
+	var sfx: Array = Settings.texture_suffixes()
+	if sfx == [""]:
+		return
+	var imgs := state.get_images()
+	var js: Dictionary = state.json
+	var jimgs: Array = js.get("images", [])
+	for i in mini(imgs.size(), jimgs.size()):
+		var uri := String(jimgs[i].get("uri", ""))
+		if uri == "" or not (imgs[i] is ImageTexture):
+			continue
+		var file := uri.get_file()
+		var key := "%s|%s" % [sfx[0], file]
+		var hq: Image = _hq_cache.get(key)
+		if hq == null:
+			for s in sfx:
+				if s == "":
+					break
+				var p := "%s/textures%s/%s" % [cache_root(), s, file]
+				if FileAccess.file_exists(p):
+					hq = Image.load_from_file(p)
+					if hq:
+						hq.generate_mipmaps()
+						_hq_cache[key] = hq
+					break
+		if hq:
+			(imgs[i] as ImageTexture).set_image(hq)
 
 
 func _index(n: Node) -> void:
@@ -88,7 +122,10 @@ func _index(n: Node) -> void:
 func _add_collision(n: Node) -> void:
 	if n is MeshInstance3D:
 		var mi := n as MeshInstance3D
-		if mi.mesh and not _is_foliage(mi):
+		var foliage := mi.mesh != null and _is_foliage(mi)
+		if foliage and mi.get_aabb().size.y < 1.5:
+			grass_nodes.append(mi)
+		if mi.mesh and not foliage:
 			var body := StaticBody3D.new()
 			body.collision_layer = 1
 			var cs := CollisionShape3D.new()
@@ -98,6 +135,16 @@ func _add_collision(n: Node) -> void:
 			stats.colliders += 1
 	for c in n.get_children():
 		_add_collision(c)
+
+
+## Original-Option „GRAS“: niedrige Vegetation (Alpha-Material, < 1,5 m hoch) ein-/ausblenden
+var grass_nodes: Array[MeshInstance3D] = []
+
+
+func apply_grass_setting() -> void:
+	for g in grass_nodes:
+		if is_instance_valid(g):
+			g.visible = Settings.grass
 
 
 func _is_foliage(mi: MeshInstance3D) -> bool:

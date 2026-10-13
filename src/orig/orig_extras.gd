@@ -21,6 +21,7 @@ var stats := {"lights": 0, "spots": 0, "sounds": 0, "tracks": 0}
 var music: AudioStreamPlayer
 var _music_override := false
 var _random_sounds: Array[AudioStreamPlayer3D] = []
+var _lights: Array[Light3D] = []
 var _rand_t := 0.0
 
 
@@ -43,6 +44,8 @@ func setup(m: Mission, rt: LsRuntime, mission_dir: String) -> void:
 	var audio = LsRuntime._read_json(mission_dir + "/audio.json")
 	if typeof(audio) == TYPE_DICTIONARY:
 		mission_music = audio.get("mission_music", {})
+	Settings.changed.connect(_apply_settings)
+	_apply_settings()
 	music = AudioStreamPlayer.new()
 	music.volume_db = -8.0
 	music.bus = &"Music"
@@ -82,6 +85,7 @@ func _build_lights(lights: Array) -> void:
 			"point":
 				var o := mission.add_lamp(pos, rng, col, float(l.get("power", 1.0)) * POINT_ENERGY)
 				o.shadow_enabled = false
+				_lights.append(o)
 				o.name = String(l["name"]).validate_node_name()
 				runtime.register_actor(l["name"], o)
 				stats.lights += 1
@@ -93,6 +97,7 @@ func _build_lights(lights: Array) -> void:
 				s.spot_range = rng
 				s.spot_angle = clampf(rad_to_deg(float(l.get("cone_outer", 1.0))) * 0.5, 5.0, 89.0)
 				s.shadow_enabled = false
+				_lights.append(s)
 				mission.dynamic_root.add_child(s)
 				s.global_transform = Transform3D(Basis(_quat(l["world_rot"])), pos)
 				runtime.register_actor(l["name"], s)
@@ -139,6 +144,13 @@ func _build_sounds(sounds: Array, script_text: String) -> void:
 			p.play(randf() * maxf(st.get_length() - 0.1, 0.0))
 		else:
 			_random_sounds.append(p)
+
+
+## Original-Option „DYNAMIK“: dynamische Lichter an/aus (Sichtbarkeitsmodell der KI bleibt unberührt)
+func _apply_settings() -> void:
+	for l in _lights:
+		if is_instance_valid(l):
+			l.visible = Settings.dynamic_lights
 
 
 func _process(delta: float) -> void:

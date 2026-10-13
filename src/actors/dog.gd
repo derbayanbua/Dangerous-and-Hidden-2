@@ -24,6 +24,8 @@ var alive := true
 var alarmed := false
 var target: Soldier                ## Angriffsziel
 var attack_any := false            ## DOG_Attack(NULL): nächstes Ziel selbst wählen
+var move_target := Vector3.INF     ## DOG_Move(Wegpunkt)
+var lying := false                 ## DOG_SETMODE_Lie
 
 var _visual: Node3D
 var _agent: NavigationAgent3D
@@ -93,6 +95,14 @@ func _physics_process(delta: float) -> void:
 		if _bark_t <= 0.0:
 			_bark_t = 1.6
 			Events.emit_noise(global_position, 70.0, self, Soldier.TEAM_AXIS, &"bark")
+	elif move_target.is_finite():
+		if global_position.distance_to(move_target) < 1.2:
+			move_target = Vector3.INF
+		else:
+			goal = move_target
+			speed = 4.0 if run_mode else 2.2
+	elif lying:
+		goal = Vector3.INF
 	elif is_instance_valid(owner_frame):
 		var od := global_position.distance_to(owner_frame.global_position)
 		if od > 3.0:

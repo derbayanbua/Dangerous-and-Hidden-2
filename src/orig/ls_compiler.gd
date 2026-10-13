@@ -225,6 +225,9 @@ func _statement() -> void:
 			return
 		_err("unerwartetes Zeichen '%s'" % t[1])
 		return
+	if t[0] == "num":
+		_next()       # einzelne Zahl als Anweisung (Tippfehler im Original, z. B. AFRICA3 af3a_31.scr: „7// …“) – ohne Wirkung
+		return
 	if t[0] != "id":
 		_err("Anweisung erwartet")
 		return

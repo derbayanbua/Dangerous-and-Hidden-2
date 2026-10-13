@@ -156,21 +156,45 @@ def read_frame(r: Reader, idx: int) -> dict:
     return fr
 
 
-def read_skin(r: Reader) -> dict:
-    """Skin-Daten eines LOD (HD2, vorläufig rekonstruiert):
-    u8 Gelenke; Bounding-Box (2×vec4); u8[Gelenke] Zuordnung;
-    je Gelenk 4×4-Matrix + 2×vec4; u32 n; n×? Gewichte."""
+def read_skin(r: Reader, nlods: int) -> dict:
+    """Skin-Block eines SingleMesh/SingleMorph (LS3DF.dll FUN_10053900):
+    u8 Gelenke; nur wenn > 0: Bounding-Box (2×vec4); u8[Gelenke] Zuordnung;
+    je Gelenk 96 B (4×4-Matrix + 2×vec4); danach JE LOD: u32 n, n×u16."""
     nj = r.u8()
-    s = {"min": r.vec(4), "max": r.vec(4)}
+    s = {"joint_count": nj, "joints": [], "lod_weights": []}
+    if nj == 0:
+        return s
+    s["min"] = r.vec(4)
+    s["max"] = r.vec(4)
     s["map"] = list(r.raw(nj))
-    s["joints"] = []
     for _ in range(nj):
         s["joints"].append({"matrix": r.vec(16), "bmin": r.vec(4), "bmax": r.vec(4)})
-    n = r.u32()
-    s["weight_count"] = n
-    if n:
-        s["weights"] = r.raw(n * 4)   # Annahme: float je gewichtetem Vertex
+    for _ in range(nlods):
+        n = r.u32()
+        s["lod_weights"].append(r.raw(n * 2))
     return s
+
+
+def read_morph(r: Reader) -> dict:
+    """Morph-Block (Morph/SingleMorph): u8 Ziele; wenn > 0: u8 Kanäle, u8 ?;
+    je Kanal u16 n, n×Ziele×(Pos vec3 + Normale vec3), u8 Indexflag, [n×u16];
+    danach min vec4, max vec4, Mittelpunkt vec3, Radius f32."""
+    m = {"targets": r.u8(), "channels": []}
+    if m["targets"] == 0:
+        return m
+    nch = r.u8()
+    m["unk"] = r.u8()
+    for _ in range(nch):
+        n = r.u16()
+        ch = {"count": n, "data": r.raw(n * m["targets"] * 24)}
+        if r.u8():
+            ch["indices"] = struct.unpack_from("<%dH" % n, r.d, r.p); r.p += n * 2
+        m["channels"].append(ch)
+    m["min"] = r.vec(4)
+    m["max"] = r.vec(4)
+    m["center"] = r.vec(3)
+    m["radius"] = r.f32()
+    return m
 
 
 def read_sector(r: Reader) -> dict:

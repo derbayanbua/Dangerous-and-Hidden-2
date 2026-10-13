@@ -12,6 +12,7 @@ func _init() -> void:
 	text_place_time = 4522
 	objective_text_base = 6020
 	optional_objectives = [4, 5, 6, 7]
+	light_factor = 0.5          # Nacht
 	enemy_uniform = Color(0.78, 0.8, 0.82)   # Wintertarnung
 
 

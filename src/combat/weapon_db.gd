@@ -19,8 +19,55 @@ static var _cache: Dictionary = {}
 static func get_weapon(id: StringName) -> WeaponData:
 	if _cache.is_empty():
 		_build()
+	if not _cache.has(id) and String(id).begins_with("o_"):
+		from_orig(int(String(id).substr(2)))     # aus der Originaltabelle erzeugte Waffe (z. B. Spielstand)
 	assert(_cache.has(id), "Unbekannte Waffe: %s" % id)
 	return _cache.get(id)
+
+
+## Originalgegenstand (items.dat-Nummer) -> Waffe. Bekannte Waffen nutzen die Einträge oben, alle übrigen
+## Handwaffen werden aus der Originaltabelle (orig_cache/items.json, item_shoot.tbl) erzeugt: Schaden/10,
+## Feuerintervall, Nachladezeit, Mündungsgeschwindigkeit, Magazin, Gewicht [O]; Streuung/Rückstoß [D].
+const ORIG_IDS := {0: &"p08", 2: &"colt", 4: &"kar98k", 6: &"enfield", 10: &"garand", 18: &"mp40", 20: &"thompson",
+	21: &"sten", 26: &"stg44", 29: &"bren", 61: &"m24", 62: &"no36", 60: &"no69", 63: &"no36"}
+const ORIG_PISTOLS := [0, 1, 2, 3, 5, 260, 261]
+## Granaten/Handwaffen, die ein Soldat tragen kann (Bordwaffen, Geschütze, Flak u. a. nicht)
+const ORIG_HANDHELD_MAX_KG := 15.0
+static var _orig_table: Dictionary = {}
+
+
+static func from_orig(item: int) -> WeaponData:
+	if _cache.is_empty():
+		_build()
+	if ORIG_IDS.has(item):
+		return _cache.get(ORIG_IDS[item])
+	var gid := StringName("o_%d" % item)
+	if _cache.has(gid):
+		return _cache[gid]
+	if _orig_table.is_empty():
+		var f := FileAccess.open(OrigLevel.cache_root() + "/items.json", FileAccess.READ)
+		var d = JSON.parse_string(f.get_as_text()) if f else null
+		if typeof(d) == TYPE_DICTIONARY:
+			for wp in d.get("weapons", []):
+				_orig_table[int(wp["id"])] = wp
+	var o: Dictionary = _orig_table.get(item, {})
+	if o.is_empty() or float(o.get("weight_kg", 0.0)) > ORIG_HANDHELD_MAX_KG or int(o.get("magazine", 0)) <= 0:
+		return null
+	var fi := float(o.get("fire_interval_ms", 200.0)) / 1000.0
+	var pistol := ORIG_PISTOLS.has(item)
+	var act := WeaponData.Action.AUTO if fi <= 0.11 else (WeaponData.Action.BOLT if fi >= 1.0 else WeaponData.Action.SEMI)
+	var heavy := float(o.get("weight_kg", 4.0)) > 8.0
+	return _make({id = gid, display_name = String(o.get("name", gid)), slot = WeaponData.Slot.SIDEARM if pistol else WeaponData.Slot.PRIMARY,
+		action = act, can_toggle_auto = act == WeaponData.Action.AUTO, magazine_size = int(o["magazine"]),
+		start_magazines = 4, rpm = 60.0 / maxf(fi, 0.05) if act != WeaponData.Action.AUTO else float(o.get("rate_rpm", 600)),
+		bolt_time = fi if act == WeaponData.Action.BOLT else 0.0, reload_time = float(o.get("reload_ms", 2400.0)) / 1000.0,
+		muzzle_velocity = float(o.get("muzzle_velocity", 400.0)), damage = float(o.get("damage", 300.0)) / 10.0,
+		falloff_start = 20.0 if pistol else (150.0 if act != WeaponData.Action.AUTO else 60.0),
+		spread_hip = 2.8 if pistol else (4.5 if heavy else 3.0), spread_aim = 0.7 if pistol else (0.08 if act == WeaponData.Action.BOLT else 0.5),
+		recoil_pitch = 2.0 if pistol else (1.3 if act == WeaponData.Action.AUTO else 3.2), recoil_yaw = 0.6,
+		spread_per_shot = 0.3, aim_fov = 60.0 if pistol else (30.0 if String(o.get("name", "")).contains("optic") else 45.0),
+		noise_radius = 15.0 if item in [7, 22, 260] else (60.0 if pistol else 130.0), weight = float(o.get("weight_kg", 4.0)),
+		model_length = 0.22 if pistol else 1.0})
 
 
 static func all_ids() -> Array:
@@ -87,6 +134,11 @@ static func _build() -> void:
 		magazine_size = 1, start_magazines = 2, rpm = 40.0, reload_time = 0.8,
 		damage = 220.0, fuse_time = 4.0, blast_radius = 8.0, throw_speed = 17.0,
 		noise_radius = 180.0, weight = 0.77, model_length = 0.1, color = Color(0.3, 0.33, 0.2)})
+	# No. 69 (Original „No.69 Gran GB U“, 0,37 kg): Aufschlaggranate, kleinerer Radius [D]
+	_make({id = &"no69", display_name = "Granate No. 69", slot = G, action = WeaponData.Action.THROWN,
+		magazine_size = 1, start_magazines = 2, rpm = 40.0, reload_time = 0.8,
+		damage = 160.0, fuse_time = 2.5, blast_radius = 6.0, throw_speed = 19.0,
+		noise_radius = 180.0, weight = 0.37, model_length = 0.1, color = Color(0.25, 0.25, 0.22)})
 	# --- Achsenmächte ----------------------------------------------------
 	# "98K": dmg 488, v0 747, reload 3.8, Repetierzeit 1.4
 	_make({id = &"kar98k", display_name = "Karabiner 98k", faction = "axis", slot = P,

@@ -44,6 +44,8 @@ func _physics_process(delta: float) -> void:
 
 
 func enemy_team() -> int:
+	if soldier.team == Soldier.TEAM_NEUTRAL:
+		return -1     # neutrale Figuren suchen keine Ziele
 	return Soldier.TEAM_AXIS if soldier.team == Soldier.TEAM_ALLIED else Soldier.TEAM_ALLIED
 
 
@@ -108,7 +110,7 @@ func _visibility(t: Soldier, dist: float, ang: float, half_fov: float) -> float:
 		var odd := 1.0 if (t.stance == Soldier.Stance.PRONE or t.move_mode == Soldier.MoveMode.RUN) else 0.35
 		periph *= odd
 	var light: float = _mission.light_at(t.global_position + Vector3.UP) if _mission else 1.0
-	return stance_k * move_k * dist_k * periph * 1.4 * light
+	return stance_k * move_k * dist_k * periph * 1.4 * light * Soldier.skill_k(t.skill_stealth, 1.3, 0.6)
 
 
 var _mission: Node

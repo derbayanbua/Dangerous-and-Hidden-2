@@ -105,6 +105,25 @@ func attach_script(owner: Node3D, file: String) -> LsVM:
 func _physics_process(delta: float) -> void:
 	for vm in vms:
 		vm.tick(delta)
+	for r in _rotations.duplicate():
+		if not is_instance_valid(r["node"]) or r["left"] <= 0.0:
+			_rotations.erase(r)
+			continue
+		var step: float = minf(absf(r["speed"]) * delta, r["left"])
+		r["left"] -= step
+		(r["node"] as Node3D).rotate_object_local(r["axis"], deg_to_rad(step * signf(r["speed"])))
+	for at in _air_targets.keys():
+		if not is_instance_valid(at):
+			_air_targets.erase(at)
+			continue
+		_air_targets[at] -= delta
+		if _air_targets[at] <= 0.0:
+			_air_targets[at] = randf_range(3.0, 7.0)
+			var hit := (at as Node3D).global_position + Vector3(randf_range(-12, 12), 0, randf_range(-12, 12))
+			_explosion(_ground(hit) + Vector3.UP * 0.5, 6.0, 180.0)
+	if _timer_left >= 0.0 and _timer_label:
+		_timer_left = maxf(_timer_left - delta, 0.0)
+		_timer_label.text = "%d:%02d" % [int(_timer_left) / 60, int(_timer_left) % 60]
 	_formation_t -= delta
 	if _formation_t <= 0.0:
 		_formation_t = 0.5
@@ -112,6 +131,12 @@ func _physics_process(delta: float) -> void:
 
 
 var formations := {}            ## Anführer -> {members, type, scale} (FORMATION_*)
+var _rotations: Array = []      ## FRM_Rotate*: {node, axis, left (Grad), speed (Grad/s)}
+var _indexed_particles := {}    ## FRM_CreateIndexedParticle: Index -> Partikelknoten
+var _particle_index := 0
+var _air_targets := {}          ## AirAttack_SetTarget: Frame -> Zeit bis zum nächsten Einschlag
+var _timer_label: Label
+var _timer_left := -1.0
 var _formation_t := 0.0
 
 
@@ -216,6 +241,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"FRM_FINDFRAME":
 			if args.size() >= 2 and args[0][0] == "var":
 				vm.vars[args[0][1]] = find_frame(_str(vm.value(args[1])))
+				if Game.cli.has("debug_state") and vm.vars[args[0][1]] == null:
+					print("DBGFIND ", vm.name, " sucht '", _str(vm.value(args[1])), "' arg=", args[1])
 			return null
 		"FRM_GETMYFRAME":
 			if args.size() >= 1 and args[0][0] == "var":
@@ -244,8 +271,9 @@ func call_api(vm: LsVM, fname: String, args: Array):
 					fr.set_physics_process(true)
 			return null
 		"FRM_TELEPORTNEARFRAME", "FRM_TELEPORTNEARFRAMEBACK":
-			var who := _frame_arg(vm, args[0])
-			var to := _frame_arg(vm, args[1])
+			# zwei Argumente (wer, wohin) oder eines (eigenen Akteur neben den Frame setzen)
+			var who := _frame_arg(vm, args[0]) if args.size() > 1 else vm.me as Node3D
+			var to := _frame_arg(vm, args[1] if args.size() > 1 else args[0])
 			if who and to:
 				who.global_position = to.global_position
 			return null
@@ -307,13 +335,19 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"_ACTOR_GETSTATE":
 			# Original: Menschen 1 = lebt, 0 = tot; andere Objekte: per SetActorState gesetzter Zustand
 			var af := _frame_arg(vm, args[0])
+			if Game.cli.has("debug_state"):
+				print("DBGSTATE ", vm.name, " arg=", args[0], " frame=", af.name if af else "null", " type=", af.get_class() if af else "")
 			if af is Soldier:
 				return 1 if (af as Soldier).alive else 0
 			return int(af.get_meta("actor_state", 1)) if af else 0
 		"SETACTORSTATE":
 			var sf3 := _frame_arg(vm, args[0])
 			if sf3 and args.size() > 1:
-				sf3.set_meta("actor_state", int(vm.value(args[1])))
+				var ctl = sf3.get_meta("orig_ctl") if sf3.has_meta("orig_ctl") else null
+				if ctl and is_instance_valid(ctl) and ctl.has_method("set_actor_state"):
+					ctl.set_actor_state(int(vm.value(args[1])))      # Tür, Schalter, Sprengplatz … (OrigInteractive)
+				else:
+					sf3.set_meta("actor_state", int(vm.value(args[1])))
 			return null
 		"_SEEENEMY":
 			var b := _brain(vm)
@@ -348,7 +382,7 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			if b3:
 				b3.suspended = LsVM._truthy(vm.value(args[0]))
 			return null
-		"HUMAN_MOVE":
+		"HUMAN_MOVE", "HUMAN_MOVETOFRAME":
 			var b4 := _brain(vm)
 			var tgt := _frame_arg(vm, args[0])
 			if b4 and tgt:
@@ -500,6 +534,152 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			if formations.has(fs):
 				formations[fs]["scale"] = clampf(float(vm.value(args[1])) / 1000.0, 1.0, 10.0)
 			return null
+		# --- Gegner zählen / Abfragen ---
+		"_GETNUMLIVEENEMIES", "_GETCOUNTOFCARNAGEENEMIES":
+			var n2 := 0
+			for e in mission.enemies:
+				if is_instance_valid(e) and e.alive:
+					n2 += 1
+			return n2
+		"_SPGETGAMEDIFFICULTY":
+			return Game.difficulty()
+		"FRM_GETNEARESTPLAYER":
+			var from_f := _frame_arg(vm, args[0])
+			var best_p: Soldier = null
+			for p in _players():
+				if best_p == null or p.global_position.distance_to(_pos(from_f)) < best_p.global_position.distance_to(_pos(from_f)):
+					best_p = p
+			if args.size() > 1 and args[1][0] == "var":
+				vm.vars[args[1][1]] = best_p
+			return null
+		"_ENEMYINRANGE":
+			# Gegner aus Sicht des Frames (Soldat: anderes Team; sonst: der Trupp des Spielers)
+			var ef2 := _frame_arg(vm, args[0]) if args.size() > 1 else vm.me as Node3D
+			var rr := float(vm.value(args[1] if args.size() > 1 else args[0]))
+			var my_team := (ef2 as Soldier).team if ef2 is Soldier else Soldier.TEAM_AXIS
+			for n3 in get_tree().get_nodes_in_group("soldiers"):
+				var so := n3 as Soldier
+				if so and so.alive and so.team != my_team and so.global_position.distance_to(_pos(ef2)) <= rr:
+					return 1
+			return 0
+		# --- Bewegte Objekte / Effekte ---
+		"FRM_ROTATEY", "FRM_ROTATEZ", "FRM_ROTATEX":
+			# (Frame, Gesamtwinkel in Grad, Grad pro Sekunde) – z. B. Propeller, Lüfter, Radar
+			var rf := _frame_arg(vm, args[0])
+			if rf and args.size() >= 3:
+				_rotations.append({"node": rf, "axis": {"FRM_ROTATEX": Vector3.RIGHT, "FRM_ROTATEY": Vector3.UP}.get(fname, Vector3.BACK),
+					"left": absf(float(vm.value(args[1]))), "speed": float(vm.value(args[2])) * signf(float(vm.value(args[1])))})
+			return null
+		"FRM_CREATEINDEXEDPARTICLE":
+			var pf2 := _frame_arg(vm, args[1]) if args.size() > 1 else null
+			if pf2:
+				var node := _particles(int(vm.value(args[0])), pf2.global_position)
+				_particle_index += 1
+				_indexed_particles[_particle_index] = node
+				if args.size() > 2 and args[2][0] == "var":
+					vm.vars[args[2][1]] = _particle_index
+			return null
+		"FRM_DESTROYINDEXEDPARTICLE":
+			var pi := int(vm.value(args[0]))
+			var pn = _indexed_particles.get(pi)
+			if is_instance_valid(pn):
+				pn.queue_free()
+			_indexed_particles.erase(pi)
+			return null
+		"ITEM_TELEPORT":
+			var itf := _frame_arg(vm, args[0])
+			var itt := _frame_arg(vm, args[1]) if args.size() > 1 else null
+			if itf and itt:
+				itf.global_position = itt.global_position
+				itf.visible = true
+			return null
+		"AIRATTACK_SETTARGET":
+			# Luftangriff auf ein Ziel (Original: Flugzeuge greifen an). Näherung: Einschläge in Zielnähe.
+			var at := _frame_arg(vm, args[0])
+			if at:
+				if args.size() < 2 or LsVM._truthy(vm.value(args[1])):
+					_air_targets[at] = 0.0
+				else:
+					_air_targets.erase(at)
+			return null
+		"SETINTERFACETIMER":
+			_set_interface_timer(float(vm.value(args[0])) / 1000.0)
+			return null
+		"HUMAN_SETSNIPER":
+			# Scharfschütze: bleibt in Stellung, größere Sichtweite, ruhiger Schuss
+			var sb2 := _brain(vm)
+			var ss := _soldier(vm)
+			if sb2 and ss and LsVM._truthy(vm.value(args[0])):
+				sb2.stationary = true
+				var sp2: Perception = ss.get_node_or_null("Perception")
+				if sp2:
+					sp2.sight_range = maxf(sp2.sight_range, 120.0)
+				sb2.accuracy_skill = minf(sb2.accuracy_skill + 0.25, 0.95)
+			elif sb2:
+				sb2.stationary = false
+			return null
+		"DOG_MOVE":
+			var dm := vm.me as Dog
+			var dt := _frame_arg(vm, args[0])
+			if dm and dt:
+				dm.move_target = dt.global_position
+				dm.lying = false
+			return null
+		"DOG_SETMODE_LIE", "DOG_SETMODE_STAND":
+			var dl := vm.me as Dog
+			if dl:
+				dl.lying = fname == "DOG_SETMODE_LIE"
+			return null
+		"CSC_SETCAMERAANIMATION", "FRM_SOUNDADJUSTDOPPLER":
+			return null    # Kameraanimationen (*.i3d) noch nicht dekodiert / Doppler-Feinabstimmung
+		"SETNPCTEAMSTATUS":
+			# NPC kämpft als Teil des Teams (KI statt Skriptsteuerung), z. B. befreite Verbündete
+			var nf := _frame_arg(vm, args[0])
+			var nb: EnemyBrain = nf.get_node_or_null("EnemyBrain") if nf else null
+			if nb and args.size() > 1:
+				var join := LsVM._truthy(vm.value(args[1]))
+				nb.script_control = not join
+				if nf is Soldier:
+					var ns := nf as Soldier
+					ns.remove_from_group("team_%d" % ns.team)
+					ns.team = Soldier.TEAM_ALLIED if join else Soldier.TEAM_NEUTRAL
+					ns.add_to_group("team_%d" % ns.team)
+			return null
+		"SETPLAYERINPUT":
+			if mission.controller:
+				mission.controller.input_enabled = LsVM._truthy(vm.value(args[0]))
+			return null
+		"FRM_GETACTIVECAMERA":
+			if args.size() > 0 and args[0][0] == "var":
+				vm.vars[args[0][1]] = _cam_frame if is_instance_valid(_cam_frame) else (mission.rig.camera if mission.rig else null)
+			return null
+		"HUMAN_CREATEITEMINSTORE":
+			# Gegenstand (items.sav-Nummer) ins Inventar des Akteurs; Verbandskasten (54) wirkt sofort
+			var hs := _soldier(vm)
+			if hs:
+				var item := int(vm.value(args[0]))
+				var cnt := int(vm.value(args[1])) if args.size() > 1 else 1
+				var inv: Array = hs.get_meta("orig_items", [])
+				for k in cnt:
+					inv.append(item)
+				hs.set_meta("orig_items", inv)
+				if item == 54:
+					hs.medkits += cnt
+			return null
+		"DOOR_LOCK":
+			var df := _frame_arg(vm, args[0])
+			if df:
+				var lock := LsVM._truthy(vm.value(args[1])) if args.size() > 1 else true
+				df.set_meta("locked", lock)
+				var dctl = df.get_meta("orig_ctl") if df.has_meta("orig_ctl") else null
+				if dctl and is_instance_valid(dctl) and dctl.has_method("set_locked"):
+					dctl.set_locked(lock)
+			return null
+		"_ITEMINRANGE":
+			# Gegenstand (Nummer) in Reichweite: Original-Weltgegenstände noch ohne Inventarsystem -> nein
+			return 0
+		"DECORATOR_SETON", "SETUPJUNKERS88", "HUMAN_SETIGNORECIRCUMVENTIONFLAG":
+			return null    # Zwischensequenz-Dekoration / Ju-88-Angriff (Flugmechanik) noch nicht umgesetzt
 		"SETWHENEVERTIME", "SETUPTACTICALMODE", "FRM_SETTARGET":
 			return null    # Prüfintervall / Taktikmodus / Zielmarke: ohne sichtbare Wirkung
 		"FRM_SETCAMERAFRAME":
@@ -660,7 +840,7 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				"FRM_SWITCHFACETEXTURE", "FRM_SETLIGHTMAP", "FRM_SETGROUPLIGHTMAP", "CHECKPOINTJOIN", "CHECKPOINTSEPARATE":
 			return null    # Animation/Gesicht/Beleuchtung: vorerst ohne Wirkung (Original-Animationen: offen)
 		"HUMAN_ACTIVITY_SMOKE", "HUMAN_ACTIVITY_POINT", "HUMAN_ACTIVITY_SIT", "HUMAN_ACTIVITY_DRINKBOTTLE", \
-				"HUMAN_ACTIVITY_COLD", "HUMAN_ACTIVITY_HAT", "HUMAN_ACTIVITY_CHECKWEAPON", "HUMAN_ACTIVITY_BINOCULARS", \
+				"HUMAN_ACTIVITY_COLD", "HUMAN_ACTIVITY_HAT", "HUMAN_ACTIVITY_TURK", "HUMAN_ACTIVITY_HOT", "HUMAN_ACTIVITY_CHECKWEAPON", "HUMAN_ACTIVITY_BINOCULARS", \
 				"HUMAN_ACTIVITY_BINOCULARSEND":
 			return {"wait": 2.0}  # Tätigkeitsanimation (Platzhalter: kurze Pause)
 	if not unimplemented.has(fname):
@@ -755,6 +935,24 @@ func _board_wait(s, v) -> bool:
 	return b == null or b.script_move_done()
 
 
+## SetInterfaceTimer(ms): Countdown-Anzeige oben in der Mitte; 0 blendet sie aus
+func _set_interface_timer(seconds: float) -> void:
+	if _timer_label == null:
+		var layer := CanvasLayer.new()
+		layer.layer = 6
+		add_child(layer)
+		_timer_label = Label.new()
+		_timer_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		_timer_label.position = Vector2(-60, 70)
+		_timer_label.size = Vector2(120, 40)
+		_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_timer_label.add_theme_font_size_override("font_size", 28)
+		_timer_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
+		layer.add_child(_timer_label)
+	_timer_left = seconds if seconds > 0.0 else -1.0
+	_timer_label.visible = seconds > 0.0
+
+
 func _ground(p: Vector3) -> Vector3:
 	var space := get_viewport().world_3d.direct_space_state
 	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(p + Vector3.UP * 1.5, p + Vector3.DOWN * 20.0, 1))
@@ -763,7 +961,7 @@ func _ground(p: Vector3) -> Vector3:
 
 ## Original-Partikelsysteme (Index in die Partikeltabelle, Definitionen noch nicht dekodiert):
 ## Platzhalter Rauchsäule/Feuer, je nach Zweck des Original-Aufrufs.
-func _particles(id: int, pos: Vector3) -> void:
+func _particles(id: int, pos: Vector3) -> Node3D:
 	var fire := id in [43, 53]
 	var gp := GPUParticles3D.new()
 	gp.amount = 80 if fire else 40
@@ -796,12 +994,14 @@ func _particles(id: int, pos: Vector3) -> void:
 		l.light_energy = 2.0
 		gp.add_child(l)
 	get_tree().create_timer(60.0).timeout.connect(gp.queue_free)
+	return gp
 
 
 ## MakeExplosion: Explosion mit Splitterschaden (Soldaten mit Sichtlinie, Hunde).
 func _explosion(pos: Vector3, radius: float, damage: float) -> void:
 	Effects.explosion(pos, radius)
 	Events.emit_noise(pos, 400.0, null, Soldier.TEAM_AXIS, &"explosion")
+	OrigInteractive.damage_objects(get_tree(), pos, radius, damage)
 	var space := get_viewport().world_3d.direct_space_state
 	for n in get_tree().get_nodes_in_group("soldiers"):
 		var s := n as Soldier

@@ -19,11 +19,17 @@ var text_title := 0
 var text_place_time := 0
 var objective_count := 7
 var objective_text_base := 6000     ## Ziel-Text = Basis + Index (1A 6000, 1B 6010, 1C 6020)
+## Pflicht-/Zusatzziele automatisch: Pflicht = im Briefing unter „Einsatz-Aufgaben“ genannt (Texte
+## briefing_task_ids); „Alle Mitglieder des Teams müssen überleben“ u. Ä. sind Zusatzziele.
+var auto_optional := false
+var briefing_task_ids: Array = []
 var optional_objectives: Array[int] = []
 
 var orig: OrigLevel
 var runtime: LsRuntime
-var actor_params := {}          ## actors.bin-Parameter + Ausrüstung (tools/fmt_actors_items.py)
+var actor_params := {}
+var interactive: OrigInteractive
+var _player_names: Array = []    ## Original-Namen der Spielerfiguren (Akteurtyp 10)          ## actors.bin-Parameter + Ausrüstung (tools/fmt_actors_items.py)
 
 ## Originalwaffe (items.sav-Name) -> eigene Waffen-ID
 const WEAPON_MAP := [["98", "kar98k"], ["MP 40", "mp40"], ["MP40", "mp40"], ["P08", "p08"],
@@ -34,11 +40,12 @@ const HP_SCALE := 0.5
 
 
 func _build_world() -> void:
-	light_factor = 0.5
 	orig = OrigLevel.new(orig_mission, static_root)
 	if not orig.build():
 		Events.say("Originaldaten fehlen: tools/convert_mission.py %s ausführen." % orig_mission, 10.0)
 		return
+	orig.apply_grass_setting()
+	Settings.changed.connect(orig.apply_grass_setting)
 	print("ORIG: %d Meshes, %d Instanzen, %d Kollisionskörper, %d Dummies, %d Akteure, fehlende Modelle %s" % [
 		orig.stats.meshes, orig.stats.instances, orig.stats.colliders, orig.dummies.size(), orig.actors.size(), orig.stats.missing_models])
 
@@ -64,34 +71,40 @@ func _spawn_actors() -> void:
 	var start := Vector3.ZERO
 	var yaw := 0.0
 	var offsets := []
-	var count := 0
-	for i in 4:
-		if not orig.actor("commando%d" % (i + 1)).is_empty():
-			count = i + 1
-	for i in maxi(count, 1):
-		var a := orig.actor("commando%d" % (i + 1))
-		if a.is_empty():
-			offsets.append(Vector3(i * 1.5, 0, 0))
-			continue
-		var t := OrigLevel.xform(a)
+	# Spielerfiguren = Akteurtyp 10 (Namen variieren: commando1, Commando_1, …), nach Nummer sortiert
+	var players: Array = []
+	for a in orig.actors:
+		if int(a.get("actor_type", -1)) == 10 or String(a.get("name", "")).to_lower().begins_with("commando"):
+			players.append(a)
+	players.sort_custom(func(x, y): return _trailing_number(x.get("name", "")) < _trailing_number(y.get("name", "")))
+	players = players.slice(0, 4)
+	var count := players.size()
+	for i in players.size():
+		var t := OrigLevel.xform(players[i])
 		if i == 0:
 			start = t.origin
 			# LS3D-Figuren blicken entlang +Z; durch die Z-Spiegelung zeigt das in Godot nach -Z
 			yaw = t.basis.get_euler().y
 		offsets.append(Basis(Vector3.UP, -yaw) * (t.origin - start))
+	if count == 0:
+		push_warning("Keine Spielerfigur (Akteurtyp 10) in %s" % orig_mission)
 	spawn_roster(start + Vector3.UP * 0.5, yaw, offsets, maxi(count, 1))
+	_player_names.clear()
 	for i in squad.members.size():
 		runtime.register_actor("commando%d" % (i + 1), squad.members[i])
+		if i < players.size():
+			runtime.register_actor(String(players[i].get("name", "")), squad.members[i])
+			_player_names.append(String(players[i].get("name", "")).to_lower())
 		squad.members[i].model.attach_orig(orig.character_instance(COMMANDO_MODEL))
 	# 2. Übrige Akteure aus actors.bin
 	for a in orig.actors:
 		var nm: String = a.get("name", "")
 		var model: String = String(a.get("model", ""))
-		if nm.to_lower().begins_with("commando"):
+		if nm.to_lower().begins_with("commando") or _player_names.has(nm.to_lower()):
 			continue
 		var t2 := OrigLevel.xform(a)
 		var typ := int(a.get("actor_type", -1))
-		if typ == 3 and (model.begins_with("ge") or model.begins_with("ci")):
+		if typ == 3 and model != "":
 			_spawn_orig_human(nm, model, t2)
 		elif typ == 30:
 			_spawn_orig_dog(nm, model, t2)
@@ -107,6 +120,12 @@ func _spawn_actors() -> void:
 			dynamic_root.add_child(inst)
 			inst.global_transform = t2
 			runtime.register_actor(nm, inst)
+	# Interaktive Originalakteure (Türen, Leitern, Schalter, Sprengplätze …; interactive.json)
+	interactive = OrigInteractive.new()
+	interactive.name = "OrigInteractive"
+	add_child(interactive)
+	interactive.setup(self, runtime, orig)
+	print("ORIG: interaktiv ", interactive.stats)
 	var n := runtime.start_scripts()
 	print("ORIG: %d Skripte gestartet" % n)
 
@@ -116,8 +135,12 @@ func _spawn_actors() -> void:
 func _spawn_orig_human(nm: String, model: String, t: Transform3D) -> void:
 	var yaw := t.basis.get_euler().y
 	var s: Soldier
-	if model.begins_with("ci"):
-		s = spawn_soldier(t.origin + Vector3.UP * 0.3, yaw, Soldier.TEAM_ALLIED, nm, ["", "", ""],
+	# Seite laut actors.bin (docs/re_notes_actors_items.md): 2 = Gegner, 3 = neutral/Zivilist, 4 = verbündet.
+	# Ohne Parameter: Modellpräfix (ge/it/ja = Achsenmächte bzw. Gegner, sonst verbündet/neutral).
+	var side := int(actor_params.get(nm, {}).get("params", {}).get("side", -1))
+	var enemy := side == 2 if side >= 0 else (model.begins_with("ge") or model.begins_with("it") or model.begins_with("ja"))
+	if not enemy:
+		s = spawn_soldier(t.origin + Vector3.UP * 0.3, yaw, Soldier.TEAM_NEUTRAL, nm, ["", "", ""],
 			Color(0.32, 0.27, 0.22), "cap", nm)
 		var b := EnemyBrain.new()
 		b.name = "EnemyBrain"
@@ -234,13 +257,38 @@ func _spawn_orig_car(nm: String, model: String, t: Transform3D) -> void:
 	runtime.register_actor(nm, v)
 
 
+## Blutbad-Ziel „Töten Sie die Feinde“ (aktiviert nur im Spieltyp Blutbad über *_obj_krvak.scr)
+const CARNAGE_OBJECTIVE_TEXT := 6063
+
+
 func _setup_objectives() -> void:
 	var t := func(id: int) -> String: return runtime.text(id) if runtime else "#%d" % id
+	# Belegt: Missionsdatenbank GAMEDATA\Gamedata00.gdt (tools/fmt_gamedata.py -> orig_cache/missions_db.json):
+	# Ziele in Index-Reihenfolge von SetObjectiveStatus, je Text-ID und Zusatzziel-Flag.
+	var db = LsRuntime._read_json(OrigLevel.cache_root() + "/missions_db.json")
+	var entry: Dictionary = {}
+	if typeof(db) == TYPE_DICTIONARY:
+		entry = db.get("missions", {}).get(orig_mission.to_upper(), {})
+	if not entry.is_empty():
+		var objs: Array = entry.get("objectives", [])
+		for i in objs.size():
+			var tid := int(objs[i].get("text_id", 0))
+			if tid == CARNAGE_OBJECTIVE_TEXT:
+				continue     # Spieltyp Kampagne: Blutbad-Ziel entfällt
+			var o := add_objective(StringName("o%d" % (i + 1)), t.call(tid), bool(objs[i].get("optional", false)))
+			o.state = Objective.State.INACTIVE
+			orig_objectives[i + 1] = o.id
+		if text_title > 0:
+			Events.say(t.call(text_title) + " – " + t.call(text_place_time), 6.0)
+		return
 	for i in range(1, objective_count + 1):
 		var txt: String = t.call(objective_text_base + i)
 		if txt == "" or txt.begins_with("#"):
 			continue
-		var o := add_objective(StringName("o%d" % i), txt, optional_objectives.has(i))
+		var optional := optional_objectives.has(i)
+		if auto_optional:
+			optional = not _in_briefing(txt, t)
+		var o := add_objective(StringName("o%d" % i), txt, optional)
 		o.state = Objective.State.INACTIVE
 		orig_objectives[i] = o.id
 	if text_title > 0:
@@ -251,6 +299,80 @@ func _exit_tree() -> void:
 	super._exit_tree()
 	if orig:
 		orig.release()
+
+
+static func _trailing_number(s: String) -> int:
+	var digits := ""
+	for i in range(s.length() - 1, -1, -1):
+		if s[i] >= "0" and s[i] <= "9":
+			digits = s[i] + digits
+		elif digits != "":
+			break
+	return int(digits) if digits != "" else 99
+
+
+static func _norm(s: String) -> String:
+	var out := ""
+	for c in s.to_lower():
+		if c.is_valid_identifier() or c in "äöüß0123456789":
+			out += c
+	return out
+
+
+func _in_briefing(objective: String, t: Callable) -> bool:
+	var o := _norm(objective)
+	if o.contains("allemitgliederdesteams"):
+		return false
+	var any_task := false
+	for tid in briefing_task_ids:
+		var task := _norm(String(t.call(tid)))
+		if task.length() < 8 or task.begins_with("#"):
+			continue
+		any_task = true
+		var n := mini(22, mini(task.length(), o.length()))
+		if o.substr(0, n) == task.substr(0, n) or o.contains(task.substr(0, n)) or task.contains(o.substr(0, n)):
+			return true
+	return not any_task     # ohne Aufgabenliste: alles Pflicht
+
+
+## Umgebung aus den Original-Lichtern (scene2 0x4040 via extra.json): gerichtetes Licht = Sonne/Mond,
+## Ambient = Umgebungslicht, Nebel-Licht = Nebelfarbe; Hintergrundfarbe = Himmel. Teilmissionen mit
+## eigener Abstimmung (a1–a3) überschreiben diese Funktion.
+func _configure_environment(e: Environment, sun_light: DirectionalLight3D) -> void:
+	var extra = LsRuntime._read_json(OrigLevel.cache_path(orig_mission) + "/extra.json")
+	if typeof(extra) != TYPE_DICTIONARY:
+		return
+	var bg: Array = extra.get("scene", {}).get("background_color", [0.4, 0.45, 0.55])
+	var bgc := Color(bg[0], bg[1], bg[2])
+	var sm := e.sky.sky_material as ProceduralSkyMaterial
+	sm.sky_top_color = bgc.darkened(0.25)
+	sm.sky_horizon_color = bgc.lightened(0.15)
+	sm.ground_horizon_color = bgc.darkened(0.1)
+	sm.ground_bottom_color = bgc.darkened(0.6)
+	e.fog_light_color = bgc
+	var view: float = float(extra.get("scene", {}).get("view_distance", 300.0))
+	e.fog_density = clampf(1.5 / maxf(view, 50.0), 0.0015, 0.02)
+	var dir_set := false
+	for l in extra.get("lights", []):
+		var col := Color(l["color"][0], l["color"][1], l["color"][2])
+		match String(l.get("type", "")):
+			"directional":
+				if dir_set or l.get("lightmap_only", false):
+					continue
+				dir_set = true
+				sun_light.light_color = col
+				sun_light.light_energy = clampf(float(l.get("power", 1.0)), 0.15, 2.0)
+				var r: Array = l["world_rot"]
+				sun_light.quaternion = Quaternion(r[0], r[1], r[2], r[3]).normalized()
+			"ambient":
+				e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+				e.ambient_light_color = col
+				e.ambient_light_energy = clampf(float(l.get("power", 1.0)), 0.2, 1.5)
+			"fog":
+				e.fog_light_color = col
+	var dark := sun_light.light_energy < 0.6 and bgc.get_luminance() < 0.25
+	light_factor = 0.5 if dark else 1.0
+	e.tonemap_exposure = 1.35 if dark else 1.0
 
 
 ## Missionsende: SaveGameValue-Werte für den nächsten Teil sichern.
