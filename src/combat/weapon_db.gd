@@ -36,7 +36,7 @@ const ORIG_HANDHELD_MAX_KG := 15.0
 static var _orig_table: Dictionary = {}
 
 
-static func from_orig(item: int) -> WeaponData:
+static func from_orig(item: int, mounted := false) -> WeaponData:
 	if _cache.is_empty():
 		_build()
 	if ORIG_IDS.has(item):
@@ -51,7 +51,7 @@ static func from_orig(item: int) -> WeaponData:
 			for wp in d.get("weapons", []):
 				_orig_table[int(wp["id"])] = wp
 	var o: Dictionary = _orig_table.get(item, {})
-	if o.is_empty() or float(o.get("weight_kg", 0.0)) > ORIG_HANDHELD_MAX_KG or int(o.get("magazine", 0)) <= 0:
+	if o.is_empty() or (float(o.get("weight_kg", 0.0)) > ORIG_HANDHELD_MAX_KG and not mounted) or int(o.get("magazine", 0)) <= 0:
 		return null
 	var fi := float(o.get("fire_interval_ms", 200.0)) / 1000.0
 	var pistol := ORIG_PISTOLS.has(item)
@@ -139,6 +139,12 @@ static func _build() -> void:
 		magazine_size = 1, start_magazines = 2, rpm = 40.0, reload_time = 0.8,
 		damage = 160.0, fuse_time = 2.5, blast_radius = 6.0, throw_speed = 19.0,
 		noise_radius = 180.0, weight = 0.37, model_length = 0.1, color = Color(0.25, 0.25, 0.22)})
+	# 2-cm-Flak 38 (Stellungen „la_flak“/„la_flake“): nicht in item_shoot.tbl gelesen → Designwerte [D]
+	_make({id = &"flak38", display_name = "2-cm-Flak 38", faction = "axis", slot = P, action = WeaponData.Action.AUTO,
+		caliber = "20 mm", magazine_size = 20, start_magazines = 6, rpm = 450.0, reload_time = 3.0,
+		muzzle_velocity = 900.0, damage = 120.0, falloff_start = 400.0, spread_hip = 1.2, spread_aim = 0.4,
+		recoil_pitch = 0.6, recoil_yaw = 0.3, spread_per_shot = 0.1, aim_fov = 40.0, noise_radius = 300.0,
+		weight = 420.0, model_length = 2.0})
 	# --- Achsenmächte ----------------------------------------------------
 	# "98K": dmg 488, v0 747, reload 3.8, Repetierzeit 1.4
 	_make({id = &"kar98k", display_name = "Karabiner 98k", faction = "axis", slot = P,

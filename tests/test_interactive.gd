@@ -76,6 +76,24 @@ func _run() -> void:
 		crate.interact(s)
 		check(w.reserve > 0, "Munitionskiste füllt auf", str(w.reserve))
 
+	# --- Waffenstellung (MG 42, Munition aus dem Stellungsinventar) ---
+	var emp: OrigInteractive.OrigEmplacement = it.controls.get("W_MG42CROUCH_")
+	check(emp != null and emp.data != null and emp.data.display_name.contains("MG 42"), "MG-42-Stellung erkannt",
+		emp.data.display_name if emp else "-")
+	if emp:
+		var own := s.weapons.duplicate()
+		emp.interact(s)
+		check(s.mounted == emp and s.current_weapon() and s.current_weapon().data == emp.data
+			and s.current_weapon().total_ammo() == emp.data.magazine_size * 6, "Stellung besetzt: MG 42 mit 6 Gurten",
+			str(s.current_weapon().total_ammo()) if s.current_weapon() else "-")
+		var p0 := s.global_position
+		s.move_input = Vector3.FORWARD
+		await seconds(0.5)
+		check(s.global_position.distance_to(p0) < 0.05, "Schütze bleibt an der Stellung")
+		s.move_input = Vector3.ZERO
+		emp.interact(s)
+		check(s.mounted == null and s.weapons == own, "Stellung verlassen: eigene Waffen zurück")
+
 	# --- Schalter ---
 	var sw: OrigInteractive.OrigSwitch = null
 	for k in it.controls:
