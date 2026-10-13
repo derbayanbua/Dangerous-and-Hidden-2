@@ -36,6 +36,11 @@ var lamps: Array = []
 
 
 ## Helligkeitsfaktor an einer Position (für die Sicht-Erkennung).
+## Wasserspiegel an einer Position (NAN = kein Wasser); Originalmissionen: OrigLevel.water
+func water_level_at(_pos: Vector3) -> float:
+	return NAN
+
+
 func light_at(pos: Vector3) -> float:
 	var l := light_factor
 	for lp in lamps:

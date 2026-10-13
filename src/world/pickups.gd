@@ -110,6 +110,11 @@ class Loot extends Interactable:
 		if _uniform_available(s):
 			uniform_taken = true
 			s.put_on_uniform(corpse.uniform_color, corpse.helmet_style)
+			# Original: die Uniform ist ein Gegenstand (z. B. ALPS1 _IsInInventory(129) „Uniform des Fahrers“)
+			if corpse.has_meta("orig_uniform"):
+				var inv: Array = s.get_meta("orig_items", [])
+				inv.append(int(corpse.get_meta("orig_uniform")))
+				s.set_meta("orig_items", inv)
 			Events.say("%s trägt jetzt eine feindliche Uniform. Nicht schießen, Abstand halten!" % s.soldier_name, 4.0)
 			prompt = "Durchsuchen"
 			super.interact(s)
@@ -135,6 +140,11 @@ class Loot extends Interactable:
 			total += my_g.add_ammo(g.total_ammo())
 			g.in_mag = 0
 			g.reserve = 0
+		# Originalgegenstände aus Tasche/Rucksack (Dokumente, Schlüssel, Sprengstoff …; items.dat Slots 1/5)
+		var taken: Array[String] = []
+		for oid in corpse.get_meta("orig_loot", []):
+			taken.append(OrigInteractive.give_item(s, int(oid)))
+		corpse.set_meta("orig_loot", [])
 		var kits := corpse.medkits
 		if kits > 0:
 			s.medkits += kits
@@ -144,5 +154,6 @@ class Loot extends Interactable:
 			parts.append("%d Schuss" % total)
 		if kits > 0:
 			parts.append("%d Verbandskasten" % kits)
+		parts.append_array(taken)
 		Events.say("Durchsucht: %s" % (", ".join(parts) if not parts.is_empty() else "nichts Brauchbares"), 2.5)
 		super.interact(s)

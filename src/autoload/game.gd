@@ -589,7 +589,16 @@ func ensure_essentials(id: String) -> void:
 	var team := sas_team()
 	if team.is_empty():
 		return
-	for e in SAS.essentials(SAS.mission_info(orig_folder(id))):
+	var info := SAS.mission_info(orig_folder(id))
+	if bool(info.get("solo_mission", false)):
+		# nur team[0] wird eingesetzt (ARCTIC2): Gegenstände von den anderen zu ihm umlagern
+		for e in SAS.essentials(info):
+			for idx in team.slice(1):
+				var n := SAS.remove_item(sas_inventory(idx), e[0], e[1])
+				if n > 0:
+					SAS.add_item(sas_inventory(team[0]), e[0], n)
+		team = team.slice(0, 1)
+	for e in SAS.essentials(info):
 		var have := 0
 		for idx in team:
 			have += SAS.count_of(sas_inventory(idx), e[0])
@@ -636,6 +645,13 @@ func apply_sas(s: Soldier, pid: String) -> void:
 	s.set_meta("orig_items", lo["items"])
 	s.set_meta("sas", idx)
 	s.set_meta("lockpick", float(stats.get("lockpick", 50)))
+	# Feinduniform im Inventar (z. B. ALPS2 „Uniform GE03“): von Beginn an getarnt (Original:
+	# MISSION_SetUniformDisguise schaltet die Tarnung bei Enttarnung ab)
+	var uni := int(sas_inventory(idx).get("uniform", -1))
+	var un := SAS.item_name(uni).to_lower() if uni >= 0 else ""
+	if un.begins_with("uniform ge") or un.begins_with("npc_ge") or un.begins_with("uniform it"):
+		s.set_meta("start_disguise", true)
+		s.put_on_uniform(Color(0.36, 0.38, 0.33), "cap")
 	for w in s.weapons:
 		if w == null:
 			continue

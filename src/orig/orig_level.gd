@@ -125,7 +125,11 @@ func _add_collision(n: Node) -> void:
 		var foliage := mi.mesh != null and _is_foliage(mi)
 		if foliage and mi.get_aabb().size.y < 1.5:
 			grass_nodes.append(mi)
-		if mi.mesh and not foliage:
+		if mi.mesh and not foliage and _is_water(mi):
+			# Wasserfläche (QuadPatch/„more“, Material VODA*/MORE*): keine Kollision, als Wasserbereich merken
+			var box: AABB = mi.global_transform * mi.get_aabb() if mi.is_inside_tree() else mi.get_aabb()
+			water.append(box)
+		elif mi.mesh and not foliage:
 			var body := StaticBody3D.new()
 			body.collision_layer = 1
 			var cs := CollisionShape3D.new()
@@ -135,6 +139,36 @@ func _add_collision(n: Node) -> void:
 			stats.colliders += 1
 	for c in n.get_children():
 		_add_collision(c)
+
+
+## Wasserflächen (Welt-AABB, Oberkante = Wasserspiegel): Schwimmen/Tauchen (Soldier, Mission.water_level_at)
+var water: Array[AABB] = []
+
+
+static func _is_water(mi: MeshInstance3D) -> bool:
+	var box := mi.get_aabb()
+	if box.size.y > 0.8 or box.size.x * box.size.z < 16.0:
+		return false       # Wasser ist eine große, flache Fläche
+	var nm := String(mi.name).to_lower() + "|" + String(mi.get_parent().name).to_lower()
+	if nm.contains("quadpatch") or nm.begins_with("more0") or nm.contains("|more0"):
+		return true
+	for i in mi.mesh.get_surface_count():
+		var m := mi.get_active_material(i)
+		var rn := (m.resource_name if m else "").to_lower()
+		if rn.begins_with("voda") or rn.begins_with("more"):
+			return true
+	return false
+
+
+## Wasserspiegel an einer Position (NAN = kein Wasser)
+func water_level_at(p: Vector3) -> float:
+	var best := NAN
+	for b in water:
+		if p.x >= b.position.x and p.x <= b.end.x and p.z >= b.position.z and p.z <= b.end.z:
+			var top := b.end.y
+			if p.y < top + 0.5 and (is_nan(best) or top > best):
+				best = top
+	return best
 
 
 ## Original-Option „GRAS“: niedrige Vegetation (Alpha-Material, < 1,5 m hoch) ein-/ausblenden

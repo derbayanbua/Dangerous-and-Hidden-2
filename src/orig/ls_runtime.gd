@@ -471,6 +471,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			var victim := _frame_arg(vm, args[0]) as Soldier
 			if b11 and victim:
 				b11.script_attack(victim)
+			elif victim and victim.alive and fname != "HUMAN_ATTACK" and (not (vm.me is Soldier) or victim == vm.me):
+				victim.die(null)     # aus einem Objekt-/Dummy-Skript (z. B. AFRICA1 Flugzeug): Akteur stirbt
 			return null
 		# --- Zwischensequenzen ---
 		"CSC_RUNCUTSCENE":
@@ -503,6 +505,34 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				if (p as Soldier).get_meta("orig_items", []).has(int(vm.value(args[0]))):
 					return 1
 			return 0
+		"_ITEMINRANGE":
+			# (Gegenstand, Umkreis m) um das Skriptobjekt: frei liegend oder von einem Soldaten getragen
+			var oi = mission.get("interactive")
+			if oi == null or args.size() < 2:
+				return 0
+			return 1 if oi.item_in_range(int(vm.value(args[0])), _pos(vm.me), float(vm.value(args[1]))) else 0
+		"HUMAN_REMOVEITEMSFROMSTORE":
+			# (Mensch, Gegenstand): alle Exemplare aus dem Originalinventar entfernen (TUTORIAL-Rückgabe,
+			# BURMA2-Gegner); Granaten/Waffe dieses Typs in der Hand gehen mit
+			var rs := _frame_arg(vm, args[0]) as Soldier
+			if rs and args.size() > 1:
+				var rid := int(vm.value(args[1]))
+				var rinv: Array = rs.get_meta("orig_items", [])
+				rs.set_meta("orig_items", rinv.filter(func(x): return int(x) != rid))
+				var rwd := WeaponDB.from_orig(rid)
+				for i in rs.weapons.size():
+					if rwd and rs.weapons[i] and rs.weapons[i].data == rwd:
+						rs.weapons[i] = null
+				if rid in SAS.MEDKITS:
+					rs.medkits = 0
+			return null
+		"MISSION_SETUNIFORMDISGUISE":
+			# Original: Tarnung durch Feinduniform an/aus (ALPS2: 0 nach Enttarnung)
+			var on_d := LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true
+			for p in mission.squad.members:
+				if p.has_meta("start_disguise") or not on_d:
+					p.disguised = on_d
+			return null
 		"_ISLANGUAGEVERSION":
 			return 1 if _str(vm.value(args[0])).to_lower() == "german" else 0   # deutsche Originalfassung
 		# --- Formationen (Gegnertrupps folgen ihrem Anführer) ---
@@ -556,10 +586,13 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			# Gegner aus Sicht des Frames (Soldat: anderes Team; sonst: der Trupp des Spielers)
 			var ef2 := _frame_arg(vm, args[0]) if args.size() > 1 else vm.me as Node3D
 			var rr := float(vm.value(args[1] if args.size() > 1 else args[0]))
-			var my_team := (ef2 as Soldier).team if ef2 is Soldier else Soldier.TEAM_AXIS
+			# Von Dummies/Objekten aus: Gegner = Achsensoldaten (AFRICA2 „kein Gegner im Minenfeld“,
+			# CZECH5 dummy_PD „Gegner entkommen“); von Soldaten aus: die jeweils andere Seite (ohne Neutrale)
+			var my_team := (ef2 as Soldier).team if ef2 is Soldier else Soldier.TEAM_ALLIED
 			for n3 in get_tree().get_nodes_in_group("soldiers"):
 				var so := n3 as Soldier
-				if so and so.alive and so.team != my_team and so.global_position.distance_to(_pos(ef2)) <= rr:
+				if so and so.alive and so.team != my_team and so.team != Soldier.TEAM_NEUTRAL \
+						and so.global_position.distance_to(_pos(ef2)) <= rr:
 					return 1
 			return 0
 		# --- Bewegte Objekte / Effekte ---
@@ -644,6 +677,23 @@ func call_api(vm: LsVM, fname: String, args: Array):
 					ns.remove_from_group("team_%d" % ns.team)
 					ns.team = Soldier.TEAM_ALLIED if join else Soldier.TEAM_NEUTRAL
 					ns.add_to_group("team_%d" % ns.team)
+					# Original: NPC schließt sich dem Team an und folgt (CZECH3 Freiberg zur Villa) –
+					# Begleit-KI wie bei befreiten Gefangenen; 0 = wieder Skriptsteuerung
+					var esc: EscortBrain = ns.get_node_or_null("EscortBrain")
+					if join and esc == null:
+						nb.enabled = false
+						nb.set_physics_process(false)
+						esc = EscortBrain.new()
+						esc.name = "EscortBrain"
+						esc.squad = mission.squad
+						ns.add_child(esc)
+						esc.setup(ns)
+						esc.released = true          # ohne eigenen Dialog (Originalskript spricht selbst)
+						ns.add_to_group("team_%d" % ns.team)
+					elif not join and esc:
+						esc.queue_free()
+						nb.enabled = true
+						nb.set_physics_process(true)
 			return null
 		"SETPLAYERINPUT":
 			if mission.controller:
@@ -675,9 +725,6 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				if dctl and is_instance_valid(dctl) and dctl.has_method("set_locked"):
 					dctl.set_locked(lock)
 			return null
-		"_ITEMINRANGE":
-			# Gegenstand (Nummer) in Reichweite: Original-Weltgegenstände noch ohne Inventarsystem -> nein
-			return 0
 		"SETUPJUNKERS88":
 			# AFRICA6: a·0,01 = Schadensfaktor an der Ju 88, b·0,01 = Teiler des Trefferschadens an Jägern
 			if mission.has_method("setup_junkers88"):
@@ -789,12 +836,40 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			if wp == "" or kmh <= 0.0:
 				veh.stop_drive()
 				return null
-			var goal_f := find_frame(wp)
-			# Original-Fahrspuren (Punkte "1","2","3","END") sind noch nicht dekodiert:
-			# ersatzweise 60 m geradeaus in Fahrzeugrichtung.
-			var goal := goal_f.global_position if goal_f else veh.global_position + veh.global_basis.z * 60.0
-			veh.drive_to(goal, kmh)
-			return {"wait_until": veh.drive_done, "timeout": 40.0}
+			# Original: Name = Ziel im Fahrzeugnetz (check2.bin Abschnitt 2 → drive.json); unbekannt → anhalten
+			var gi := _drive_name(wp)
+			if gi < 0:
+				var goal_f := find_frame(wp)
+				if goal_f == null:
+					veh.stop_drive()
+					return null
+				veh.drive_path([goal_f.global_position], kmh)
+			else:
+				veh.drive_path(_drive_route(veh.global_position, gi), kmh)
+			return {"wait_until": veh.drive_done, "timeout": 600.0}
+		"HUMAN_DRIVENEARPLAYER":
+			# Original: zufälliger Netzknoten (ohne Flag 0x100) im Umkreis von 20 m um den nächsten Spieler
+			var sd2 := _soldier(vm)
+			var veh2 := sd2.vehicle as Vehicle if sd2 else null
+			if veh2 == null:
+				return null
+			_drive_load()
+			var near: Soldier = null
+			for p in _players():
+				if near == null or p.global_position.distance_to(veh2.global_position) < near.global_position.distance_to(veh2.global_position):
+					near = p
+			if near == null:
+				return null
+			var cand: Array = []
+			for i in _drive_nodes.size():
+				var nd: Dictionary = _drive_nodes[i]
+				if not nd.get("near_player_excluded", false) and _drive_astar.get_point_position(i).distance_to(near.global_position) <= 20.0:
+					cand.append(i)
+			if cand.is_empty():
+				return null
+			var kmh2 := float(vm.value(args[0])) if args.size() > 0 else 30.0
+			veh2.drive_path(_drive_route(veh2.global_position, cand[randi() % cand.size()]), kmh2 if kmh2 != 0.0 else 30.0)
+			return {"wait_until": veh2.drive_done, "timeout": 600.0}
 		# --- Gegenstände / Effekte ---
 		"HUMAN_PICKOBJECT":
 			var ps2 := _soldier(vm)
@@ -838,9 +913,16 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				_particles(int(vm.value(args[0])), pf.global_position)
 			return null
 		"MAKEEXPLOSION":
+			# (Frame, a, b): Radius = b·0,001 m, Stärke = a·0,001 (re_notes_interactive.md §2 [P]);
+			# Stärke 0 = nur Effekt/Wackeln (z. B. MakeExplosion(me, 0, 10000) an Normandie-Kanonen)
 			var ef := _frame_arg(vm, args[0])
 			if ef:
-				_explosion(ef.global_position + Vector3.UP, 7.0, 220.0)
+				var power := float(vm.value(args[1])) * 0.001 if args.size() > 1 else 1000.0
+				var rad := clampf(float(vm.value(args[2])) * 0.001 if args.size() > 2 else 7.0, 2.0, 40.0)
+				if power <= 0.0:
+					Effects.explosion(ef.global_position + Vector3.UP, rad * 0.5)
+				else:
+					_explosion(ef.global_position + Vector3.UP, rad, clampf(power * 0.2, 60.0, 900.0))
 			return null
 		"FRM_SETANIMATION", "HUMAN_SETANIM", "HUMAN_SETOPTIMIZED", "HUMAN_SETEVENTS", "HUMAN_LOOKAROUND", \
 				"FRM_SWITCHFACETEXTURE", "FRM_SETLIGHTMAP", "FRM_SETGROUPLIGHTMAP", "CHECKPOINTJOIN", "CHECKPOINTSEPARATE":
@@ -1004,6 +1086,58 @@ func _particles(id: int, pos: Vector3) -> Node3D:
 
 
 ## MakeExplosion: Explosion mit Splitterschaden (Soldaten mit Sichtlinie, Hunde).
+## --- Fahrzeugnetz (HUMAN_Drive, docs/re_notes_drive.md) ---------------------------------
+var _drive_astar: AStar3D
+var _drive_nodes: Array = []
+var _drive_names: Array = []
+
+
+func _drive_load() -> void:
+	if _drive_astar:
+		return
+	_drive_astar = AStar3D.new()
+	var d = _read_json(orig.mission_dir + "/drive.json")
+	if typeof(d) != TYPE_DICTIONARY:
+		return
+	var v: Dictionary = d.get("vehicle", {})
+	_drive_nodes = v.get("nodes", [])
+	_drive_names = v.get("names", [])
+	for i in _drive_nodes.size():
+		var p: Array = _drive_nodes[i]["pos"]
+		_drive_astar.add_point(i, Vector3(p[0], p[1], p[2]))
+	for i in _drive_nodes.size():
+		for l in _drive_nodes[i].get("links", []):
+			var j := int(l[0])
+			if j >= 0 and j < _drive_nodes.size() and j != i:
+				_drive_astar.connect_points(i, j, false)
+
+
+## Original-Namenssuche: erste 16 Zeichen, ohne Groß-/Kleinschreibung, erster Treffer (−1 = unbekannt)
+func _drive_name(n: String) -> int:
+	_drive_load()
+	var key := n.substr(0, 16).to_lower()
+	if key == "":
+		return -1
+	for e in _drive_names:
+		if String(e.get("name", "")).substr(0, 16).to_lower() == key:
+			return int(e.get("node", -1))
+	return -1
+
+
+## Route vom Netzknoten nahe dem Fahrzeug (≤ 10 m) zum Zielknoten; sonst direkt zum Ziel
+func _drive_route(from: Vector3, goal_node: int) -> Array:
+	var goal := _drive_astar.get_point_position(goal_node)
+	var start := _drive_astar.get_closest_point(from)
+	if start < 0 or _drive_astar.get_point_position(start).distance_to(from) > 10.0:
+		return [goal]
+	var pts: Array = []
+	for p in _drive_astar.get_point_path(start, goal_node):
+		pts.append(p)
+	if pts.is_empty():
+		pts.append(goal)
+	return pts
+
+
 func _explosion(pos: Vector3, radius: float, damage: float) -> void:
 	Effects.explosion(pos, radius)
 	Events.emit_noise(pos, 400.0, null, Soldier.TEAM_AXIS, &"explosion")
@@ -1069,6 +1203,12 @@ func _ready() -> void:
 func run_cutscene(n: int, vm: LsVM) -> void:
 	in_cutscene = true
 	cutscene_id = n
+	# Sequenzen ohne CSC_EndCutscene (z. B. CZECH1 cuttrebissky) enden im Original mit ihrer Kameraanimation
+	# (.i3d, nicht dekodiert) – Ersatz: spätestens nach 90 s beenden
+	var my_n := n
+	get_tree().create_timer(90.0, false).timeout.connect(func():
+		if in_cutscene and cutscene_id == my_n:
+			end_cutscene())
 	_cutscene_vm = vm
 	mission.controller.input_enabled = false
 	if mission.hud:

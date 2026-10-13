@@ -74,13 +74,14 @@ func _spawn_actors() -> void:
 	# Spielerfiguren = Akteurtyp 10 (Namen variieren: commando1, Commando_1, …), nach Nummer sortiert
 	var players: Array = []
 	for a in orig.actors:
-		if int(a.get("actor_type", -1)) == 10 or String(a.get("name", "")).to_lower().begins_with("commando"):
+		var an := String(a.get("name", "")).to_lower()
+		if int(a.get("actor_type", -1)) == 10 or an.begins_with("commando") or an.begins_with("spawnsingle"):
 			players.append(a)
 	players.sort_custom(func(x, y): return _trailing_number(x.get("name", "")) < _trailing_number(y.get("name", "")))
 	players = players.slice(0, 4)
 	var count := players.size()
 	for i in players.size():
-		var t := OrigLevel.xform(players[i])
+		var t := actor_xform(players[i])
 		if i == 0:
 			start = t.origin
 			# LS3D-Figuren blicken entlang +Z; durch die Z-Spiegelung zeigt das in Godot nach -Z
@@ -100,9 +101,9 @@ func _spawn_actors() -> void:
 	for a in orig.actors:
 		var nm: String = a.get("name", "")
 		var model: String = String(a.get("model", ""))
-		if nm.to_lower().begins_with("commando") or _player_names.has(nm.to_lower()):
+		if nm.to_lower().begins_with("commando") or nm.to_lower().begins_with("spawnsingle") or _player_names.has(nm.to_lower()):
 			continue
-		var t2 := OrigLevel.xform(a)
+		var t2 := actor_xform(a)
 		var typ := int(a.get("actor_type", -1))
 		if typ == 3 and model != "":
 			_spawn_orig_human(nm, model, t2)
@@ -119,6 +120,8 @@ func _spawn_actors() -> void:
 			inst.name = nm.validate_node_name()
 			dynamic_root.add_child(inst)
 			inst.global_transform = t2
+			if model != "" and typ in [5, 7, 9, 13, 14, 15, 20, 21, 22, 23, 25, 28]:
+				orig._add_collision(inst)     # z. B. Normandie-Kanonen (Typ 25) müssen Treffer erhalten
 			runtime.register_actor(nm, inst)
 	# Interaktive Originalakteure (Türen, Leitern, Schalter, Sprengplätze …; interactive.json)
 	interactive = OrigInteractive.new()
@@ -148,6 +151,12 @@ func _spawn_orig_human(nm: String, model: String, t: Transform3D) -> void:
 		b.setup(s)
 		b.runtime = runtime
 		b.script_control = true
+		# Leiche durchsuchbar (Originalgegenstände, z. B. ALPS1: Ausweise des Lastwagenfahrers)
+		var loot := Pickups.Loot.new()
+		loot.corpse = s
+		loot.enabled = false
+		s.add_child(loot)
+		s.died.connect(func(_x): loot.enabled = true)
 	else:
 		var loadout := _orig_loadout(nm)
 		s = spawn_enemy(t.origin + Vector3.UP * 0.3, yaw, loadout, nm,
@@ -155,10 +164,33 @@ func _spawn_orig_human(nm: String, model: String, t: Transform3D) -> void:
 		var eb := s.get_node("EnemyBrain") as EnemyBrain
 		eb.runtime = runtime
 	_apply_orig_params(s, nm)
+	_orig_inventory(s, nm)
 	s.name = nm.validate_node_name()
 	s.model.attach_orig(orig.character_instance(model))
 	runtime.register_actor(nm, s)
 	s.died.connect(func(_x): runtime.notify(s, "ONDEATH"))
+
+
+func water_level_at(pos: Vector3) -> float:
+	return orig.water_level_at(pos) if orig else NAN
+
+
+## Weltlage eines actors.bin-Akteurs: die Position ist relativ zum Elternframe. Sektoren liegen im Ursprung;
+## andere Eltern (z. B. CZECH5 GE_8 unter „Yelbld143“, Straßenobjekte) werden einbezogen.
+func actor_xform(a: Dictionary) -> Transform3D:
+	var t := OrigLevel.xform(a)
+	var par := String(a.get("parent", ""))
+	if par == "" or par.to_lower().contains("sector"):
+		return t
+	var pn: Node3D = orig.nodes.get(par)
+	if pn == null:
+		for k in orig.nodes:
+			if String(k).to_lower() == par.to_lower():
+				pn = orig.nodes[k]
+				break
+	if pn and pn.is_inside_tree():
+		return pn.global_transform * t
+	return t
 
 
 ## Bewaffnung laut items.dat: Hauptwaffe + Stielhandgranate, falls im Inventar.
@@ -181,6 +213,23 @@ func _orig_loadout(nm: String) -> Array:
 	if primary == "p08":
 		return ["", "p08", nade]
 	return [primary, "", nade]
+
+
+## items.dat-Inventar des Akteurs: Tasche/Rucksack (Slots 1/5, ohne Waffen/Munition) als Leicheninhalt,
+## Uniform (Slot 4) als Gegenstand beim Anziehen, alles für _IsInInventory des Akteurs
+func _orig_inventory(s: Soldier, nm: String) -> void:
+	var loot: Array = []
+	var all: Array = []
+	for it in actor_params.get(nm, {}).get("inventory", []):
+		var id := int(it.get("item", -1))
+		all.append(id)
+		var kind := String(it.get("kind", ""))
+		if int(it.get("slot", -1)) == 4:
+			s.set_meta("orig_uniform", id)
+		elif int(it.get("slot", -1)) in [1, 5] and kind == "equipment" and not id in SAS.MEDKITS:
+			loot.append(id)
+	s.set_meta("orig_loot", loot)
+	s.set_meta("orig_items", all)
 
 
 ## actors.bin-Parameter (docs/re_notes_actors_items.md): Gesundheit, Schießen, Sicht-/Hörweite.

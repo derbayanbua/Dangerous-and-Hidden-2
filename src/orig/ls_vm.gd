@@ -23,6 +23,7 @@ var wait := 0.0
 var wait_until := Callable()
 var wait_timeout := 0.0
 var ended := false
+var terminated := false         ## EndScript(): Skript endgültig beendet (Ereignisse/Whenever wirkungslos)
 var atomic := false
 var signals := {}              ## empfangene Signalnummern
 var signals_disabled := false
@@ -44,6 +45,8 @@ func _init(compiled: LsCompiler, owner: Node3D, runtime, script_name := "") -> v
 
 ## Ereignis auslösen (z. B. "ONSIGNAL:5", "ONALARM", "ONDEATH").
 func fire(key: String) -> bool:
+	if terminated:
+		return false
 	if key.begins_with("ONSIGNAL:") and (signals_disabled or disabled_signal_ids.has(int(key.substr(9)))):
 		return false
 	if not code.handlers.has(key):
@@ -53,6 +56,9 @@ func fire(key: String) -> bool:
 
 
 func signal_received(n: int) -> void:
+	# Original: DisableSignals/EnableSignal(n, false) sperren auch _SignalReceived (BURMA1 bu1_timer.scr)
+	if signals_disabled or disabled_signal_ids.has(n):
+		return
 	signals[n] = true
 	fire("ONSIGNAL:%d" % n)
 
@@ -67,6 +73,8 @@ func tick(delta: float) -> void:
 	if not _started:
 		_started = true
 		_run()
+		return
+	if terminated:
 		return
 	# Ereignisse unterbrechen (nicht während Block{})
 	if not atomic and not events.is_empty():
@@ -165,6 +173,8 @@ func _call(fname: String, args: Array) -> void:
 			return
 		"ENDSCRIPT":
 			ended = true
+			terminated = true
+			events.clear()
 			stack.clear()
 			atomic = false
 			return
