@@ -731,8 +731,8 @@ def build(mission: str) -> dict:
             e["world"] = decompose(wm)
         else:
             e["world"] = None
-            e["world_note"] = ("Frame weder in scene.glb noch in scene.json/Modellen gefunden – vermutlich "
-                               "unvollstaendige scene.4ds-Konvertierung (fmt_4ds: Visual-Typ nicht unterstuetzt)")
+            e["world_note"] = ("Frame weder in scene.glb noch in scene.json/Modellen gefunden – scene.glb "
+                               "veraltet (convert_mission.py neu ausführen) oder Frame nur zur Laufzeit erzeugt")
             world.unresolved.add(name)
         if name.lower() in scripts:
             e["script"] = scripts[name.lower()]
@@ -740,27 +740,24 @@ def build(mission: str) -> dict:
             e["inventory"] = inv[name.lower()]
         # typabhaengige Zusatzgeometrie
         if typ == 8 and wm is not None and e.get("model"):
-            # Dummies "up*"/"down*" im Leitermodell (0x5EA5D0); Weltlage wie im konvertierten glb und als
-            # Gegenprobe mit konjugierten Vorfahren-Rotationen (siehe Notiz zur 4DS-Konvention).
+            # Dummies "up*"/"down*" im Leitermodell (0x5EA5D0); Weltlage wie im konvertierten glb.
+            # Frühere Ersatzrechnung mit konjugierten Vorfahren-Rotationen entfällt: crot_xyzw ist korrekt
+            # (Gegenprobe m_a1_zebrik01/02, re_notes_interactive.md Abschnitt 5) – liegt up dennoch unter down,
+            # ist die glb veraltet bzw. die Konvertierung fehlerhaft -> nur melden, nicht kaschieren.
             pts = {}
             for key, pre in (("top", "up"), ("bottom", "down")):
                 fr = world.model_subframes(e["model"], pre)
                 if fr:
-                    for conj in (False, True):
-                        fm = world._model_frame_world(e["model"], fr[0], wm, conj_parents=conj)
-                        pts[(key, conj)] = [round(c, 4) for c in mat_apply(fm, [0, 0, 0])]
-            if ("top", False) in pts and ("bottom", False) in pts:
-                ok = pts[("top", False)][1] > pts[("bottom", False)][1]
-                okc = pts[("top", True)][1] > pts[("bottom", True)][1]
-                use = False if ok or not okc else True
-                e["top_world"] = pts[("top", use)]
-                e["bottom_world"] = pts[("bottom", use)]
+                    fm = world._model_frame_world(e["model"], fr[0], wm)
+                    pts[key] = [round(c, 4) for c in mat_apply(fm, [0, 0, 0])]
+            if "top" in pts and "bottom" in pts:
+                e["top_world"] = pts["top"]
+                e["bottom_world"] = pts["bottom"]
                 e["height"] = round(e["top_world"][1] - e["bottom_world"][1], 3)
-                if use:
-                    e["dummy_note"] = ("up/down liegen im konvertierten glb vertauscht (Rotation eines Eltern-Frames "
-                                       "im Modell); Werte mit konjugierter Vorfahren-Rotation berechnet")
-                    e["top_world_glb_as_is"] = pts[("top", False)]
-                    e["bottom_world_glb_as_is"] = pts[("bottom", False)]
+                if e["height"] <= 0:
+                    e["dummy_note"] = ("WARNUNG: up liegt nicht über down – Modell-glb veraltet oder "
+                                       "Konvertierung fehlerhaft (convert_mission.py neu ausführen)")
+                    print("  WARNUNG Leiter %s: up nicht über down (Höhe %.3f)" % (name, e["height"]))
             fwd = mat_dir(wm, [0, 0, -1])     # LS3D-Frame-Z (Matrix +0x60) -> glTF lokal -Z
             fwd[1] = 0.0
             ln = math.hypot(fwd[0], fwd[2]) or 1.0
