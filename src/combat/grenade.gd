@@ -7,11 +7,14 @@ var data: WeaponData
 var thrower: Node
 var team := 0
 var _t := 0.0
+var impact := false        ## Rakete (Raketenwerfer): Aufschlagzünder, kaum Fallkurve
 
 
 func _ready() -> void:
+	if impact:
+		gravity_scale = 0.15
 	collision_layer = 0
-	collision_mask = 1
+	collision_mask = 1 | (1 << 1) if impact else 1     # Rakete trifft auch Figuren/Fahrzeuge
 	mass = 0.6
 	continuous_cd = true
 	physics_material_override = PhysicsMaterial.new()
@@ -39,17 +42,30 @@ func _ready() -> void:
 
 
 func _on_first_contact(_body: Node) -> void:
+	if impact:
+		explode.call_deferred()
+		return
 	linear_damp = 3.5
 	angular_damp = 10.0
 
 
 func _physics_process(delta: float) -> void:
 	_t += delta
+	if impact:
+		if _t > 8.0:
+			explode()      # Selbstzerlegung nach maximaler Flugzeit
+		return
 	if data and _t >= data.fuse_time:
 		explode()
 
 
+var _exploded := false
+
+
 func explode() -> void:
+	if _exploded:
+		return
+	_exploded = true
 	var pos := global_position
 	var radius := data.blast_radius
 	Effects.explosion(pos, radius)

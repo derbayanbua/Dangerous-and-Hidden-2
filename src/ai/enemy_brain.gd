@@ -37,7 +37,11 @@ var _corpse_to_check: Soldier
 var _grenade_cd := 1.0
 var _engaged_time := 0.0
 var _flanked := false
+var _flank_retry := 0.0           ## s bis zum nächsten Flankenversuch, wenn keine Flanke gefunden wurde
 var flank_target := Vector3.INF   ## zuletzt gewählte Flankenposition (Debug/Test)
+## Feuern in der Bewegung (auf dem Weg in Deckung/zur Flanke) bis zu dieser Entfernung.
+## Treffsicherheit sinkt dabei über die Bewegungsstreuung des Soldaten (Soldier.current_spread).
+var move_fire_range := 35.0
 
 # --- Steuerung durch Original-Skripte (LsRuntime) ---
 var runtime: Node                 ## LsRuntime, falls die Mission Originalskripte nutzt
@@ -155,6 +159,7 @@ func set_state(s: int) -> void:
 	_cover_pos = Vector3.INF
 	_engaged_time = 0.0
 	_flanked = false
+	_flank_retry = 0.0
 	if s != State.COMBAT:
 		cease_fire()
 
@@ -216,6 +221,24 @@ func _investigate(delta: float) -> void:
 		set_state(_calm_state())
 
 
+## Sucht eine Deckung seitlich versetzt zur Achse Gegner–Ziel (beide Seiten, zufällige Reihenfolge,
+## wachsender Suchradius, je Kombination mehrere Stichprobenrunden). INF, wenn keine echte Flanke
+## (mindestens 5 m seitlich) gefunden wurde.
+func _find_flank(tpos: Vector3, threat_eye: Vector3) -> Vector3:
+	var to_t := tpos - soldier.global_position
+	to_t.y = 0.0
+	var first := -1.0 if randf() < 0.5 else 1.0
+	for radius: float in [8.0, 12.0, 16.0]:
+		for side: float in [first, -first]:
+			var perp := Vector3(-to_t.z, 0, to_t.x).normalized() * side
+			var center := soldier.global_position + perp * 12.0 + to_t.normalized() * minf(to_t.length() * 0.3, 8.0)
+			for _round in 2:
+				var c := find_cover_around(center, threat_eye, radius)
+				if c.is_finite() and absf((c - soldier.global_position).dot(perp)) > 5.0:
+					return c
+	return Vector3.INF
+
+
 func _combat(delta: float) -> void:
 	perception.forget_dead()
 	var visible := perception.best_target()
@@ -254,11 +277,17 @@ func _combat(delta: float) -> void:
 			_cover_pos = soldier.global_position   # keine Deckung: vor Ort hinknien
 	var in_cover := _cover_pos.is_finite() and distance_to(_cover_pos) < 1.5
 	if not in_cover and has_move_target():
-		# auf dem Weg in Deckung: geduckt rennen, ggf. im Laufen feuern
+		# auf dem Weg in Deckung bzw. zur Flanke: im Laufen weiterfeuern (Niederhalten),
+		# solange das Ziel sichtbar und in Reichweite ist
 		soldier.stance_request = Soldier.Stance.STAND
-		if visible and distance_to(target.global_position) < 15.0:
+		if visible and distance_to(target.global_position) < move_fire_range:
+			# aus der Hüfte im Laufschritt: Zielen würde das Rennen auf Gehen ×0,6 bremsen
+			# (Soldier._update_movement), Sprinten erlaubt kein Feuern -> JOG, ungenauer (spread_hip)
+			soldier.move_mode = Soldier.MoveMode.JOG
 			engage(target, delta)
+			soldier.aiming = false
 		else:
+			soldier.move_mode = Soldier.MoveMode.RUN
 			cease_fire()
 			_turn_towards_dir((agent.get_next_path_position() - soldier.global_position).normalized(), delta, 8.0)
 		return
@@ -267,30 +296,19 @@ func _combat(delta: float) -> void:
 	# Flankieren (nur aggressiv): nach längerem Feuergefecht seitlich versetzt
 	# neue Deckung suchen, um das Ziel aus einem anderen Winkel zu fassen
 	_engaged_time += delta
-	if ai_mode == Mode.AGGRESSIVE and not stationary and not _flanked and _engaged_time > 8.0:
-		_flanked = true
-		var to_t := tpos - soldier.global_position
-		to_t.y = 0.0
-		# beide Seiten prüfen (zufällige Reihenfolge), bei Bedarf weiter suchen
-		var first := -1.0 if randf() < 0.5 else 1.0
-		var flank := Vector3.INF
-		for radius: float in [8.0, 12.0]:
-			for side: float in [first, -first]:
-				var perp := Vector3(-to_t.z, 0, to_t.x).normalized() * side
-				var center := soldier.global_position + perp * 12.0 + to_t.normalized() * minf(to_t.length() * 0.3, 8.0)
-				var c := find_cover_around(center, threat_eye, radius)
-				# echte Flanke: mindestens 5 m seitlich zur Achse Gegner–Ziel versetzt
-				if c.is_finite() and absf((c - soldier.global_position).dot(perp)) > 5.0:
-					flank = c
-					break
-			if flank.is_finite():
-				break
+	_flank_retry = maxf(_flank_retry - delta, 0.0)
+	if ai_mode == Mode.AGGRESSIVE and not stationary and not _flanked and _engaged_time > 8.0 and _flank_retry <= 0.0:
+		var flank := _find_flank(tpos, threat_eye)
 		if flank.is_finite():
+			_flanked = true
 			_cover_pos = flank
 			flank_target = flank
 			flank_origin = soldier.global_position
 			move_to(flank, Soldier.MoveMode.RUN)
 			return
+		# keine Flanke gefunden: nicht aufgeben, nach kurzer Zeit erneut suchen
+		# (Stichproben sind zufällig, Lage/Ziel können sich ändern)
+		_flank_retry = 2.0
 
 	# Herausschauen und Feuern im Wechsel mit Abducken
 	_peek_timer -= delta

@@ -111,10 +111,35 @@ func _register_orig_missions() -> void:
 			CAMPAIGN_ORDER.append(e[0])
 	if not PRACTICE_MISSIONS.has(ORIG_TRAINING[0]):
 		PRACTICE_MISSIONS.insert(0, ORIG_TRAINING[0])
+	_register_mp_maps(texts)
 	# Titel der Teile 1A–1C ebenfalls aus den Originaltexten
 	for pair in [["a1_blizzard", 4501], ["a2_erkundung", 4511], ["a3_rendezvous", 4521]]:
 		if typeof(texts) == TYPE_DICTIONARY and texts.has(str(pair[1])):
 			MISSIONS[pair[0]]["title"] = String(texts[str(pair[1])])
+## Mehrspieler-Karten: Original-MP-Karten (orig_cache/mp_maps.json, tools/fmt_mp.py) und – als Arena –
+## alle Kampagnenkarten (Level, Türen, Fahrzeuge der Originalmission; keine KI, keine Skripte).
+var MP_MAPS: Array = []
+
+
+func _register_mp_maps(texts) -> void:
+	MP_MAPS.clear()
+	var d = LsRuntime._read_json(OrigLevel.cache_root() + "/mp_maps.json")
+	if typeof(d) == TYPE_DICTIONARY:
+		for e in d.get("maps", []):
+			var folder := String(e.get("folder", ""))
+			if folder == "" or not DirAccess.dir_exists_absolute(OrigLevel.cache_root() + "/" + folder.to_lower()):
+				continue
+			var id := "mp_" + folder.to_lower()
+			MISSIONS[id] = {"title": String(e.get("title", folder)), "script": "res://src/missions/mp_arena.gd",
+				"orig": folder, "k": 0, "briefing": "", "modes": e.get("modes", [])}
+			MP_MAPS.append(id)
+	for e in [["a1_blizzard", "ARCTIC1", 0], ["a2_erkundung", "ARCTIC2", 1], ["a3_rendezvous", "ARCTIC3", 2]] + ORIG_CAMPAIGN:
+		var mid: String = "mp_arena_" + String(e[0])
+		MISSIONS[mid] = {"title": "Arena: " + String(MISSIONS.get(e[0], {}).get("title", e[1])),
+			"script": "res://src/missions/mp_arena.gd", "orig": e[1], "k": e[2], "briefing": ""}
+		MP_MAPS.append(mid)
+
+
 ## Eigene Prototyp-Einsätze (kein Original-Leveldesign): jederzeit wählbar, nicht Teil der Kampagne.
 var PRACTICE_MISSIONS: Array = ["m01_funkfeuer", "m02_nordlicht", "m03_sandsturm"]
 var campaign := {}
@@ -552,6 +577,13 @@ func prepare_sas(id: String, force := false) -> void:
 	for i in need.size():
 		campaign["inv"][str(need[i])] = presets[i]
 	ensure_essentials(id)
+	# Grundausstattung jedes Soldaten: Messer (Original „knife - GB“ 57) und Verbandskasten (54)
+	for idx in team:
+		var inv := sas_inventory(idx)
+		var strength := float(st[str(idx)]["stats"]["strength"])
+		for basic in [57, 54]:
+			if SAS.count_of(inv, basic) == 0 and SAS.can_add(inv, strength, basic):
+				SAS.add_item(inv, basic, 1)
 	for idx in team:
 		fit_inventory(idx, id)
 	campaign["sas_prepared"] = id
@@ -659,10 +691,18 @@ func apply_sas(s: Soldier, pid: String) -> void:
 			var n := int(lo["grenades"])
 			w.in_mag = 1 if n > 0 else 0
 			w.reserve = maxi(n - 1, 0)
+		elif w.data.slot == WeaponData.Slot.LAUNCHER:
+			var shots := maxi(int(lo.get("launcher_shots", 1)), 1)
+			w.in_mag = 1
+			w.reserve = shots - 1
+		elif w.data.slot == WeaponData.Slot.MELEE:
+			w.in_mag = 1
 		else:
 			var mags := int(lo["mags"].get(String(w.data.id), 0))
 			w.in_mag = w.data.magazine_size
 			w.reserve = w.data.magazine_size * maxi(mags, 0)
+	s.explosives = int(lo.get("explosives", 0))
+	s.mines = int(lo.get("mines", 0))
 
 
 ## Nach dem Einsatz: Verbrauch ins Inventar zurückschreiben (Magazine, Granaten, Verbände), Training,
@@ -732,6 +772,12 @@ func _write_back_inventory(s: Soldier, idx: int) -> void:
 			for e in inv["items"]:
 				if int(e[0]) == ammo:
 					e[1] = int(ceil(float(w.reserve) / maxf(w.data.magazine_size, 1)))
+	# verbrauchter Sprengstoff / Minen
+	for pair in [["explosives", [68, 67]], ["mines", [70, 71]]]:
+		var used := int(lo.get(pair[0], 0)) - int(s.get(pair[0]))
+		for id in pair[1]:
+			if used > 0:
+				used -= SAS.remove_item(inv, id, used)
 	var used_med := int(lo["medkits"]) - s.medkits
 	for m in SAS.MEDKITS:
 		if used_med > 0:
@@ -838,6 +884,8 @@ func start_mission(id: String) -> void:
 
 
 func return_to_menu() -> void:
+	if Net.is_online:
+		Net.leave(false)      # Mehrspieler-Verbindung beenden
 	get_tree().paused = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().change_scene_to_file(MAIN_MENU)

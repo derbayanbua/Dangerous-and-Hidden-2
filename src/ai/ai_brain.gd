@@ -244,9 +244,9 @@ func cease_fire() -> void:
 
 
 func _switch_to_any_loaded() -> void:
-	for i in soldier.weapons.size():
-		var w := soldier.weapons[i]
-		if w and i != WeaponData.Slot.GRENADE and w.total_ammo() > 0:
+	for i in [WeaponData.Slot.PRIMARY, WeaponData.Slot.SIDEARM]:
+		var w: Weapon = soldier.weapons[i] if i < soldier.weapons.size() else null
+		if w and w.total_ammo() > 0:
 			soldier.select_slot(i)
 			return
 

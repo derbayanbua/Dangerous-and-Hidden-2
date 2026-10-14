@@ -332,6 +332,9 @@ static func to_loadout(inv: Dictionary) -> Dictionary:
 	var side := ""
 	var nade := ""
 	var nade_count := 0
+	var launcher := ""
+	var launcher_shots := 0
+	var knife := ""
 	var all_ids: Array = []
 	var weapons: Array = []
 	for k in ["hands", "shoulder"]:
@@ -363,10 +366,20 @@ static func to_loadout(inv: Dictionary) -> Dictionary:
 				if nade == "":
 					nade = String(wd.id)
 					nade_count = count_of(inv, wid)
+			WeaponData.Slot.LAUNCHER:
+				if launcher == "":
+					launcher = String(wd.id)
+					# Panzerfaust: Einwegwaffe (Anzahl Waffen), sonst Raketen aus dem Inventar
+					launcher_shots = count_of(inv, wid) if not WeaponDB.LAUNCHER_AMMO.has(wid) \
+						else 1 + count_of(inv, int(WeaponDB.LAUNCHER_AMMO[wid]))
+			WeaponData.Slot.MELEE:
+				knife = String(wd.id)
 	var medkits := 0
 	for m in MEDKITS:
 		medkits += count_of(inv, m)
-	return {"loadout": [primary, side, nade], "mags": mags, "grenades": nade_count, "medkits": medkits,
+	return {"loadout": [primary, side, nade, launcher, knife], "mags": mags, "grenades": nade_count,
+		"launcher_shots": launcher_shots, "explosives": count_of(inv, 67) + count_of(inv, 68),
+		"mines": count_of(inv, 70) + count_of(inv, 71), "medkits": medkits,
 		"binoculars": count_of(inv, BINOCULARS) > 0, "items": all_ids}
 
 

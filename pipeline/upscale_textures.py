@@ -83,6 +83,43 @@ def upscale(model, im: Image.Image) -> Image.Image:
     return big
 
 
+WEIGHTS_FAST = os.path.join(HERE, "sr_models", "realesr-general-x4v3.pth")
+MAX_SIDE_4K = 4096
+
+
+def run_4k(src):
+    """Stufe 2: <ordner>_hd (bzw. Original) mit dem schnellen Modell nochmals x4, dann auf das Doppelte der
+    HD-Größe (max. 4096 px) verkleinert -> <ordner>_4k. Alpha/Colorkey wie Stufe 1. Fortsetzbar."""
+    base = src.rstrip("\\/")
+    hd, dst = base + "_hd", base + "_4k"
+    os.makedirs(dst, exist_ok=True)
+    names = sorted((f for f in os.listdir(base) if f.lower().endswith(".png")),
+                   key=lambda f: os.path.getsize(os.path.join(base, f)))
+    todo = [f for f in names if not os.path.exists(os.path.join(dst, f))]
+    print("4K: Texturen %d, offen %d" % (len(names), len(todo)), flush=True)
+    global MAX_SIDE
+    model = None
+    if todo:
+        # Mehrtägiger Hintergrundlauf: Threads begrenzbar, damit Spiel/Tests parallel laufen können
+        torch.set_num_threads(int(os.environ.get("DH2_SR_THREADS", os.cpu_count() or 4)))
+        model = ModelLoader().load_from_file(WEIGHTS_FAST if os.path.exists(WEIGHTS_FAST) else WEIGHTS)
+        model.model.eval()
+    t0 = time.time()
+    for i, f in enumerate(todo, 1):
+        s = os.path.join(hd, f) if os.path.exists(os.path.join(hd, f)) else os.path.join(base, f)
+        im = Image.open(s)
+        im.load()
+        target = min(max(im.size) * 2, MAX_SIDE_4K)
+        MAX_SIDE = target
+        out = upscale(model, im)
+        tmp = os.path.join(dst, f + ".tmp")
+        out.save(tmp, "PNG", optimize=False)
+        os.replace(tmp, os.path.join(dst, f))
+        print("[%d/%d] %s %dx%d -> %dx%d  (%.0fs gesamt)" % (i, len(todo), f, im.width, im.height,
+                                                          out.width, out.height, time.time() - t0), flush=True)
+    print("FERTIG 4K", flush=True)
+
+
 def run(src):
     dst = src.rstrip("\\/") + "_hd"
     os.makedirs(dst, exist_ok=True)
@@ -135,5 +172,7 @@ if __name__ == "__main__":
         install(folder)
     elif "--restore" in sys.argv:
         restore(folder)
+    elif "--4k" in sys.argv:
+        run_4k(folder)
     else:
         run(folder)

@@ -43,6 +43,8 @@ func setup(m: Mission) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if Net.is_online:
+		return       # Mehrspieler: keine pausierende Taktikkarte
 	if event.is_action_pressed("tactical_map"):
 		if is_open:
 			close()
