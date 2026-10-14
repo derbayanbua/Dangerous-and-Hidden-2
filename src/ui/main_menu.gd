@@ -108,9 +108,69 @@ func _tex(file: String) -> Texture2D:
 	if FileAccess.file_exists(path):
 		var img := Image.load_from_file(path)
 		if img:
+			if file.get_file() == "main_menu.png":
+				_erase_title_ink(img)
 			tx = ImageTexture.create_from_image(img)
 	_tex_cache[file] = tx
 	return tx
+
+
+var lan_menu: LanMenu
+
+
+## Mehrspieler im LAN (Godot-ENet statt DirectPlay)
+func open_lan() -> void:
+	Net.local_name = Game.profile_name if Game.has_profile() else "Spieler"
+	stage.visible = false
+	lan_menu = LanMenu.new()
+	lan_menu.name = "LanMenu"
+	add_child(lan_menu)
+	lan_menu.back_requested.connect(func():
+		lan_menu.queue_free()
+		lan_menu = null
+		stage.visible = true)
+	lan_menu.open()
+
+
+## Hauptmenü-Hintergrund: handschriftlichen Originaltitel entfernen (Vorgabe Auftraggeber: statt
+## „Hidden and Dangerous II“ steht „Dangerous and Hidden 2 (unofficial)“). Dunkle, ungesättigte Tinte im
+## Titelbereich wird durch das nächste Papierpixel derselben Zeile ersetzt (Patronen bleiben erhalten).
+const TITLE_INK_RECT := Rect2(86.0 / 1024.0, 376.0 / 768.0, 312.0 / 1024.0, 64.0 / 768.0)
+
+
+static func _is_ink(c: Color) -> bool:
+	return c.get_luminance() < 0.42 and c.s < 0.3
+
+
+static func _erase_title_ink(img: Image) -> void:
+	if img.is_compressed():
+		img.decompress()
+	var w := img.get_width()
+	var h := img.get_height()
+	var r := Rect2i(int(TITLE_INK_RECT.position.x * w), int(TITLE_INK_RECT.position.y * h),
+		int(TITLE_INK_RECT.size.x * w), int(TITLE_INK_RECT.size.y * h))
+	var pad := maxi(1, w / 1024)       # Kantenpixel der Schrift (Antialiasing) mitnehmen
+	var mask := {}
+	for y in range(r.position.y, r.end.y):
+		for x in range(r.position.x, r.end.x):
+			if _is_ink(img.get_pixel(x, y)):
+				for dy in range(-pad, pad + 1):
+					for dx in range(-pad, pad + 1):
+						mask[Vector2i(x + dx, y + dy)] = true
+	var reach := 14 * maxi(1, w / 1024)
+	for p: Vector2i in mask:
+		if p.x < 0 or p.y < 0 or p.x >= w or p.y >= h:
+			continue
+		# nächstes Nicht-Tinte-Pixel links/rechts in derselben Zeile
+		for d in range(1, reach):
+			var q := Vector2i(p.x - d, p.y)
+			if q.x >= 0 and not mask.has(q):
+				img.set_pixelv(p, img.get_pixelv(q))
+				break
+			q = Vector2i(p.x + d, p.y)
+			if q.x < w and not mask.has(q):
+				img.set_pixelv(p, img.get_pixelv(q))
+				break
 
 
 func _items(menu: String) -> Array:
@@ -160,8 +220,20 @@ func _background(menu: String) -> void:
 	var title_id := int(spec.get("menus", {}).get(menu, {}).get("title_text_id", 0))
 	if title_id:
 		_label(Rect2(584.7, 44.0, 354.5, 43.0), text(title_id), 24, TEXT_COLOR, HORIZONTAL_ALIGNMENT_RIGHT)
-	_label(Rect2(71.2, 61.6, 414.1, 23.1), "Dangerous Hidden 2 · v%s" % ProjectSettings.get_setting("application/config/version"),
+	_label(Rect2(71.2, 61.6, 414.1, 23.1), "%s · v%s" % [GAME_TITLE, ProjectSettings.get_setting("application/config/version")],
 		14, TEXT_COLOR, HORIZONTAL_ALIGNMENT_LEFT)
+	if menu == "main_menu":
+		# neuer Titel an der Stelle der entfernten Handschrift (leicht schräg, Tintenfarbe)
+		var t := _label(Rect2(88.0, 372.0, 330.0, 40.0), "Dangerous and Hidden 2", 26, Color(0.08, 0.09, 0.16))
+		var u := _label(Rect2(250.0, 408.0, 160.0, 24.0), "(unofficial)", 15, Color(0.12, 0.13, 0.2))
+		for l: Label in [t, u]:
+			l.autowrap_mode = TextServer.AUTOWRAP_OFF
+			l.clip_text = false
+			l.rotation = -0.035
+		t.name = "GameTitle"
+
+
+const GAME_TITLE := "Dangerous and Hidden 2 (unofficial)"
 
 
 func _label(r: Rect2, txt: String, font_size: int, color: Color, align := HORIZONTAL_ALIGNMENT_LEFT) -> Label:
@@ -293,7 +365,7 @@ func _main_menu() -> void:
 		["bresume game", 2105, func(): Game.load_game("quick"), has_save],
 		["bchange profile", 2106 if prof else 2117, _open_profiles, true],
 		["bsingleplayer", 2107, func(): show_menu("singleplayer"), prof],
-		["bmultiplayerlan", 2115, func(): pass, false],
+		["bmultiplayerlan", 2115, open_lan, prof],
 		["bmultiplayernet", 2116, func(): pass, false],
 		["bcinematics", 2109, func(): pass, false],
 		["boptions", 2110, func(): show_menu("options"), prof],
@@ -652,7 +724,7 @@ func _page_controls() -> void:
 const KEY_CATEGORIES := [
 	[2452, ["move_forward", "move_back", "move_left", "move_right", "run", "stance_stand", "stance_crouch",
 		"stance_prone", "lean_left", "lean_right"]],
-	[2453, ["fire", "aim", "reload", "fire_mode", "weapon_1", "weapon_2", "weapon_3", "weapon_next", "weapon_prev"]],
+	[2453, ["fire", "aim", "reload", "fire_mode", "weapon_1", "weapon_2", "weapon_3", "grenade", "weapon_next", "weapon_prev"]],
 	[2454, ["interact", "binoculars", "medkit", "camera_toggle", "objectives", "quicksave", "quickload", "pause"]],
 	[2455, ["order_move", "order_follow", "order_hold", "order_roe", "order_formation", "order_stance", "order_grenade"]],
 	[2456, ["tactical_map", "soldier_1", "soldier_2", "soldier_3", "soldier_4", "soldier_next"]],

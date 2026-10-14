@@ -37,6 +37,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			open()
 		get_viewport().set_input_as_handled()
+	elif Net.is_online:
+		return
 	elif event.is_action_pressed("quicksave") and not _open:
 		Game.save_game("quick")
 	elif event.is_action_pressed("quickload"):
@@ -49,7 +51,11 @@ func open() -> void:
 		return
 	_open = true
 	_root.visible = true
-	get_tree().paused = true
+	# Mehrspieler: das Spiel läuft weiter (nur Menü, keine Pause; Speichern/Laden/Neustart gesperrt)
+	get_tree().paused = not Net.is_online
+	for b in _root.find_children("*", "Button", true, false):
+		if (b as Button).text.begins_with("Schnell") or (b as Button).text.begins_with("Mission neu"):
+			(b as Button).disabled = Net.is_online
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 

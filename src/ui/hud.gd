@@ -114,6 +114,43 @@ func setup(m: Mission) -> void:
 	_refresh_objectives()
 
 
+## Auswahlliste (Mausrad): Waffen/Ausrüstung bzw. Sitzplätze, markierter Eintrag hervorgehoben
+var _sel_panel: PanelContainer
+var _sel_box: VBoxContainer
+
+
+func show_selection(title: String, items: Array, index: int) -> void:
+	if _sel_panel == null:
+		_sel_panel = _panel()
+		_sel_panel.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
+		_sel_panel.position = Vector2(-360, -160)
+		_sel_panel.custom_minimum_size = Vector2(330, 0)
+		_root.add_child(_sel_panel)
+		_sel_box = VBoxContainer.new()
+		_sel_panel.add_child(_sel_box)
+	for c in _sel_box.get_children():
+		c.queue_free()
+	_sel_box.add_child(_label(title.to_upper() + "   (Linksklick: wählen)", 15, C_TEXT))
+	for i in items.size():
+		var it: Dictionary = items[i]
+		var cnt := int(it.get("count", -1))
+		var txt := ("▶ " if i == index else "   ") + String(it["label"]) + (" (%d)" % cnt if cnt >= 0 else "")
+		var col := Color(1.0, 0.85, 0.35) if i == index else (C_TEXT if it.get("enabled", true) else Color(0.6, 0.6, 0.6))
+		var l := _label(txt, 18 if i == index else 16, col)
+		l.name = "Item%d" % i
+		_sel_box.add_child(l)
+	_sel_panel.visible = true
+
+
+func hide_selection() -> void:
+	if _sel_panel:
+		_sel_panel.visible = false
+
+
+func selection_visible() -> bool:
+	return _sel_panel != null and _sel_panel.visible
+
+
 func _label(text: String, size: int, color: Color) -> Label:
 	var l := Label.new()
 	l.text = text

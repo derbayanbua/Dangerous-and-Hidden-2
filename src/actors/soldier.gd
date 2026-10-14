@@ -95,6 +95,25 @@ var heal_time_left := 0.0           ## > 0: legt gerade einen Verband an
 var heal_target: Soldier
 const HEAL_DURATION := 3.0
 const HEAL_AMOUNT := 45.0
+## Platzierbare Ausrüstung (Original: Dynamit/Sprengstofftasche 67/68, Minen 70/71)
+var explosives := 0
+var mines := 0
+## Gewähltes Hilfsmittel statt Waffe ("" = Waffe; "explosive", "mine", "medkit", "binoculars"):
+## Linksklick benutzt es (vereinfachte Steuerung, Vorgabe Auftraggeber)
+var tool := ""
+var _tool_trigger_prev := false
+var _melee_cd := 0.0
+## Mehrspieler (Net): Soldat eines anderen Spielers – Position/Blick kommen aus dem Netz
+var net_puppet := false
+var net_target := Vector3.ZERO
+var net_velocity := Vector3.ZERO
+## eigener Mehrspieler-Soldat: Aktionen (kind, a, b, Waffen-ID) an die anderen Rechner melden
+var net_hook: Callable
+
+
+func _net(kind: String, a: Vector3, b: Vector3, wid: String) -> void:
+	if net_hook.is_valid() and not net_puppet:
+		net_hook.call(kind, a, b, wid)
 
 ## Original-Fähigkeiten des SAS-Kaders (0–100, roster.json); < 0 = ohne Kaderwerte (neutral).
 ## Wirkung (Annahme, Größenordnung am Original orientiert): Schießen -> Streuung, Tarnung -> Erkennbarkeit,
@@ -242,6 +261,8 @@ func equip(ids: Array) -> void:
 	weapons.clear()
 	for id in ids:
 		weapons.append(Weapon.new(WeaponDB.get_weapon(StringName(id))) if id != "" else null)
+	while weapons.size() < WeaponData.SLOT_COUNT:
+		weapons.append(null)        # Plätze: Primär, Pistole, Granate, Raketenwerfer, Messer
 	current_slot = 0
 	while current_slot < weapons.size() and weapons[current_slot] == null:
 		current_slot += 1
@@ -297,6 +318,16 @@ func _physics_process(delta: float) -> void:
 		if not is_on_floor():
 			velocity.y -= _gravity * delta
 			move_and_slide()
+		return
+	if net_puppet:
+		# Netzfigur: weich zur gemeldeten Position, Animation aus der gemeldeten Geschwindigkeit
+		var d := net_target - global_position
+		global_position = net_target if d.length() > 4.0 else global_position + d * clampf(12.0 * delta, 0.0, 1.0)
+		velocity = net_velocity
+		_update_stance(delta)
+		_update_weapon_timers(delta)
+		rotation.y = look_yaw
+		model.update_anim(delta, stance, Vector2(net_velocity.x, net_velocity.z).length(), look_pitch, aiming, 0.0)
 		return
 	if vehicle != null:
 		# im Fahrzeug: Position folgt dem Sitz, Waffen (Mitfahrer) bleiben nutzbar
@@ -599,15 +630,30 @@ func _carried_weight() -> float:
 
 # --- Waffen ------------------------------------------------------------------
 
-func _update_weapon(delta: float) -> void:
+func _update_weapon_timers(delta: float) -> void:
 	grenade_cooldown = maxf(grenade_cooldown - delta, 0.0)
 	for w in weapons:
 		if w:
 			w.tick(delta)
+
+
+func _update_weapon(delta: float) -> void:
+	_update_weapon_timers(delta)
+	_melee_cd = maxf(_melee_cd - delta, 0.0)
+	if tool != "":
+		if trigger and not _tool_trigger_prev:
+			use_tool()
+		_tool_trigger_prev = trigger
+		return
 	var w := current_weapon()
 	if w == null:
 		return
 	var can_fire := not stance_transitioning() and not (move_mode == MoveMode.RUN and is_moving() and not aiming)
+	if w.data.action == WeaponData.Action.MELEE:
+		if trigger and not _tool_trigger_prev and _melee_cd <= 0.0:
+			_melee(w)
+		_tool_trigger_prev = trigger
+		return
 	if w.data.slot == WeaponData.Slot.GRENADE:
 		if trigger and can_fire and grenade_cooldown <= 0.0 and w.total_ammo() > 0:
 			throw_grenade(w)
@@ -625,7 +671,12 @@ func _fire_shot(w: Weapon) -> void:
 			dir = to.normalized()
 	var spread_deg := current_spread()
 	dir = _apply_spread(dir, spread_deg)
-	Ballistics.fire(self, origin, dir, w.data, exclude_rids(), team)
+	if w.data.action == WeaponData.Action.ROCKET:
+		_fire_rocket(w, origin, dir)
+		_net("rocket", origin + dir * 1.0, dir * w.data.muzzle_velocity, String(w.data.id))
+	else:
+		Ballistics.fire(self, origin, dir, w.data, exclude_rids(), team)
+		_net("shot", origin, dir, String(w.data.id))
 	var muzzle := origin + dir * 0.9
 	if model and model.weapon_socket:
 		muzzle = model.weapon_socket.global_position + dir * w.data.model_length * 0.8
@@ -643,6 +694,167 @@ func _fire_shot(w: Weapon) -> void:
 	shot_fired.emit(w)
 	if w.data.action == WeaponData.Action.BOLT:
 		get_tree().create_timer(0.35, false).timeout.connect(_bolt_sound)
+
+
+## Raketenwerfer: Geschoss mit Aufschlagzünder (Grenade.impact)
+func _fire_rocket(w: Weapon, origin: Vector3, dir: Vector3) -> void:
+	var g := Grenade.new()
+	g.data = w.data
+	g.thrower = self
+	g.team = team
+	g.impact = true
+	get_parent().add_child(g)
+	g.global_position = origin + dir * 1.0
+	g.linear_velocity = dir * w.data.muzzle_velocity
+	g.add_collision_exception_with(self)
+	# Panzerfaust ist eine Einwegwaffe: leer = weg
+	if w.data.id == &"panzerfaust" and w.total_ammo() <= 0:
+		get_tree().create_timer(0.6, false).timeout.connect(func():
+			if current_slot == WeaponData.Slot.LAUNCHER and weapons[WeaponData.Slot.LAUNCHER] == w and w.total_ammo() <= 0:
+				weapons[WeaponData.Slot.LAUNCHER] = null
+				cycle_weapon(-1))
+
+
+## Messer: Ziel bis 1,6 m vor dem Soldaten; von hinten tödlich (lautlos)
+func _melee(w: Weapon) -> void:
+	_melee_cd = 60.0 / maxf(w.data.rpm, 1.0)
+	_net("melee", Vector3.ZERO, Vector3(look_yaw, 0, 0), "")
+	var fwd := forward()
+	var best: Node3D = null
+	var best_d := 1.7
+	for n in get_tree().get_nodes_in_group("soldiers") + get_tree().get_nodes_in_group("dogs"):
+		var t := n as Node3D
+		if t == null or t == self:
+			continue
+		if t is Soldier and (not (t as Soldier).alive or (t as Soldier).team == team):
+			continue
+		var to := t.global_position - global_position
+		to.y = 0.0
+		if to.length() < best_d and (to.length() < 0.5 or fwd.angle_to(to) < 0.9):
+			best = t
+			best_d = to.length()
+	Events.emit_noise(global_position, w.data.noise_radius, self, team, &"melee")
+	last_shot_time = Time.get_ticks_msec() / 1000.0
+	shot_fired.emit(w)
+	if best == null:
+		return
+	if best is Soldier:
+		var ts := best as Soldier
+		var behind := ts.forward().dot((ts.global_position - global_position).normalized()) > 0.4
+		ts.apply_hit(w.data.damage * (3.0 if behind else 1.0), &"torso", self, fwd)
+	elif best.has_method("on_bullet_hit"):
+		best.on_bullet_hit(w.data.damage, self)
+
+
+# --- Auswahl (Mausrad + Linksklick) und Hilfsmittel -------------------------------
+
+## Wählbare Einträge in fester Reihenfolge: Primärwaffe, Raketenwerfer, Pistole, Messer, Granate,
+## Sprengstoff, Mine, Erste Hilfe, Fernglas. Jeder Eintrag: {key, label, count}
+func selection_entries() -> Array:
+	var out: Array = []
+	var slots := [[WeaponData.Slot.PRIMARY, "Primärwaffe"], [WeaponData.Slot.LAUNCHER, "Raketenwerfer"],
+		[WeaponData.Slot.SIDEARM, "Pistole"], [WeaponData.Slot.MELEE, "Messer"], [WeaponData.Slot.GRENADE, "Granate"]]
+	for e in slots:
+		var i: int = e[0]
+		if i < weapons.size() and weapons[i] != null and (i != WeaponData.Slot.GRENADE or weapons[i].total_ammo() > 0):
+			out.append({"key": "slot:%d" % i, "label": "%s – %s" % [e[1], weapons[i].data.display_name],
+				"count": weapons[i].total_ammo() if weapons[i].data.action != WeaponData.Action.MELEE else -1})
+	if explosives > 0:
+		out.append({"key": "explosive", "label": "Sprengstoff", "count": explosives})
+	if mines > 0:
+		out.append({"key": "mine", "label": "Mine", "count": mines})
+	if medkits > 0:
+		out.append({"key": "medkit", "label": "Erste Hilfe", "count": medkits})
+	if has_binoculars:
+		out.append({"key": "binoculars", "label": "Fernglas", "count": -1})
+	return out
+
+
+func selected_key() -> String:
+	if tool != "":
+		return tool
+	return "slot:%d" % current_slot
+
+
+func apply_selection(key: String) -> void:
+	if using_binoculars and key != "binoculars":
+		toggle_binoculars()
+	if key.begins_with("slot:"):
+		tool = ""
+		select_slot(int(key.substr(5)))
+		return
+	tool = key
+	_tool_trigger_prev = true      # der auswählende Klick löst nicht sofort aus
+	if key == "binoculars" and not using_binoculars:
+		toggle_binoculars()
+	weapon_changed.emit(current_weapon())
+
+
+## Hilfsmittel benutzen (Linksklick)
+func use_tool() -> void:
+	match tool:
+		"medkit":
+			if medkits <= 0:
+				Events.say("Kein Verbandskasten mehr.", 1.5)
+			elif not start_heal(get_tree().get_nodes_in_group("team_%d" % team)):
+				Events.say("Niemand in Reichweite ist verwundet.", 1.5)
+		"binoculars":
+			toggle_binoculars()
+			if not using_binoculars:
+				tool = ""
+		"explosive", "mine":
+			_place_charge(tool)
+
+
+## Sprengstoff (Zeitzünder 10 s) bzw. Mine (Annäherungszünder) vor dem Soldaten ablegen. An einem
+## Original-Sprengplatz in Reichweite wird stattdessen dessen Aktion ausgeführt.
+func _place_charge(kind: String) -> void:
+	if kind == "explosive":
+		for n in get_tree().get_nodes_in_group("interactables"):
+			if n is OrigInteractive.OrigExplosive and n.can_interact(self) \
+					and (n as Node3D).global_position.distance_to(global_position) < 2.5:
+				n.interact(self)
+				return
+	var have := explosives if kind == "explosive" else mines
+	if have <= 0:
+		tool = ""
+		return
+	var c := PlacedCharge.new()
+	c.kind = kind
+	c.owner_soldier = self
+	c.team = team
+	get_parent().add_child(c)
+	c.global_position = global_position + forward() * 0.7 + Vector3.UP * 0.05
+	_net(kind, c.global_position, Vector3.ZERO, "")
+	if kind == "explosive":
+		explosives -= 1
+		_consume_orig([68, 67])
+		Events.say("%s: Sprengladung gelegt – 10 s!" % soldier_name, 2.5)
+	else:
+		mines -= 1
+		_consume_orig([70, 71])
+		Events.say("%s: Mine gelegt." % soldier_name, 2.0)
+	if (explosives if kind == "explosive" else mines) <= 0:
+		tool = ""
+		weapon_changed.emit(current_weapon())
+
+
+func _consume_orig(ids: Array) -> void:
+	var inv: Array = get_meta("orig_items", [])
+	for id in ids:
+		if inv.has(id):
+			inv.erase(id)
+			break
+	set_meta("orig_items", inv)
+
+
+## Taste G: Granate sofort werfen, ohne die Waffe zu wechseln
+func quick_grenade() -> bool:
+	var g: Weapon = weapons[WeaponData.Slot.GRENADE] if weapons.size() > WeaponData.Slot.GRENADE else null
+	if g == null or g.total_ammo() <= 0 or grenade_cooldown > 0.0 or vehicle != null or not alive:
+		return false
+	throw_grenade(g)
+	return true
 
 
 func _bolt_sound() -> void:
@@ -691,8 +903,17 @@ func reload() -> bool:
 
 
 func select_slot(slot: int) -> bool:
+	if tool != "" and slot == current_slot and slot < weapons.size() and weapons[slot] != null:
+		tool = ""                      # vom Hilfsmittel zurück zur Waffe
+		if using_binoculars:
+			toggle_binoculars()
+		weapon_changed.emit(current_weapon())
+		return true
 	if slot < 0 or slot >= weapons.size() or weapons[slot] == null or slot == current_slot:
 		return false
+	tool = ""
+	if using_binoculars:
+		toggle_binoculars()
 	if slot == WeaponData.Slot.GRENADE and weapons[slot].total_ammo() <= 0:
 		return false
 	var w := current_weapon()
@@ -741,6 +962,7 @@ func throw_grenade(w: Weapon, override_velocity := Vector3.INF) -> void:
 	if override_velocity.is_finite():
 		g.linear_velocity = override_velocity
 	g.add_collision_exception_with(self)
+	_net("grenade", origin, g.linear_velocity, String(w.data.id))
 	if w.total_ammo() <= 0 and current_slot == WeaponData.Slot.GRENADE:
 		cycle_weapon(-1)
 
@@ -750,6 +972,8 @@ func throw_grenade(w: Weapon, override_velocity := Vector3.INF) -> void:
 func apply_hit(amount: float, zone: StringName, attacker: Node, direction: Vector3) -> void:
 	if not alive:
 		return
+	if Net.is_online and not Net.is_authority():
+		return       # Mehrspieler: Schaden berechnet nur der Server (Gesundheit kommt per Net._hp)
 	# Liegend sind Beine/Arme kleinere Ziele; Helm reduziert Kopfschaden leicht.
 	if zone == &"head" and helmet_style != "cap":
 		amount *= 0.85

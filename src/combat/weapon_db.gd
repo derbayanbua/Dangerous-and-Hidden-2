@@ -29,7 +29,11 @@ static func get_weapon(id: StringName) -> WeaponData:
 ## Handwaffen werden aus der Originaltabelle (orig_cache/items.json, item_shoot.tbl) erzeugt: Schaden/10,
 ## Feuerintervall, Nachladezeit, Mündungsgeschwindigkeit, Magazin, Gewicht [O]; Streuung/Rückstoß [D].
 const ORIG_IDS := {0: &"p08", 2: &"colt", 4: &"kar98k", 6: &"enfield", 10: &"garand", 18: &"mp40", 20: &"thompson",
-	21: &"sten", 26: &"stg44", 29: &"bren", 61: &"m24", 62: &"no36", 60: &"no69", 63: &"no36"}
+	21: &"sten", 26: &"stg44", 29: &"bren", 61: &"m24", 62: &"no36", 60: &"no69", 63: &"no36",
+	38: &"panzerfaust", 39: &"bazooka", 264: &"panzerschreck", 56: &"knife", 57: &"knife"}
+## Munition der Raketenwerfer (items.sav; nicht in item_shoot.tbl): Bazooka 206, Panzerschreck 205,
+## Panzerfaust ist Einwegwaffe (Anzahl = Anzahl der Waffen)
+const LAUNCHER_AMMO := {39: 206, 264: 205}
 const ORIG_PISTOLS := [0, 1, 2, 3, 5, 260, 261]
 ## Granaten/Handwaffen, die ein Soldat tragen kann (Bordwaffen, Geschütze, Flak u. a. nicht)
 const ORIG_HANDHELD_MAX_KG := 15.0
@@ -139,6 +143,24 @@ static func _build() -> void:
 		magazine_size = 1, start_magazines = 2, rpm = 40.0, reload_time = 0.8,
 		damage = 160.0, fuse_time = 2.5, blast_radius = 6.0, throw_speed = 19.0,
 		noise_radius = 180.0, weight = 0.37, model_length = 0.1, color = Color(0.25, 0.25, 0.22)})
+	# Raketenwerfer [D, Gewichte aus items.sav]: Hohlladung mit Aufschlagzünder (Grenade.impact)
+	var L := WeaponData.Slot.LAUNCHER
+	_make({id = &"panzerfaust", display_name = "Panzerfaust 60", faction = "axis", slot = L, action = WeaponData.Action.ROCKET,
+		magazine_size = 1, start_magazines = 1, rpm = 30.0, reload_time = 0.1, muzzle_velocity = 45.0, damage = 400.0,
+		blast_radius = 4.0, spread_hip = 2.0, spread_aim = 0.6, recoil_pitch = 4.0, aim_fov = 45.0,
+		noise_radius = 150.0, weight = 6.8, model_length = 1.0, color = Color(0.3, 0.32, 0.22)})
+	_make({id = &"bazooka", display_name = "M1 Bazooka", slot = L, action = WeaponData.Action.ROCKET,
+		magazine_size = 1, start_magazines = 3, rpm = 12.0, reload_time = 4.0, muzzle_velocity = 82.0, damage = 420.0,
+		blast_radius = 4.0, spread_hip = 2.0, spread_aim = 0.5, recoil_pitch = 3.0, aim_fov = 42.0,
+		noise_radius = 150.0, weight = 6.0, model_length = 1.4, color = Color(0.28, 0.3, 0.2)})
+	_make({id = &"panzerschreck", display_name = "Panzerschreck", faction = "axis", slot = L, action = WeaponData.Action.ROCKET,
+		magazine_size = 1, start_magazines = 3, rpm = 12.0, reload_time = 4.5, muzzle_velocity = 105.0, damage = 480.0,
+		blast_radius = 4.5, spread_hip = 2.0, spread_aim = 0.45, recoil_pitch = 3.0, aim_fov = 40.0,
+		noise_radius = 160.0, weight = 8.6, model_length = 1.6, color = Color(0.25, 0.27, 0.2)})
+	# Kampfmesser (Original knife GB/GER): lautlos, Nahkampf bis 1,6 m [D]
+	_make({id = &"knife", display_name = "Kampfmesser", slot = WeaponData.Slot.MELEE, action = WeaponData.Action.MELEE,
+		magazine_size = 1, start_magazines = 1, rpm = 80.0, reload_time = 0.1, damage = 90.0,
+		noise_radius = 3.0, weight = 0.42, model_length = 0.25, color = Color(0.5, 0.5, 0.5)})
 	# 2-cm-Flak 38 (Stellungen „la_flak“/„la_flake“): nicht in item_shoot.tbl gelesen → Designwerte [D]
 	_make({id = &"flak38", display_name = "2-cm-Flak 38", faction = "axis", slot = P, action = WeaponData.Action.AUTO,
 		caliber = "20 mm", magazine_size = 20, start_magazines = 6, rpm = 450.0, reload_time = 3.0,

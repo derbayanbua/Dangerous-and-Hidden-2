@@ -152,6 +152,8 @@ func _ready() -> void:
 	Settings.changed.connect(_apply_settings)
 	Effects.start_ambience(self, func() -> Vector3:
 		return rig.camera.global_position if is_instance_valid(rig) else Vector3.ZERO)
+	if Net.is_online:
+		Net.mission_ready.call_deferred(self)    # Mehrspieler: Spielerfiguren kommen vom Server
 
 
 func _apply_settings() -> void:
@@ -281,6 +283,23 @@ func spawn_roster(start: Vector3, yaw: float, offsets: Array, max_count := -1) -
 		var sm := spawn_squad_member(start + Basis(Vector3.UP, yaw) * off, yaw, r["name"], Game.loadout_for(r["pid"]), r["pid"])
 		if Game.is_sas_pid(r["pid"]):
 			Game.apply_sas(sm, r["pid"])     # Originalwerte und Inventar des SAS-Soldaten
+		else:
+			_default_kit(sm)
+
+
+## Übungseinsätze: volle Grundausstattung (Primärwaffe, Raketenwerfer, Pistole, Messer, Granaten,
+## Sprengstoff, Mine, Erste Hilfe) für die vereinfachte Waffenwahl
+func _default_kit(s: Soldier) -> void:
+	if s.weapons[WeaponData.Slot.LAUNCHER] == null:
+		var b := Weapon.new(WeaponDB.get_weapon(&"bazooka"), false)
+		b.in_mag = 1
+		b.reserve = 2
+		s.weapons[WeaponData.Slot.LAUNCHER] = b
+	if s.weapons[WeaponData.Slot.MELEE] == null:
+		s.weapons[WeaponData.Slot.MELEE] = Weapon.new(WeaponDB.get_weapon(&"knife"))
+	s.explosives = maxi(s.explosives, 2)
+	s.mines = maxi(s.mines, 2)
+	s.medkits = maxi(s.medkits, 1)
 
 
 func spawn_squad_member(pos: Vector3, yaw: float, sname: String, loadout: Array, pid: String) -> Soldier:
@@ -430,6 +449,9 @@ func _on_alarm() -> void:
 
 
 func _on_soldier_died(s: Node, attacker: Node) -> void:
+	if Net.is_online:
+		Net.on_soldier_died(s, attacker)     # Mehrspieler: Punkte/Respawn statt Missionsende
+		return
 	if finished:
 		return
 	if s is Soldier and (s as Soldier).team == Soldier.TEAM_AXIS and attacker is Soldier \

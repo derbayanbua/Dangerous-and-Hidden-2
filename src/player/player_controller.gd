@@ -11,6 +11,87 @@ var interact_target: Interactable
 
 var _crouch_toggle := false
 
+## Vereinfachte Auswahl (Vorgabe Auftraggeber, statt Original-Inventar bzw. 3 Tasten vor/zurück/wählen):
+## Mausrad blättert durch Waffen und Ausrüstung (im Fahrzeug: Sitzplätze), Linksklick wählt,
+## Rechtsklick oder 3 s ohne Eingabe bricht ab. Granaten direkt mit G.
+const SELECTION_TIMEOUT := 3.0
+var selection_open := false
+var selection_index := 0
+var _selection_timer := 0.0
+var _suppress_fire := false
+
+
+func selection_items() -> Array:
+	if not is_instance_valid(active):
+		return []
+	if active.vehicle != null:
+		var v: Vehicle = active.vehicle
+		var out: Array = []
+		for i in mini(v.seats.size(), v.occupants.size()):
+			var occ = v.occupants[i]
+			var who := "" if not is_instance_valid(occ) else (" (du)" if occ == active else " – %s" % occ.soldier_name)
+			out.append({"key": "seat:%d" % i, "label": v.seat_name(i) + who, "count": -1,
+				"enabled": not is_instance_valid(occ) or occ == active})
+		return out
+	return active.selection_entries()
+
+
+func _current_key() -> String:
+	if active.vehicle != null:
+		return "seat:%d" % active.seat_index
+	return active.selected_key()
+
+
+func step_selection(dir: int) -> void:
+	var items := selection_items()
+	if items.is_empty():
+		return
+	if not selection_open:
+		selection_open = true
+		selection_index = 0
+		for i in items.size():
+			if items[i]["key"] == _current_key():
+				selection_index = i
+	selection_index = posmod(selection_index + dir, items.size())
+	_selection_timer = SELECTION_TIMEOUT
+	_show_selection(items)
+
+
+func confirm_selection() -> void:
+	var items := selection_items()
+	if selection_open and selection_index < items.size():
+		var it: Dictionary = items[selection_index]
+		var key := String(it["key"])
+		if key.begins_with("seat:"):
+			if it.get("enabled", true) and active.vehicle != null:
+				if (active.vehicle as Vehicle).switch_seat(active, int(key.substr(5))):
+					Events.say("%s: %s" % [active.soldier_name, (active.vehicle as Vehicle).seat_name(active.seat_index)], 1.5)
+		else:
+			active.apply_selection(key)
+			Events.say("%s: %s" % [active.soldier_name, String(it["label"])], 1.5)
+	close_selection()
+	_suppress_fire = true       # der Bestätigungsklick feuert nicht
+
+
+func close_selection() -> void:
+	selection_open = false
+	var hud = mission.get("hud") if mission else null
+	if hud and hud.has_method("hide_selection"):
+		hud.hide_selection()
+
+
+func _show_selection(items: Array) -> void:
+	var hud = mission.get("hud") if mission else null
+	if hud and hud.has_method("show_selection"):
+		hud.show_selection("Sitzplatz" if active.vehicle != null else "Ausrüstung", items, selection_index)
+
+
+func _process(delta: float) -> void:
+	if selection_open:
+		_selection_timer -= delta
+		if _selection_timer <= 0.0 or not is_instance_valid(active) or not active.alive:
+			close_selection()
+
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_PAUSABLE
@@ -38,6 +119,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		get_viewport().set_input_as_handled()
 		return
+	# Auswahl offen: Linksklick bestätigt, Rechtsklick bricht ab
+	if selection_open:
+		if event.is_action_pressed("fire"):
+			confirm_selection()
+			get_viewport().set_input_as_handled()
+			return
+		if event.is_action_pressed("aim"):
+			close_selection()
+			_suppress_fire = true
+			get_viewport().set_input_as_handled()
+			return
 
 	if event.is_action_pressed("camera_toggle"):
 		rig.toggle_mode()
@@ -54,11 +146,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("weapon_2"):
 		active.select_slot(1)
 	elif event.is_action_pressed("weapon_3"):
-		active.select_slot(2)
+		active.select_slot(WeaponData.Slot.LAUNCHER)
+	elif event.is_action_pressed("grenade"):
+		if not active.quick_grenade():
+			Events.say("Keine Granate.", 1.2)
 	elif event.is_action_pressed("weapon_next"):
-		active.cycle_weapon(1)
+		step_selection(1)
 	elif event.is_action_pressed("weapon_prev"):
-		active.cycle_weapon(-1)
+		step_selection(-1)
 	elif event.is_action_pressed("binoculars"):
 		active.toggle_binoculars()
 	elif event.is_action_pressed("medkit"):
@@ -129,6 +224,9 @@ func _physics_process(_delta: float) -> void:
 		active.move_input = Vector3.ZERO
 		active.trigger = false
 		return
+	if _suppress_fire and not Input.is_action_pressed("fire"):
+		_suppress_fire = false
+	var fire_ok := not _suppress_fire and not selection_open
 	var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	if active.vehicle != null:
 		var v: Vehicle = active.vehicle
@@ -137,7 +235,7 @@ func _physics_process(_delta: float) -> void:
 			v.steer_input = -iv.x
 			v.handbrake = Input.is_action_pressed("stance_stand")
 		active.aiming = Input.is_action_pressed("aim") and active.seat_index > 0
-		active.trigger = active.seat_index > 0 and Input.is_action_pressed("fire")
+		active.trigger = active.seat_index > 0 and Input.is_action_pressed("fire") and fire_ok
 		active.aim_point = rig.crosshair_point()
 		active.has_aim_point = true
 		interact_target = null
@@ -148,7 +246,7 @@ func _physics_process(_delta: float) -> void:
 	active.move_mode = Soldier.MoveMode.RUN if Input.is_action_pressed("run") else Soldier.MoveMode.JOG
 	# Automatisierte Tests simulieren Eingaben ohne Mausfang
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or Game.cli.has("autoplay")
-	active.trigger = captured and Input.is_action_pressed("fire")
+	active.trigger = captured and Input.is_action_pressed("fire") and fire_ok
 	active.aiming = captured and Input.is_action_pressed("aim")
 	var l := 0.0
 	if Input.is_action_pressed("lean_left"):

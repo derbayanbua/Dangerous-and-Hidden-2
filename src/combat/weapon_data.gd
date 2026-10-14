@@ -4,8 +4,9 @@ extends Resource
 ## Die Zahlenwerte sind historisch angelehnte Designwerte (siehe CLAUDE.md,
 ## Abschnitt "Waffenwerte"), nicht aus dem Original extrahiert.
 
-enum Slot { PRIMARY, SIDEARM, GRENADE }
-enum Action { SEMI, AUTO, BOLT, THROWN }
+enum Slot { PRIMARY, SIDEARM, GRENADE, LAUNCHER, MELEE }
+enum Action { SEMI, AUTO, BOLT, THROWN, ROCKET, MELEE }
+const SLOT_COUNT := 5
 
 @export var id: StringName
 @export var display_name := ""

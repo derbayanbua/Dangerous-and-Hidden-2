@@ -182,6 +182,26 @@ func leave(s: Soldier) -> void:
 	s.exit_vehicle(out)
 
 
+## Platz im Fahrzeug wechseln (vereinfachte Steuerung: Mausrad wählt, Linksklick bestätigt)
+func switch_seat(s: Soldier, idx: int) -> bool:
+	var cur := occupants.find(s)
+	if cur < 0 or idx < 0 or idx >= occupants.size() or idx >= seats.size() or idx == cur:
+		return false
+	if is_instance_valid(occupants[idx]):
+		return false
+	occupants[cur] = null
+	occupants[idx] = s
+	s.seat_index = idx
+	if cur == 0:
+		throttle = 0.0
+		steer_input = 0.0
+	return true
+
+
+func seat_name(idx: int) -> String:
+	return "Fahrer" if idx == 0 else ("Beifahrer" if idx == 1 else "Rücksitz %d" % (idx - 1))
+
+
 func leave_all() -> void:
 	for o in occupants.duplicate():
 		if is_instance_valid(o):

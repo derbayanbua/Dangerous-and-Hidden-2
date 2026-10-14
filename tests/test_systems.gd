@@ -121,12 +121,12 @@ func _run() -> void:
 	place(hale, 3, 32, -PI * 0.5)
 	hale.stance_request = Soldier.Stance.STAND
 	await seconds(1.0)
-	await tap("weapon_3")
-	check(hale.current_weapon() and hale.current_weapon().data.id == &"no36", "Granate ausgewählt")
-	var g0 := hale.current_weapon().total_ammo()
+	var g0 := hale.weapons[2].total_ammo()
+	var slot0 := hale.current_slot
 	hale.look_pitch = deg_to_rad(-10)   # flacher Wurf: landet nach ~12 m
-	await hold("fire", 0.1)
-	check(hale.current_weapon() == null or hale.weapons[2].total_ammo() == g0 - 1, "Granate geworfen", "%d -> %d" % [g0, hale.weapons[2].total_ammo()])
+	await tap("grenade")                # Taste G: sofort werfen, ohne Waffenwechsel
+	check(hale.weapons[2].total_ammo() == g0 - 1 and hale.current_slot == slot0, "Granate mit G geworfen (Waffe bleibt)",
+		"%d -> %d" % [g0, hale.weapons[2].total_ammo()])
 	await seconds(5.0)
 	check(e4.health < e4.max_health, "Granate verursacht Splitterschaden", "%.0f" % e4.health)
 	await tap("weapon_1")
