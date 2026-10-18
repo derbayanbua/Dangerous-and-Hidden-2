@@ -26,6 +26,7 @@ var briefing_task_ids: Array = []
 var optional_objectives: Array[int] = []
 
 var orig: OrigLevel
+var movie_textures: Array = []      ## [Film, Frame] der aktiven Filmtexturen (meshplayer.bin)
 var runtime: LsRuntime
 var actor_params := {}
 var interactive: OrigInteractive
@@ -46,6 +47,11 @@ func _build_world() -> void:
 		return
 	orig.apply_grass_setting()
 	Settings.changed.connect(orig.apply_grass_setting)
+	# Filmtexturen (meshplayer.bin: Wasserflächen mit GameMovie-Film, src/orig/orig_movie_textures.gd)
+	movie_textures = load("res://src/orig/orig_movie_textures.gd").apply(self, orig)
+	# Untergrund-Material der Kollisionsflächen (tree.klz) für Schritt-/Einschlagklänge (tools/fmt_klz.py)
+	if not OrigAudio.load_surface(orig.mission_dir):
+		print("ORIG: surface.bin fehlt (tools/fmt_klz.py %s) – Schritte ohne Untergrund" % orig_mission)
 	print("ORIG: %d Meshes, %d Instanzen, %d Kollisionskörper, %d Dummies, %d Akteure, fehlende Modelle %s" % [
 		orig.stats.meshes, orig.stats.instances, orig.stats.colliders, orig.dummies.size(), orig.actors.size(), orig.stats.missing_models])
 
@@ -93,6 +99,7 @@ func _spawn_actors() -> void:
 	_player_names.clear()
 	for i in squad.members.size():
 		runtime.register_actor("commando%d" % (i + 1), squad.members[i])
+		runtime.register_actor("_PLAYER_ %d" % i, squad.members[i])     # Original-Frame der Spielerfigur (AFRICA2 u. a.)
 		if i < players.size():
 			runtime.register_actor(String(players[i].get("name", "")), squad.members[i])
 			_player_names.append(String(players[i].get("name", "")).to_lower())
@@ -166,9 +173,17 @@ func _spawn_orig_human(nm: String, model: String, t: Transform3D) -> void:
 	_apply_orig_params(s, nm)
 	_orig_inventory(s, nm)
 	s.name = nm.validate_node_name()
+	s.set_meta("orig_model", model)     # Figur der Uniform (Uniform vom Gefangenen: Figurtausch beim Anziehen)
 	s.model.attach_orig(orig.character_instance(model))
 	runtime.register_actor(nm, s)
-	s.died.connect(func(_x): runtime.notify(s, "ONDEATH"))
+	s.died.connect(_on_actor_died.bind(s))
+
+
+## OnDeath nur einmal (Gefangene haben es schon bei der Gefangennahme erhalten)
+func _on_actor_died(_x, s: Soldier) -> void:
+	if not s.has_meta("death_notified"):
+		s.set_meta("death_notified", true)
+		runtime.notify(s, "ONDEATH")
 
 
 func water_level_at(pos: Vector3) -> float:
@@ -255,6 +270,9 @@ func _apply_orig_params(s: Soldier, nm: String) -> void:
 	var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
 	if b:
 		b.accuracy_skill = clampf(shooting / 100.0 * 0.7, 0.1, 0.9)
+		# Moral (actors.bin +0xF8): „sehr schwer“ setzt Gegnerwerte 2–8 auf 100 (0x5A8990) -> nie Panik
+		b.morale = 100.0 if enemy and diff >= 4 else float(p.get("morale", 80))
+		b.morale_initial = b.morale
 	s.set_meta("orig_params", p)
 
 
@@ -287,10 +305,36 @@ func _spawn_orig_car(nm: String, model: String, t: Transform3D) -> void:
 	v.persistent_id = nm
 	v.vehicle_name = "Opel Blitz" if model.contains("opel") else nm
 	v.max_health = 600.0
+	# Original-Fahrzeugklänge aus dem Parameterblock des Akteurs (audio.json, tools/extract_mission_audio.py)
+	var aj = LsRuntime._read_json(orig.mission_dir + "/audio.json")
+	if typeof(aj) == TYPE_DICTIONARY:
+		v.sound_files = (aj.get("vehicles", {}) as Dictionary).get(nm, {}).get("files", [])
 	var vis: Node3D = orig.model_instance(model)
 	if vis:
 		vis.rotation.y = PI
 		v.custom_visual = vis
+	# Fahrphysik-Kennwerte aus dem Car-Parameterblock (Masse, Motor, Getriebe; tools/fmt_vehicles.py)
+	v.drive_model = model
+	var vj = LsRuntime._read_json(orig.mission_dir + "/vehicles.json")
+	if typeof(vj) == TYPE_DICTIONARY:
+		var vd: Dictionary = vj.get("vehicles", {})
+		for k in vd:
+			if String(k).to_lower() == nm.to_lower():
+				v.drive_data = vd[k]
+				break
+	# Bordwaffen aus der Munition im items.dat-Inventar (z. B. Tiger: AMMO Tiger, AMMO Tank MG 34)
+	for it in actor_params.get(nm, {}).get("inventory", []):
+		if String(it.get("kind", "")) == "ammo":
+			v.ammo_items.append(int(it.get("item", -1)))
+	# Strukturpunkte (actors.bin-Fahrzeugblock nicht dekodiert) [E]: Panzer 3000, Halbkette 1200, sonst 600
+	var ml := model.to_lower()
+	if ml.contains("tiger") or ml.contains("sherman") or ml.contains("panzer") or ml.contains("panther") or ml.contains("isu"):
+		v.max_health = 3000.0
+		v.vehicle_name = {"tiger": "Tiger", "sherman": "Sherman", "panzer": "Panzer III", "panther": "Panther", "isu": "ISU-152"}.get(
+			["tiger", "sherman", "panzer", "panther", "isu"].filter(func(k): return ml.contains(k))[0], nm)
+	elif ml.contains("hakl"):
+		v.max_health = 1200.0
+		v.vehicle_name = "Halbkettenfahrzeug"
 	v.freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
 	v.freeze = true             # steht, bis das Skript losfährt oder ein Spieler einsteigt
 	dynamic_root.add_child(v)
@@ -303,6 +347,7 @@ func _spawn_orig_car(nm: String, model: String, t: Transform3D) -> void:
 	cs.position = Vector3(1.4, 0, 0)
 	cs.destroyed.connect(v.explode)
 	v.destroyed_vehicle.connect(func(): runtime.notify(v, "ONDEATH"))
+	v.hit.connect(func(_d, _by): runtime.notify(v, "ONHIT"))
 	runtime.register_actor(nm, v)
 
 
@@ -322,8 +367,8 @@ func _setup_objectives() -> void:
 		var objs: Array = entry.get("objectives", [])
 		for i in objs.size():
 			var tid := int(objs[i].get("text_id", 0))
-			if tid == CARNAGE_OBJECTIVE_TEXT:
-				continue     # Spieltyp Kampagne: Blutbad-Ziel entfällt
+			if tid == CARNAGE_OBJECTIVE_TEXT and not Game.is_carnage():
+				continue     # Spieltyp Kampagne/Einzelgänger: Blutbad-Ziel entfällt (Blutbad: *_obj_krvak.scr aktiviert es)
 			var o := add_objective(StringName("o%d" % (i + 1)), t.call(tid), bool(objs[i].get("optional", false)))
 			o.state = Objective.State.INACTIVE
 			orig_objectives[i + 1] = o.id
@@ -426,6 +471,11 @@ func _configure_environment(e: Environment, sun_light: DirectionalLight3D) -> vo
 
 ## Missionsende: SaveGameValue-Werte für den nächsten Teil sichern.
 func finish(success: bool, reason: String) -> void:
+	if finished:
+		return
+	if runtime:
+		# Original-Ereignis OnExit beim Verlassen der Mission (Tagebuch-Dummies: AddDiaryText, CZECH1 Schranke)
+		runtime.run_exit_handlers()
 	if runtime and success:
 		Game.store_orig_game_values(runtime.game_values)
 	super.finish(success, reason)

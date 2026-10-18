@@ -39,6 +39,14 @@ func setup(m: Mission, level: OrigLevel) -> void:
 		n.position = Vector3(p[0], p[1], p[2])
 		waypoints[String(wn).to_upper()] = n
 	texts = _read_json(OrigLevel.cache_root() + "/texts_german.json")
+	Events.soldier_damaged.connect(_on_soldier_damaged)
+
+
+## CSC_NoTeamDamage: Schaden zwischen Kameraden während der Sequenz zurücknehmen
+func _on_soldier_damaged(s: Node, amount: float, _zone: StringName, attacker: Node) -> void:
+	if no_team_damage and s is Soldier and attacker is Soldier and attacker != s \
+			and (attacker as Soldier).team == (s as Soldier).team and (s as Soldier).alive:
+		(s as Soldier).heal(amount)
 
 
 static func _read_json(path: String):
@@ -64,9 +72,10 @@ func register_actor(nm: String, s: Node3D) -> void:
 
 
 ## Skripte laut Zuordnung (scene.json "scripts") starten.
-func start_scripts() -> int:
+func start_scripts(extra: Dictionary = {}) -> int:
 	var data = _read_json(orig.mission_dir + "/scene.json")
-	var mapping: Dictionary = data.get("scripts", {})
+	var mapping: Dictionary = (data.get("scripts", {}) as Dictionary).duplicate()
+	mapping.merge(extra, true)      # z. B. Mehrspieler-Skripte (mpscripts.dta) aus mp.json
 	var n := 0
 	for obj in mapping:
 		var owner := find_frame(obj)
@@ -77,6 +86,7 @@ func start_scripts() -> int:
 			register_actor(obj, owner)   # damit FRM_FindFrame es findet
 		if attach_script(owner, String(mapping[obj]).to_lower()):
 			n += 1
+	_setup_hit_events()
 	return n
 
 
@@ -128,6 +138,7 @@ func _physics_process(delta: float) -> void:
 	if _formation_t <= 0.0:
 		_formation_t = 0.5
 		_update_formations()
+	_thunder_tick(delta)
 
 
 var formations := {}            ## Anführer -> {members, type, scale} (FORMATION_*)
@@ -322,7 +333,7 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"_GETNUMMEMBERSOFCLIENTTEAM":
 			return mission.squad.alive_members().size()
 		"_SPGETGAMETYPE":
-			return 1           # Einzelspieler, normale Kampagne
+			return Game.sp_game_type()   # 1 Kampagne, 2 Einzelgänger, 3 Blutbad (+4 Einzelmission), Game.gd
 		"_RANDOMINT":
 			return randi_range(0, maxi(int(vm.value(args[0])) - 1, 0))
 		"_LOADGAMEVALUE":
@@ -331,14 +342,19 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			game_values[int(vm.value(args[0]))] = vm.value(args[1])
 			return null
 		"_GETALARMTYPE":
-			return 1
+			# Art des Alarms, der OnAlarm ausgelöst hat (1 nahe Schüsse, 2 Schüsse, 4 Schritte, 8 Geräusche, 16 Explosion,
+			# 32 gesehen, 64 verwundet, 128 Todesschrei, 256 Eigenbeschuss, 512 Leiche – EnemyBrain.AL_*)
+			var ba := _brain(vm)
+			return ba.last_alarm_type if ba and ba.last_alarm_type > 0 else EnemyBrain.AL_SEE
 		"_ACTOR_GETSTATE":
 			# Original: Menschen 1 = lebt, 0 = tot; andere Objekte: per SetActorState gesetzter Zustand
 			var af := _frame_arg(vm, args[0])
 			if Game.cli.has("debug_state"):
 				print("DBGSTATE ", vm.name, " arg=", args[0], " frame=", af.name if af else "null", " type=", af.get_class() if af else "")
 			if af is Soldier:
-				return 1 if (af as Soldier).alive else 0
+				# Gefangene gelten als ausgeschaltet (ARCTIC1 r_arc1a_obj1_sender.scr prüft deshalb alle 7 s nach:
+				# „to je kvuli zajimani“ – wegen der Gefangennahme)
+				return 1 if (af as Soldier).alive and not af.has_meta("captured") else 0
 			return int(af.get_meta("actor_state", 1)) if af else 0
 		"SETACTORSTATE":
 			var sf3 := _frame_arg(vm, args[0])
@@ -367,15 +383,233 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"HINT_ADD":
 			Events.say("Hinweis: " + text(vm.value(args[0])), 6.0)
 			return null
-		"HINT_CLEARALL", "PRINTF", "PRINTFNUMBER", "ADDDIARYTEXT":
+		"ADDDIARYTEXT":
+			# Tagebuch der Nachbesprechung (Ausgabe: Game.add_diary_text, debrief.gd)
+			if args.size() > 0:
+				Game.add_diary_text(int(vm.value(args[0])))
+			return null
+		"PLAYAVI":
+			# Film (Gamemovie\*.bik → orig_cache/movies/*.ogv), Spiel pausiert währenddessen
+			if args.size() > 0:
+				Game.play_movie(String(vm.value(args[0])))
+			return null
+		"PRINTF", "PRINTFNUMBER":
+			# Original-Debugausgabe der Skripte; nur mit --ls_print (Diagnose der Erfüllbarkeitsläufe)
+			if Game.cli.has("ls_print") and args.size() > 0:
+				print("LS %s: %s %s" % [vm.name, str(vm.value(args[0])), str(vm.value(args[1])) if args.size() > 1 else ""])
+			return null
+		"HINT_CLEARALL":
 			return null
 		"SETALARMTYPE":
+			# (Maske, an/aus): Alarmarten, die OnAlarm auslösen (SetAlarmType(1023, true) = alle)
 			var b2 := _brain(vm)
-			if b2:
-				b2.script_alarm_enabled = LsVM._truthy(vm.value(args[1])) if args.size() > 1 else true
+			if b2 and args.size() > 0:
+				var mask := int(vm.value(args[0]))
+				if args.size() < 2 or LsVM._truthy(vm.value(args[1])):
+					b2.alarm_mask |= mask
+				else:
+					b2.alarm_mask &= ~mask
 			return null
 		"DISABLEALARMS":
+			var b2b := _brain(vm)
+			if b2b:
+				b2b.script_alarm_enabled = not (LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true)
 			return null
+		"HUMAN_SETEVENTS":
+			var be := _brain(vm)
+			if be:
+				be.events_enabled = LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true
+			return null
+		"HUMAN_MOVETOALARM":
+			# zum Ort des Alarmreizes laufen (Gangart wie gesetzt, meist HUMAN_SetMODE_Run)
+			var bm := _brain(vm)
+			if bm:
+				var ap: Vector3 = bm.alarm_pos if bm.alarm_pos.is_finite() else bm.investigate_pos
+				if ap.is_finite() and ap != Vector3.ZERO:
+					bm.script_move(ap)
+					return {"wait_until": bm.script_move_done, "timeout": 60.0}
+			return null
+		"HUMAN_ILLFIRE":
+			var bf := _brain(vm)
+			var ft := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if bf and ft:
+				bf.script_ill_fire(ft, (float(vm.value(args[1])) if args.size() > 1 else 1000.0) / 1000.0)
+				return {"wait_until": bf.ill_fire_done, "timeout": 60.0}
+			return null
+		"HUMAN_WEAPONUP":
+			var sw := _soldier(vm)
+			if sw:
+				sw.aiming = LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true
+			return null
+		"HUMAN_RELOAD":
+			var sr := _soldier(vm)
+			if sr:
+				sr.reload()
+				var rw := sr.current_weapon()
+				if rw and rw.is_reloading():
+					return {"wait": rw.reload_left}
+			return null
+		"HUMAN_INVESTIGATE":
+			# zum Frame gehen und sich umsehen (Original: Untersuchen, z. B. AFRICA5 Archiv)
+			var bi := _brain(vm)
+			var fi := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if bi and fi:
+				bi.script_move(fi.global_position)
+				var t_end := [-1.0]
+				return {"wait_until": _investigate_done.bind(bi, t_end), "timeout": 45.0}
+			return null
+		"HUMAN_MOVEFROMFRAME":
+			# (Frame, Abstand m): vom Frame (z. B. Fahrzeug) wegtreten
+			var bmf := _brain(vm)
+			var ff := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if bmf and ff:
+				var dist := float(vm.value(args[1])) if args.size() > 1 else 5.0
+				var away := bmf.soldier.global_position - ff.global_position
+				away.y = 0.0
+				if away.length() < 0.1:
+					away = Vector3(1, 0, 0)
+				var cur := away.length()
+				if cur < dist:
+					bmf.script_move(bmf.soldier.global_position + away.normalized() * (dist - cur + 0.5))
+					return {"wait_until": bmf.script_move_done, "timeout": 20.0}
+			return null
+		"ADDHUMANHEALTH":
+			# (Mensch, Menge in Originaleinheiten; Gesundheit im Spiel = Original × 0,5)
+			var hh := _frame_arg(vm, args[0]) as Soldier if args.size() > 0 else null
+			if hh and hh.alive and args.size() > 1:
+				var amt := float(vm.value(args[1])) * OrigMission.HP_SCALE
+				if amt >= 0.0:
+					hh.heal(amt)
+				else:
+					hh.apply_hit(-amt, &"torso", null, Vector3.ZERO)
+			return null
+		"_GETHUMANSTOREID":
+			# Kadernummer des Soldaten (HumanStore; Speicherplätze 200–203 für den nächsten Teil)
+			var hs2 := _frame_arg(vm, args[0]) as Soldier if args.size() > 0 else null
+			if hs2 == null:
+				return -1
+			var pid := String(hs2.persistent_id)
+			return int(pid.substr(4)) if pid.begins_with("sas_") and pid.substr(4).is_valid_int() else \
+				(mission.squad.members.find(hs2) if mission.squad.members.has(hs2) else -1)
+		"CSC_GETPLAYERNUM", "CSC_GETPLAYERNUMNONPC":
+			# (n, var): n-ter lebender Spielersoldat (ohne NPC-Begleiter); sonst leerer Frame
+			if args.size() >= 2 and args[1][0] == "var":
+				var n_p := int(vm.value(args[0]))
+				var alive_p := _players()
+				vm.vars[args[1][1]] = alive_p[n_p] if n_p >= 0 and n_p < alive_p.size() else null
+			return null
+		"_GETOBJECTIVESTATUS":
+			# (a, b, c, Ziel): Zustand eines Ziels der laufenden Mission – 1 erfüllt, 3 gescheitert, 0 offen
+			# (Bedeutung der ersten drei Argumente nicht belegt; AFRICA1 af1_obj03_detector fragt Ziele 1 und 2 ab)
+			var oi2 := int(vm.value(args[args.size() - 1])) if args.size() > 0 else 0
+			var o2: Objective = mission.objective(mission.orig_objectives.get(oi2, &""))
+			if o2 == null:
+				return 0
+			match o2.state:
+				Objective.State.DONE:
+					return 1
+				Objective.State.FAILED:
+					return 3
+			return 0
+		"_CAMERAINRANGE":
+			# Abstand der aktiven Kamera zum Skriptobjekt (ARCTIC2/3: Verstärkung erscheint nur außer Sicht)
+			var cam := get_viewport().get_camera_3d()
+			return cam.global_position.distance_to(_pos(vm.me)) if cam and vm.me is Node3D else 99999.0
+		"CSC_DUPLICATEHUMAN":
+			# (Quelle, var, Name): Darsteller für eine Zwischensequenz – Kopie des Originalmodells der Figur
+			if args.size() >= 2 and args[1][0] == "var":
+				vm.vars[args[1][1]] = _duplicate_human(_frame_arg(vm, args[0]), _str(vm.value(args[2])) if args.size() > 2 else "")
+			return null
+		"CSC_RELEASEHUMAN":
+			var dh := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if dh and dh.has_meta("csc_duplicate"):
+				actors.erase(String(dh.get_meta("csc_duplicate")).to_upper())
+				dh.queue_free()
+			return null
+		"CSC_FREEHANDS", "CSC_FREEBACKPACK":
+			# Darsteller ohne Waffe in der Hand bzw. ohne Rucksack (nur Darstellung)
+			var fh := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if fh:
+				for c in fh.find_children("*", "Node3D", true, false):
+					var cn := String(c.name).to_lower()
+					if (fname == "CSC_FREEHANDS" and cn.begins_with("w_")) or (fname == "CSC_FREEBACKPACK" and cn.begins_with("b_")):
+						(c as Node3D).visible = false
+			return null
+		"CSC_FRAMESETSHADOW":
+			var sh := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if sh:
+				var on_sh := LsVM._truthy(vm.value(args[1])) if args.size() > 1 else true
+				for c in sh.find_children("*", "GeometryInstance3D", true, false):
+					(c as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if on_sh \
+						else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			return null
+		"CSC_NOTEAMDAMAGE":
+			# Zwischensequenz: kein Schaden zwischen Kameraden
+			no_team_damage = LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true
+			return null
+		"CSC_SETCAMERAFOV":
+			if args.size() > 0:
+				_cut_cam.fov = clampf(float(vm.value(args[0])), 5.0, 150.0)
+			return null
+		"CSC_SETTIMER":
+			# (Verzögerung ms, Dauer ms): Countdown-Anzeige der Zwischensequenz (ARCTIC2) – wie SetInterfaceTimer
+			if args.size() > 1:
+				var dly := float(vm.value(args[0])) / 1000.0
+				var dur := float(vm.value(args[1])) / 1000.0
+				get_tree().create_timer(dly, false).timeout.connect(func(): _set_interface_timer(dur))
+			return null
+		"CSC_SETUPFAKECUTSCENE":
+			# Sequenz ohne Kameraübernahme: Spielerfiguren ruhen (NORMANDY2) – Steuerung sperren/freigeben
+			if mission.controller and args.size() > 0:
+				mission.controller.input_enabled = not LsVM._truthy(vm.value(args[0]))
+			return null
+		"CSC_FADEOUTTOCOLOR", "CSC_FADEINFROMCOLOR":
+			# (ms, r, g, b): Blende zu/aus einer Farbe (AFRICA4 Sandsturm-Blitz: weiß)
+			var ms2 := float(vm.value(args[0])) if args.size() > 0 else 500.0
+			if args.size() >= 4:
+				_fade.color = Color(float(vm.value(args[1])) / 255.0, float(vm.value(args[2])) / 255.0,
+					float(vm.value(args[3])) / 255.0, _fade.color.a)
+			var tw4 := create_tween()
+			tw4.tween_property(_fade, "color:a", 1.0 if fname == "CSC_FADEOUTTOCOLOR" else 0.0, maxf(ms2, 1.0) / 1000.0)
+			return null
+		"THUNDERSTORM_SETON":
+			# (an/aus, Lichtframe): Gewitter – Blitze schalten das Licht kurz ein (TUTORIAL)
+			var lf := _frame_arg(vm, args[1]) if args.size() > 1 else null
+			_thunder_light = lf
+			_thunder_on = LsVM._truthy(vm.value(args[0])) if args.size() > 0 else false
+			_thunder_t = randf_range(2.0, 6.0)
+			if lf and not _thunder_on:
+				lf.visible = false
+			return null
+		"ADDPAUSESOUND":
+			# Klangquelle der Kulisse für Pausen-/Ruhephasen (BURMA2 Gras): Original-Datei als leise Schleife
+			if args.size() > 0:
+				var pf := _str(vm.value(args[0]))
+				var at2: Vector3 = (vm.me as Node3D).global_position if vm.me is Node3D and (vm.me as Node3D).is_inside_tree() else Vector3.ZERO
+				OrigAudio.play_file(pf if pf.ends_with(".wav") else pf + ".wav", at2, 2.0, 40.0, 0.6, self, true)
+			return null
+		"FRM_FINISHINDEXEDPARTICLE":
+			# Partikelsystem auslaufen lassen (keine neuen Teilchen, Knoten verschwindet danach)
+			var fpi := int(vm.value(args[0])) if args.size() > 0 else -1
+			var fpn = _indexed_particles.get(fpi)
+			if is_instance_valid(fpn) and fpn is GPUParticles3D:
+				(fpn as GPUParticles3D).emitting = false
+				get_tree().create_timer((fpn as GPUParticles3D).lifetime + 0.5, false).timeout.connect(fpn.queue_free)
+			_indexed_particles.erase(fpi)
+			return null
+		"FRM_SETANIMATIONDELAYED", "FRM_STOPANIMATION", "FRM_SETSHIFTING":
+			return null    # *.i3d-Animationen / Texturverschiebung (Kette CZECH1): Daten nicht dekodiert, ohne Wirkung
+		"_MP_ISITEMINTEAMINVENTORY":
+			# (Seite, Gegenstand, var): trägt ein Soldat der Seite (1 = Achse, 0 = Alliierte) den Gegenstand?
+			var team_mp := Soldier.TEAM_AXIS if args.size() > 0 and int(vm.value(args[0])) == 1 else Soldier.TEAM_ALLIED
+			var item_mp := int(vm.value(args[1])) if args.size() > 1 else -1
+			for n_mp in get_tree().get_nodes_in_group("team_%d" % team_mp):
+				var so_mp := n_mp as Soldier
+				if so_mp and so_mp.alive and so_mp.get_meta("orig_items", []).has(item_mp):
+					if args.size() > 2 and args[2][0] == "var":
+						vm.vars[args[2][1]] = so_mp
+					return 1
+			return 0
 		# --- Menschen (eigener Akteur) ---
 		"HUMAN_SUSPEND":
 			var b3 := _brain(vm)
@@ -497,7 +731,10 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			return null
 		"PLAYMUSIC", "PLAYCUTSCENEMUSIC":
 			if extras and args.size() > 0:
-				extras.play_table(int(vm.value(args[0])))
+				if fname == "PLAYMUSIC":
+					extras.play_table(int(vm.value(args[0])))
+				else:
+					extras.play_cutscene(int(vm.value(args[0])))
 			return null
 		"_ISININVENTORY":
 			# Original-Gegenstände (items.dat) im Inventar: Inventarsystem für Originalgegenstände offen
@@ -568,8 +805,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"_GETNUMLIVEENEMIES", "_GETCOUNTOFCARNAGEENEMIES":
 			var n2 := 0
 			for e in mission.enemies:
-				if is_instance_valid(e) and e.alive:
-					n2 += 1
+				if is_instance_valid(e) and e.alive and not e.has_meta("hands_up"):
+					n2 += 1      # Ergebene/Gefangene zählen nicht als lebende Gegner
 			return n2
 		"_SPGETGAMEDIFFICULTY":
 			return Game.difficulty()
@@ -765,9 +1002,13 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"PLAYSOUND":
 			if args.size() > 0:
 				var v = vm.value(args[0])
-				# 8-stellige Werte = Sprachaufnahmen; kleine Zahlen = Effektklänge der Soundtabelle (noch nicht zugeordnet)
+				# 8-stellige Werte = Sprachaufnahmen; PlaySound(Kategorie, Gruppe) = Klangtabelle IngameSounds.def
+				# (z. B. (6, 2) „Explosion Dirt“, (2, 5) Schuss K98, (12, 8) „See Target“) am Skriptbesitzer
 				if (v is int or v is float) and int(v) >= 1000000:
 					speak(vm.me, v)
+				elif args.size() > 1 and (v is int or v is float):
+					var at: Vector3 = (vm.me as Node3D).global_position if vm.me is Node3D and (vm.me as Node3D).is_inside_tree() else Vector3.ZERO
+					OrigAudio.play_group(int(v), int(vm.value(args[1])), at)
 			return null
 		"HUMAN_SETWAITFORPLAYER":
 			var bw := _brain(vm)
@@ -825,7 +1066,11 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				car.fuel = float(vm.value(args[1]))
 			return null
 		"HUMAN_BOARDVEHICLE":
-			return _board(vm, _str(vm.value(args[0])) if args.size() > 0 else "")
+			# (Fahrzeug/Stellung, 1 = einsteigen / 0 = aussteigen, Sitz) – Kommentare AFRICA2 af2_posily_01:
+			# „prave nastoupil“ (eingestiegen) bei 1, „prave vystoupil“ (ausgestiegen) bei 0 [B]
+			var enter := LsVM._truthy(vm.value(args[1])) if args.size() > 1 else true
+			var seat := int(vm.value(args[2])) if args.size() > 2 else -1
+			return _board(vm, _str(vm.value(args[0])) if args.size() > 0 and enter else "", seat)
 		"HUMAN_DRIVE":
 			var sd := _soldier(vm)
 			var veh := sd.vehicle as Vehicle if sd else null
@@ -924,12 +1169,17 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				else:
 					_explosion(ef.global_position + Vector3.UP, rad, clampf(power * 0.2, 60.0, 900.0))
 			return null
-		"FRM_SETANIMATION", "HUMAN_SETANIM", "HUMAN_SETOPTIMIZED", "HUMAN_SETEVENTS", "HUMAN_LOOKAROUND", \
+		"HUMAN_LOOKAROUND":
+			var bl := _brain(vm)
+			if bl:
+				bl.set_look_around(int(vm.value(args[0])) if args.size() > 0 else 1)
+			return null
+		"FRM_SETANIMATION", "HUMAN_SETANIM", "HUMAN_SETOPTIMIZED", \
 				"FRM_SWITCHFACETEXTURE", "FRM_SETLIGHTMAP", "FRM_SETGROUPLIGHTMAP", "CHECKPOINTJOIN", "CHECKPOINTSEPARATE":
 			return null    # Animation/Gesicht/Beleuchtung: vorerst ohne Wirkung (Original-Animationen: offen)
 		"HUMAN_ACTIVITY_SMOKE", "HUMAN_ACTIVITY_POINT", "HUMAN_ACTIVITY_SIT", "HUMAN_ACTIVITY_DRINKBOTTLE", \
 				"HUMAN_ACTIVITY_COLD", "HUMAN_ACTIVITY_HAT", "HUMAN_ACTIVITY_TURK", "HUMAN_ACTIVITY_HOT", "HUMAN_ACTIVITY_CHECKWEAPON", "HUMAN_ACTIVITY_BINOCULARS", \
-				"HUMAN_ACTIVITY_BINOCULARSEND":
+				"HUMAN_ACTIVITY_BINOCULARSEND", "HUMAN_ACTIVITY_SALUTE", "HUMAN_ACTIVITY_CARD":
 			return {"wait": 2.0}  # Tätigkeitsanimation (Platzhalter: kurze Pause)
 	if not unimplemented.has(fname):
 		unimplemented[fname] = 0
@@ -938,6 +1188,170 @@ func call_api(vm: LsVM, fname: String, args: Array):
 
 
 var _voice_cache := {}
+var no_team_damage := false      ## CSC_NoTeamDamage (Zwischensequenz)
+var _thunder_on := false
+var _thunder_light: Node3D
+var _thunder_t := 0.0
+var _dup_count := 0
+
+
+## HUMAN_Investigate: nach Ankunft 4 s umsehen (Dauer = ANNAHME)
+func _investigate_done(b, t_end: Array) -> bool:
+	if not is_instance_valid(b) or not b.soldier.alive:
+		return true
+	if float(t_end[0]) < 0.0:
+		if b.script_move_done():
+			t_end[0] = Time.get_ticks_msec() / 1000.0 + 4.0
+			b.script_look_at = b.soldier.global_position + b.soldier.forward() * 5.0
+		return false
+	b.soldier.look_yaw += 0.03
+	return Time.get_ticks_msec() / 1000.0 >= float(t_end[0])
+
+
+## CSC_DuplicateHuman: Darsteller = Kopie der Originalfigur (nur Darstellung, ohne KI/Kollision) an der Stelle der
+## Quelle; unter dem Namen registriert (FRM_FindFrame). Zwischensequenzanimationen (.i3d) fehlen weiterhin.
+func _duplicate_human(src: Node3D, nm: String) -> Node3D:
+	if src == null:
+		return null
+	_dup_count += 1
+	var dup := Node3D.new()
+	dup.name = ("CSC_" + (nm if nm != "" else "dup%d" % _dup_count)).validate_node_name()
+	var fig: Node3D = null
+	if src is Soldier and (src as Soldier).model and (src as Soldier).model.get("orig_figure") != null:
+		var of: Node3D = (src as Soldier).model.orig_figure
+		if is_instance_valid(of):
+			fig = of.duplicate() as Node3D
+	if fig:
+		dup.add_child(fig)
+	mission.dynamic_root.add_child(dup)
+	dup.global_transform = src.global_transform
+	dup.set_meta("csc_duplicate", nm if nm != "" else String(dup.name))
+	if nm != "":
+		register_actor(nm, dup)
+	return dup
+
+
+## Gewitter (THUNDERSTORM_SetOn): Blitze schalten das Lichtframe kurz ein, Donner aus der Klangtabelle
+func _thunder_tick(delta: float) -> void:
+	if not _thunder_on or not is_instance_valid(_thunder_light):
+		return
+	_thunder_t -= delta
+	if _thunder_t <= 0.0:
+		_thunder_t = randf_range(4.0, 12.0)
+		_thunder_light.visible = true
+		get_tree().create_timer(0.15, false).timeout.connect(func():
+			if is_instance_valid(_thunder_light):
+				_thunder_light.visible = false)
+
+
+## OnExit (Missionsende): Tagebuch-/Aufräum-Ereignisse aller Skripte sofort ausführen (Delay wird übersprungen)
+func run_exit_handlers() -> void:
+	for vm in vms:
+		if vm.terminated or not vm.code.handlers.has("ONEXIT"):
+			continue
+		vm.paused = false
+		vm.events.clear()
+		vm.atomic = false
+		vm._enter(vm.code.handlers["ONEXIT"])
+		for i in 50:
+			vm.wait = 0.0
+			vm.wait_until = Callable()
+			if vm.ended:
+				break
+			vm._run()
+
+
+## OnHit: Treffer an Skriptobjekten (Soldaten über damaged, Fahrzeuge über Vehicle.hit, Objekte über Trefferflächen)
+func _setup_hit_events() -> void:
+	# Szenenobjekte mit OnDeath-Skript ohne eigenes Steuerobjekt (z. B. BURMA1 Kisten „Bedne_obj*“ mit Flugzeugteilen):
+	# durch Explosionen zerstörbar -> OnDeath (Schadensschwelle 40 = ANNAHME, Objektgesundheit nicht dekodiert)
+	for vm in vms:
+		var o2: Node3D = vm.me
+		if not vm.code.handlers.has("ONDEATH") or not is_instance_valid(o2) or o2 is Soldier or o2 is Vehicle \
+				or o2 is Dog or o2.has_meta("orig_ctl") or o2.has_meta("script_breakable"):
+			continue
+		if o2.find_children("*", "MeshInstance3D", true, false).is_empty():
+			continue     # Dummies ohne Modell
+		var br := ScriptBreakable.new()
+		br.runtime = self
+		br.target = o2
+		o2.add_child(br)
+		o2.set_meta("script_breakable", br)
+	for vm in vms:
+		if not vm.code.handlers.has("ONHIT") or not is_instance_valid(vm.me):
+			continue
+		var own: Node3D = vm.me
+		if own is Soldier:
+			if not own.has_meta("onhit_connected"):
+				own.set_meta("onhit_connected", true)
+				(own as Soldier).damaged.connect(func(_a, _z): notify(own, "ONHIT"))
+			continue
+		if own is Vehicle:
+			continue      # orig_mission verbindet Vehicle.hit
+		var proxy := HitProxy.new()
+		proxy.runtime = self
+		proxy.target = own
+		own.add_child(proxy)
+		var bodies := own.find_children("*", "CollisionObject3D", true, false)
+		for b in bodies:
+			if not b.has_meta("hit_proxy"):
+				b.set_meta("hit_proxy", proxy)
+		if bodies.is_empty():
+			# Objekte ohne Kollision (z. B. Lampen „la_svetlo_*“): Trefferfläche aus der Modellgröße (Ebene 3, blockiert nichts)
+			var box := OrigInteractive.world_aabb(own)
+			var area := Area3D.new()
+			area.collision_layer = Hitbox.LAYER
+			area.collision_mask = 0
+			area.monitoring = false
+			var cs := CollisionShape3D.new()
+			var bs := BoxShape3D.new()
+			bs.size = box.size.max(Vector3(0.3, 0.3, 0.3))
+			cs.shape = bs
+			area.add_child(cs)
+			area.set_meta("hit_proxy", proxy)
+			own.add_child(area)
+			area.global_position = box.get_center()
+
+
+class ScriptBreakable extends Node3D:
+	var runtime
+	var target: Node3D
+	var destroyed := false
+
+	func _ready() -> void:
+		add_to_group("destructibles")
+		global_position = OrigInteractive.world_aabb(target).get_center()
+
+	func on_bullet_hit(_d: float, _by: Node) -> void:
+		runtime.notify(target, "ONHIT")
+
+	func on_explosion(d: float, _by: Node) -> void:
+		runtime.notify(target, "ONHIT")
+		if destroyed or d < 40.0:
+			return
+		destroyed = true
+		print("Skriptobjekt %s zerstört (Explosion %.0f)" % [target.name, d])
+		target.visible = false
+		target.set_meta("actor_state", 0)
+		for b in target.find_children("*", "CollisionObject3D", true, false):
+			(b as CollisionObject3D).collision_layer = 0
+		runtime.notify(target, "ONDEATH")
+
+
+class HitProxy extends Node:
+	var runtime
+	var target: Node3D
+	var _last := 0
+
+	func on_bullet_hit(_d: float, _by: Node) -> void:
+		var now := Time.get_ticks_msec()
+		if now - _last < 100:
+			return
+		_last = now
+		runtime.notify(target, "ONHIT")
+
+	func on_explosion(d: float, by: Node) -> void:
+		on_bullet_hit(d, by)
 
 
 ## Satz sprechen: Original-Aufnahme (orig_cache/sounds/<id>.wav) am Sprecher abspielen und
@@ -946,24 +1360,12 @@ func speak(who: Node3D, id) -> float:
 	var key := "%08d" % int(id)
 	var t := text(id)
 	var dur := clampf(t.length() * 0.07, 1.5, 8.0)
-	var stream: AudioStreamWAV = _voice_cache.get(key)
-	if stream == null:
-		var path := OrigLevel.cache_root() + "/sounds/" + key + ".wav"
-		if FileAccess.file_exists(path):
-			stream = AudioStreamWAV.load_from_file(path)
-			_voice_cache[key] = stream
-	if stream:
-		dur = stream.get_length()
-		var p := AudioStreamPlayer3D.new()
-		p.stream = stream
-		p.unit_size = 6.0
-		p.max_distance = 60.0
-		if is_instance_valid(who):
-			who.add_child(p)
-		else:
-			add_child(p)
-		p.finished.connect(p.queue_free)
-		p.play()
+	# Sprachausgabe über OrigAudio (Bus „Voice“, Lautstärke-Regler „Sprache“)
+	var at: Vector3 = who.global_position if is_instance_valid(who) and who.is_inside_tree() else Vector3.ZERO
+	var p := OrigAudio.play_file(key + ".wav", at, 6.0, 60.0, 1.0, who if is_instance_valid(who) else self,
+		false, &"Voice")
+	if p:
+		dur = p.stream.get_length()
 	if t != "" and Settings.subtitles:
 		subtitle.emit(t, dur + 0.5)
 		Events.say(t, dur + 0.5)
@@ -972,7 +1374,7 @@ func speak(who: Node3D, id) -> float:
 
 ## HUMAN_BoardVehicle: Fahrzeug (Vehicle) besteigen, MG-Stellung (Akteurtyp 21) besetzen;
 ## leerer Name = aussteigen bzw. Stellung verlassen.
-func _board(vm: LsVM, target_name: String):
+func _board(vm: LsVM, target_name: String, seat := -1):
 	var s := _soldier(vm)
 	if s == null or not s.alive:
 		return null
@@ -980,6 +1382,8 @@ func _board(vm: LsVM, target_name: String):
 	if target_name == "":
 		if s.vehicle is Vehicle:
 			(s.vehicle as Vehicle).leave(s)
+		if s.mounted != null and is_instance_valid(s.mounted) and s.mounted.has_method("dismount"):
+			s.mounted.dismount()
 		if s.has_meta("mg_post"):
 			s.remove_meta("mg_post")
 		return null
@@ -988,37 +1392,63 @@ func _board(vm: LsVM, target_name: String):
 		var v := t as Vehicle
 		if s.global_position.distance_to(v.global_position) > 12.0 and b:
 			b.script_move(v.global_position + v.global_basis.x * 2.0)
-			return {"wait_until": _board_wait.bind(s, v), "timeout": 20.0}
-		_board_now(s, v)
+			return {"wait_until": _board_wait.bind(s, v, seat), "timeout": 20.0}
+		_board_now(s, v, seat)
 		return null
 	if t:
-		# MG-Stellung: hinter die Waffe stellen und von dort sichern
+		# Waffenstellung (Akteurtyp 21): hinter die Waffe gehen und sie besetzen (OrigEmplacement)
+		var ctl = t.get_meta("orig_ctl") if t.has_meta("orig_ctl") else null
 		s.set_meta("mg_post", t)
-		var behind := t.global_position - t.global_basis.z * 0.9
+		var behind: Vector3 = ctl.gunner_spot() if ctl and is_instance_valid(ctl) and ctl.has_method("gunner_spot") \
+			else t.global_position + t.global_basis.z * 0.9
 		if b:
-			b.script_move(behind)
-			b.script_stance = Soldier.Stance.CROUCH
 			b.home_pos = behind
-			return {"wait_until": b.script_move_done, "timeout": 20.0}
-		s.global_position = behind
+			if b.distance_to(behind) > 2.5:
+				b.script_move(behind)
+				return {"wait_until": _mount_wait.bind(s, ctl), "timeout": 20.0}
+		else:
+			s.global_position = behind
+		_mount_now(s, ctl)
 	return null
 
 
-func _board_now(s: Soldier, v: Vehicle) -> bool:
+func _mount_now(s, ctl) -> void:
+	if ctl and is_instance_valid(ctl) and ctl.has_method("can_ai_mount") and ctl.can_ai_mount(s):
+		var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
+		if b:
+			b.stop_moving()
+		ctl.mount(s)
+
+
+## Warten bis der Akteur an der Stellung ist, dann besetzen (untypisiert: Argumente können freigegeben sein)
+func _mount_wait(s, ctl) -> bool:
+	if not is_instance_valid(s) or not s.alive:
+		return true
+	var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
+	# nah genug (die Waffe selbst versperrt den letzten Meter) oder Weg beendet -> besetzen
+	var near: bool = ctl != null and is_instance_valid(ctl) and ctl.has_method("gunner_spot") \
+		and (s as Node3D).global_position.distance_to(ctl.gunner_spot()) < 2.5
+	if b == null or near or b.script_move_done():
+		_mount_now(s, ctl)
+		return true
+	return false
+
+
+func _board_now(s: Soldier, v: Vehicle, seat := -1) -> bool:
 	if s.vehicle == v:
 		return true
 	var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
 	if b:
 		b.stop_moving()
-	return v.board(s, true)
+	return v.board(s, seat <= 0, seat)
 
 
 ## Warten bis der Akteur am Fahrzeug ist (untypisiert: Argumente k?nnen inzwischen freigegeben sein)
-func _board_wait(s, v) -> bool:
+func _board_wait(s, v, seat := -1) -> bool:
 	if not is_instance_valid(s) or not is_instance_valid(v) or not s.alive:
 		return true
 	if s.global_position.distance_to(v.global_position) < 5.0:
-		return _board_now(s, v) or true
+		return _board_now(s, v, seat) or true
 	var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
 	return b == null or b.script_move_done()
 
@@ -1138,8 +1568,9 @@ func _drive_route(from: Vector3, goal_node: int) -> Array:
 	return pts
 
 
-func _explosion(pos: Vector3, radius: float, damage: float) -> void:
-	Effects.explosion(pos, radius)
+## sound: [Kategorie, Gruppe] der Klangtabelle (Sprengplatz: Akteurwert explosion_sound, Kat. 6)
+func _explosion(pos: Vector3, radius: float, damage: float, sound: Array = [6, 0]) -> void:
+	Effects.explosion(pos, radius, sound)
 	Events.emit_noise(pos, 400.0, null, Soldier.TEAM_AXIS, &"explosion")
 	OrigInteractive.damage_objects(get_tree(), pos, radius, damage)
 	var space := get_viewport().world_3d.direct_space_state
@@ -1178,6 +1609,7 @@ var _fade: ColorRect
 var _skip_label: Label
 var _snow: GPUParticles3D
 var auto_skip := false          ## Tests: Zwischensequenzen sofort überspringen
+var _cutscene_vms: Array = []   ## Skripte mit OnCutscene(n) der laufenden Sequenz (Schnelldurchlauf beim Überspringen)
 
 
 func _ready() -> void:
@@ -1214,8 +1646,10 @@ func run_cutscene(n: int, vm: LsVM) -> void:
 	if mission.hud:
 		mission.hud.visible = false
 	_skip_label.visible = true
+	_cutscene_vms.clear()
 	for v in vms:
-		v.fire("ONCUTSCENE:%d" % n)
+		if v.fire("ONCUTSCENE:%d" % n):
+			_cutscene_vms.append(v)
 	if auto_skip:
 		end_cutscene.call_deferred()
 
@@ -1226,12 +1660,25 @@ func end_cutscene() -> void:
 	in_cutscene = false
 	_cam_frame = null
 	_cam_target = null
-	if _cutscene_vm and _cutscene_vm.code.handlers.has("ONCUTSCENE:%d" % cutscene_id):
-		# laufenden Sequenzablauf abbrechen (Überspringen)
-		_cutscene_vm.stack.clear()
-		_cutscene_vm.ended = true
-		_cutscene_vm.wait = 0.0
-		_cutscene_vm.atomic = false
+	# Überspringen: Sequenzabläufe (OnCutscene(n)) im Schnelldurchlauf zu Ende führen statt abzubrechen – sie enthalten
+	# oft Spielzustand (CZECH2 cut2.scr: SendSignal(obj, 1) = „Freiberg ergriffen“); Wartezeiten entfallen
+	var key := "ONCUTSCENE:%d" % cutscene_id
+	for vv in _cutscene_vms:
+		var v := vv as LsVM
+		if v == null or not is_instance_valid(v.me) or v.terminated:
+			continue
+		var qi: int = v.events.find(key)
+		if qi >= 0:
+			v.events.remove_at(qi)
+			v._enter(v.code.handlers[key])
+		for i in 400:
+			v.wait = 0.0
+			v.wait_until = Callable()
+			if v.ended or not v.events.is_empty():
+				break
+			v._run()
+		v.atomic = false
+	_cutscene_vms.clear()
 	for v in vms:
 		v.fire("ONCUTSCENEDONE:%d" % cutscene_id)
 	mission.controller.input_enabled = true

@@ -137,7 +137,7 @@ func _run() -> void:
 	btn("bsound setup").pressed.emit()
 	await frames(2)
 	var sliders := get_tree().root.find_children("*", "HSlider", true, false)
-	check(sliders.size() == 2, "Sound-Seite: 2 Regler (Sound, Musik)", str(sliders.size()))
+	check(sliders.size() == 4, "Sound-Seite: Original-Regler Sound, Musik + Ergänzung Effekte, Sprache", str(sliders.size()))
 	if sliders.size() == 2:
 		(sliders[1] as HSlider).value = 0.25
 		await frames(1)
@@ -194,4 +194,58 @@ func _run() -> void:
 		"Profil gelöscht (Ordner entfernt), verbleibendes Profil aktiv", Game.profile_name)
 	Game.delete_profile("Charlie")
 	check(not Game.has_profile(), "Letztes Profil gelöscht -> kein aktuelles Profil")
+
+	# --- Mehrspieler „SPIELER-SETUP“ (player screen.4ds) ---
+	var old_cls := Net.local_class
+	var ps := PlayerSetupScreen.new()
+	get_tree().root.add_child(ps)
+	ps.open(String(Game.MP_MAPS[0]) if not Game.MP_MAPS.is_empty() else "")
+	await frames(2)
+	check(ps.has_layout() and ps.find_child("Accept", true, false) != null and ps.class_label(1) != "",
+		"SPIELER-SETUP: Originallayout, Klassenliste aus mp.json", ps.class_label(1))
+	ps.cls = 1
+	ps.accept()
+	check(Net.local_class == 1, "AKZEPTIEREN übernimmt die Klasse (Net.local_class)")
+	Net.local_class = old_cls
+	ps.queue_free()
+	await _check_credits(menu)
 	_finish()
+
+
+## MITWIRKENDE: Original-Rolltext aus orig_cache (credits.txt, Parser wie hd2.exe 0x689340) + Nachbau-Abschnitt
+func _check_credits(menu: Node) -> void:
+	var sample := "; Kommentar\n1\t\"<SPEED>55\"\n10\t\"<SM>TITEL\"\n11\t\"<ES>\"\n20\t\"<TICZ>NAME Č\"\n30\t\"<EL>\"\n" \
+		+ "40\t\"<SMCZ><C_1>A<C_2>B<C_3>C\"\n9990\n"
+	var p: Dictionary = menu.parse_credits(sample)
+	var ls: Array = p["lines"]
+	check(float(p["speed"]) == 55.0 and ls.size() == 5 and ls[0]["text"] == "TITEL" and ls[2]["text"] == "NAME Č"
+		and ls[2]["style"] == "TICZ" and ls[4].get("cols", []) == ["A", "B", "C"],
+		"Mitwirkende: Parser (Zeilennummer/Anführungszeichen entfernt, Stile, <SPEED>, drei Spalten)", str(p))
+	var reb: Array = menu.rebuild_credits()
+	var reb_txt := " ".join(reb.map(func(e): return String(e["text"])))
+	check(reb_txt.contains("Dangerous and Hidden 2 (unofficial)") and reb_txt.contains("neu erstellt mit Claude Opus")
+		and reb_txt.contains("Inoffizieller Fan-Nachbau"), "Mitwirkende: Abschnitt inoffizieller Nachbau (Claude Opus)", reb_txt)
+	var path: String = menu._menu_dir + "/credits.txt"
+	var have_orig := FileAccess.file_exists(path)
+	var orig_lines: Array = []
+	if have_orig:
+		orig_lines = menu.parse_credits(FileAccess.get_file_as_string(path))["lines"]
+	var clean := true
+	for e in orig_lines:
+		var t := String(e["text"])
+		clean = clean and not t.contains("\"") and not t.contains("<") and not t.begins_with("1\t")
+	check(not have_orig or (orig_lines.size() > 500 and clean), "Mitwirkende: Originalliste aus orig_cache vollständig gelesen",
+		"%s: %d Zeilen" % [path, orig_lines.size()])
+	menu.show_menu("main_menu")
+	await frames(2)
+	menu._show_credits()
+	await frames(3)
+	var content: Control = menu.credits_content
+	check(content != null and content.get_child_count() > (400 if have_orig else 5) and menu.credits_height > 768.0,
+		"Mitwirkende: Rolltext aufgebaut", "%d Zeilen, Höhe %.0f" % [content.get_child_count() if content else 0, menu.credits_height])
+	var y0: float = content.position.y if content else 0.0
+	await get_tree().create_timer(0.5).timeout
+	check(content != null and is_instance_valid(content) and content.position.y < y0, "Mitwirkende: Text rollt nach oben")
+	menu._close_credits()
+	await frames(2)
+	check(not is_instance_valid(menu._credits_root), "Mitwirkende: Abbruch kehrt ins Hauptmenü zurück")

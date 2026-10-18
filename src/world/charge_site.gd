@@ -62,7 +62,7 @@ func detonate() -> void:
 	if _charge_mesh:
 		_charge_mesh.queue_free()
 	var pos := global_position + Vector3.UP
-	Effects.explosion(pos, 6.0)
+	Effects.explosion(pos, 6.0, [OrigAudio.CAT_EXPLOSION, OrigAudio.EXP_CHARGE_OUT])   # „Explosion Naloz Ext“
 	Events.emit_noise(pos, 400.0, _planter, Soldier.TEAM_ALLIED, &"explosion")
 	# Splitterwirkung wie Granate (mit Sichtlinienprüfung)
 	var space := get_world_3d().direct_space_state

@@ -15,6 +15,9 @@ const MISSION_SCENE := "res://scenes/mission.tscn"
 var profiles_dir := "user://profiles"   ## Tests: --profiles_dir=user://test_profiles
 
 ## Missionsregister: id -> Daten. script = Skript, das die Welt aufbaut.
+## Optionale Schlüssel eigener Karten: "map_image" (Kartenbild für den Ladebildschirm), "mp_allowed_from"
+## (Original-MP-Ordner, dessen Freigabeliste ALLOWEDITEMS und Klassenvorlagen die Karte übernimmt).
+## Weitere Einträge kommen optional aus den lokalen Zusatzinhalten (LOCAL_CONTENT, nicht im Repository).
 var MISSIONS := {
 	# Originalmission 1 (Arctic): Titel/Briefing kommen aus den Originaltexten (orig_texts)
 	"a1_blizzard": {
@@ -123,15 +126,26 @@ var MP_MAPS: Array = []
 
 func _register_mp_maps(texts) -> void:
 	MP_MAPS.clear()
+	# Lokale eigene Karten (local_content „mp_maps_first“) direkt in der Hauptauswahl, vor Originalen/Arenen.
+	for id in local_content.get("mp_maps_first", []):
+		if MISSIONS.has(String(id)) and not MP_MAPS.has(String(id)):
+			MP_MAPS.append(String(id))
 	var d = LsRuntime._read_json(OrigLevel.cache_root() + "/mp_maps.json")
 	if typeof(d) == TYPE_DICTIONARY:
+		# Original-MP-Karten (nur im Original spielbare, je Karte genau ein Spielstil)
+		const STYLE_MODE := {"deathmatch": 0, "occupation": 2, "objectives": 3}
+		const STYLE_TEXT := {"deathmatch": "Deathmatch", "occupation": "Besetzung", "objectives": "HD2-Aufgaben"}
 		for e in d.get("maps", []):
 			var folder := String(e.get("folder", ""))
-			if folder == "" or not DirAccess.dir_exists_absolute(OrigLevel.cache_root() + "/" + folder.to_lower()):
+			if folder == "" or not bool(e.get("playable_in_original", true)) \
+					or not FileAccess.file_exists(OrigLevel.cache_root() + "/" + folder.to_lower() + "/scene.json"):
 				continue
+			var st: Array = e.get("styles", [])
+			var style := String(st[0].get("style", "deathmatch")) if not st.is_empty() else "deathmatch"
 			var id := "mp_" + folder.to_lower()
-			MISSIONS[id] = {"title": String(e.get("title", folder)), "script": "res://src/missions/mp_arena.gd",
-				"orig": folder, "k": 0, "briefing": "", "modes": e.get("modes", [])}
+			MISSIONS[id] = {"title": "%s (%s)" % [String(e.get("map_name", folder)), STYLE_TEXT.get(style, style)],
+				"script": "res://src/missions/mp_arena.gd", "orig": folder, "k": 0, "briefing": "",
+				"mp_mode": int(STYLE_MODE.get(style, 0))}
 			MP_MAPS.append(id)
 	for e in [["a1_blizzard", "ARCTIC1", 0], ["a2_erkundung", "ARCTIC2", 1], ["a3_rendezvous", "ARCTIC3", 2]] + ORIG_CAMPAIGN:
 		var mid: String = "mp_arena_" + String(e[0])
@@ -140,9 +154,44 @@ func _register_mp_maps(texts) -> void:
 		MP_MAPS.append(mid)
 
 
+
 ## Eigene Prototyp-Einsätze (kein Original-Leveldesign): jederzeit wählbar, nicht Teil der Kampagne.
 var PRACTICE_MISSIONS: Array = ["m01_funkfeuer", "m02_nordlicht", "m03_sandsturm"]
 var campaign := {}
+
+
+## Lokale Zusatzinhalte (Ordner res://local/, gitignored – NICHT im Repository): eigene Karten/Einsätze
+## (Registereinträge, MP-Kartenauswahl, Übungseinsätze) und Heldenfiguren (Net.heroes()). Fehlt die Datei
+## (frischer Klon), läuft das Spiel ohne diese Inhalte. Format: siehe Kopf von local_content.gd.
+const LOCAL_CONTENT := "res://local/local_content.gd"
+var local_content := {}
+
+
+## Inhalt von LOCAL_CONTENT (static func content() -> Dictionary); {} ohne lokale Datei
+static func read_local_content() -> Dictionary:
+	if not ResourceLoader.exists(LOCAL_CONTENT):
+		return {}
+	var sc = load(LOCAL_CONTENT)
+	if not (sc is Script) or not (sc as Script).get_script_method_list().any(func(m): return String(m.get("name", "")) == "content"):
+		return {}
+	var d = sc.content()
+	return d if typeof(d) == TYPE_DICTIONARY else {}
+
+
+func _load_local_content() -> void:
+	local_content = read_local_content()
+	var ms = local_content.get("missions", {})
+	if typeof(ms) == TYPE_DICTIONARY:
+		for id in ms:
+			MISSIONS[String(id)] = ms[id]
+	for id in local_content.get("practice_missions", []):
+		if MISSIONS.has(String(id)) and not PRACTICE_MISSIONS.has(String(id)):
+			PRACTICE_MISSIONS.append(String(id))
+
+
+## Original-MP-Ordner, dessen Freigabeliste/Klassen eine eigene Karte übernimmt (Registerschlüssel "mp_allowed_from")
+func mp_allowed_from(map: String) -> String:
+	return String(MISSIONS.get(map, {}).get("mp_allowed_from", ""))
 
 
 # --- Profile ---------------------------------------------------------------------
@@ -203,6 +252,9 @@ func create_profile(n: String, diff: int = 2) -> bool:
 	profile = {"name": n, "difficulty": diff, "created": Time.get_datetime_string_from_system(false, true),
 		"playtime": 0.0, "kills": 0, "enemies_killed": 0, "shots": 0, "missions": 0}
 	profile_name = n
+	end_single_mission()
+	game_mode = MODE_CAMPAIGN
+	_campaigns = {}
 	if not _memory_profile:
 		DirAccess.make_dir_recursive_absolute(profile_dir() + "/saves")
 		save_profile()
@@ -223,6 +275,9 @@ func select_profile(n: String) -> bool:
 		return false
 	profile = p
 	profile_name = n
+	end_single_mission()
+	game_mode = MODE_CAMPAIGN
+	_campaigns = {}
 	DirAccess.make_dir_recursive_absolute(profile_dir() + "/saves")
 	load_campaign()
 	_remember_current()
@@ -420,14 +475,17 @@ func new_campaign() -> void:
 	save_campaign()
 
 
+## Kampagnenstand je Spielmodus (Original: getrennter Fortschritt Kampagne/Einzelgänger/Blutbad, profile.sav 0x1F05)
 func campaign_path() -> String:
-	return profile_dir() + "/campaign.json"
+	return profile_dir() + "/" + {MODE_CAMPAIGN: "campaign.json", MODE_LONE_WOLF: "campaign_lone_wolf.json",
+		MODE_CARNAGE: "campaign_carnage.json"}.get(game_mode, "campaign.json")
 
 
 func load_campaign() -> void:
-	# Automatisierte Tests arbeiten mit einer frischen Kampagne im Speicher
+	# Automatisierte Tests arbeiten mit einer frischen Kampagne im Speicher (je Modus)
 	if _memory_profile or not has_profile() or not FileAccess.file_exists(campaign_path()):
-		campaign = {"unlocked": [CAMPAIGN_ORDER[0]], "completed": [], "fallen": []}
+		var fresh := {"unlocked": [CAMPAIGN_ORDER[0]], "completed": [], "fallen": []}
+		campaign = _campaigns.get(game_mode, fresh) if _memory_profile else fresh
 		return
 	var d = JSON.parse_string(FileAccess.get_file_as_string(campaign_path()))
 	if typeof(d) == TYPE_DICTIONARY and d.has("unlocked"):
@@ -437,11 +495,167 @@ func load_campaign() -> void:
 
 
 func save_campaign() -> void:
+	if _in_preview:
+		return
+	if single_mission:
+		return             # Original: Einzelmissionen ändern den Kampagnenstand nicht
+	_campaigns[game_mode] = campaign
 	if _memory_profile or not has_profile():
 		return
 	var f := FileAccess.open(campaign_path(), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(campaign, "\t"))
+
+
+# --- Spielmodi (Original singleplayer.4ds: Kampagne, Einzelgänger, Blutbad, Einzelmission, Einzelmission-Blutbad) ---
+## Original [0x8AE924]+8 = Modus 1 Kampagne, 2 Einzelgänger, 3 Blutbad; +4 = 1 bei Einzelmission
+## (re_notes_profiles). Skriptwert _SPGetGameType = Modus (+4 bei Einzelmission; die Skripte prüfen 3 oder 7 für
+## Blutbad, 2 für Einzelgänger – die Zuordnung 5/7 = Einzelmission ist eine Annahme [P]).
+## Einzelgänger: Team aus einem Mann, „Team wieder auffüllen“ entfällt (0x6C20F0). Blutbad: zusätzliches Ziel
+## „Töten Sie die Feinde“ (T6063, *_obj_krvak.scr). Einzelmission: freigeschaltete Kampagnenmission mit Team- und
+## Ausrüstungswahl (Lager = Summe aller Listen der Kampagne bis zur Mission, 0x6B93C0), ändert nichts am Stand.
+const MODE_CAMPAIGN := 1
+const MODE_LONE_WOLF := 2
+const MODE_CARNAGE := 3
+## Spielstand-Präfixe je Modus-Slot (profile.sav 0x1EFA…0x1EFE)
+const MODE_PREFIX := {1: "CAM", 2: "LOW", 3: "CAR"}
+const MODE_TEXT := {1: 2202, 2: 2203, 3: 2204}
+var game_mode := MODE_CAMPAIGN
+var single_mission := false
+var _campaigns := {}             ## Kampagnenstände je Modus (Speicher; Tests ohne Dateien)
+var _sm_backup := {}             ## Kampagnenstand während einer Einzelmission (Kopie wird verworfen)
+
+
+func sp_game_type() -> int:
+	return game_mode + (4 if single_mission else 0)
+
+
+func is_carnage() -> bool:
+	return game_mode == MODE_CARNAGE
+
+
+func team_size() -> int:
+	return 1 if game_mode == MODE_LONE_WOLF else SQUAD_SIZE
+
+
+func mode_prefix() -> String:
+	return ("SM" if single_mission else "") + String(MODE_PREFIX.get(game_mode, "CAM"))
+
+
+func mode_title() -> String:
+	if single_mission:
+		return SAS.text(2206 if is_carnage() else 2205, "EINZELMISSION")
+	return SAS.text(int(MODE_TEXT.get(game_mode, 2202)), "KAMPAGNE")
+
+
+## Spielmodus wählen (Hauptmenü Einzelspieler). single = Einzelmission (Basis: Stand der Kampagne, als Kopie).
+func set_game_mode(m: int, single := false) -> void:
+	end_single_mission()
+	var base: int = MODE_CAMPAIGN if single else m
+	if base != game_mode:
+		save_campaign()
+		game_mode = base
+		load_campaign()
+	if single:
+		_sm_backup = campaign
+		campaign = campaign.duplicate(true)
+		campaign["sas_prepared"] = ""
+		single_mission = true
+		game_mode = MODE_CARNAGE if m == MODE_CARNAGE else MODE_CAMPAIGN
+
+
+func end_single_mission() -> void:
+	if not single_mission:
+		return
+	single_mission = false
+	game_mode = MODE_CAMPAIGN
+	campaign = _sm_backup
+	_sm_backup = {}
+
+
+## Fortschritt je Modus (profile.sav 0x1F05: max, Kampagne, Einzelgänger, Blutbad = Missions-Ordinal)
+func mode_progress(m: int) -> int:
+	return int(profile.get("progress", {}).get(str(m), -1))
+
+
+# --- Nachbesprechung: Übernahme erst bei SPEICHERN UND FORTSETZEN (Original 0x68CE00 → 0x68C300) -------------
+## Mission.finish bereitet einen geänderten Kampagnenstand vor (Kopie): Gefallene, Training, Erfahrung, Ränge,
+## Orden, Freischaltung, Skriptwerte. Erst commit_debrief() übernimmt ihn (und speichert den Fortschritt);
+## ERNEUT VERSUCHEN / Hauptmenü verwerfen ihn.
+var _pending := {}
+var _in_preview := false
+var _diary_pending: Array = []   ## Tagebuch-Einträge (Text-IDs) des laufenden Einsatzes (ADDDIARYTEXT)
+
+
+func _pending_campaign() -> Dictionary:
+	if _pending.is_empty():
+		_pending = campaign.duplicate(true)
+	return _pending
+
+
+## f auf dem vorbereiteten Kampagnenstand ausführen (Game.campaign zeigt währenddessen auf die Kopie)
+func _on_pending(f: Callable) -> Variant:
+	var real := campaign
+	campaign = _pending_campaign()
+	_in_preview = true
+	var r = f.call()
+	_in_preview = false
+	_pending = campaign
+	campaign = real
+	return r
+
+
+func has_pending_debrief() -> bool:
+	return not _pending.is_empty()
+
+
+## SPEICHERN UND FORTSETZEN: vorbereiteten Stand übernehmen, Tagebuch anhängen, Fortschritt des Modus setzen.
+## Einzelmissionen ändern nichts (Original 0x68C2E0: Übernahme nur in der Kampagne).
+func commit_debrief() -> void:
+	if _pending.is_empty():
+		return
+	if single_mission:
+		_pending = {}
+		_diary_pending.clear()
+		return
+	var diary: Array = _pending.get("diary", [])
+	diary.append_array(_diary_pending)
+	_pending["diary"] = diary
+	_diary_pending.clear()
+	campaign = _pending
+	_pending = {}
+	save_campaign()
+	var ord := -1
+	for id in campaign.get("completed", []):
+		ord = maxi(ord, CAMPAIGN_ORDER.find(id) + 1)
+	if ord >= 0 and has_profile():
+		var pr: Dictionary = profile.get("progress", {})
+		pr[str(game_mode)] = maxi(int(pr.get(str(game_mode), -1)), ord)
+		pr["max"] = maxi(int(pr.get("max", -1)), ord)
+		profile["progress"] = pr
+		save_profile()
+
+
+func discard_debrief() -> void:
+	_pending = {}
+	_diary_pending.clear()
+
+
+## Skriptbefehl ADDDIARYTEXT(Text-ID) (ls_runtime.gd): Eintrag im Tagebuch der Nachbesprechung
+func add_diary_text(text_id: int) -> void:
+	if _diary_pending.is_empty() or int(_diary_pending.back()) != text_id:
+		_diary_pending.append(text_id)
+
+
+## Tagebuch: bisherige Einträge der Kampagne + die dieses Einsatzes (Text-IDs)
+func diary_entries() -> Array:
+	var out: Array = (_pending if not _pending.is_empty() else campaign).get("diary", []).duplicate()
+	out.append_array(_diary_pending)
+	return out
+
+
+func new_diary_entries() -> Array:
+	return _diary_pending.duplicate()
 
 
 ## Original-Skriptwerte (SaveGameValue/_LoadGameValue) über Missionsteile hinweg.
@@ -453,12 +667,12 @@ func orig_game_values() -> Dictionary:
 	return out
 
 
+## Missionsende: Werte gehen in den vorbereiteten Stand (übernommen mit SPEICHERN UND FORTSETZEN)
 func store_orig_game_values(values: Dictionary) -> void:
 	var d := {}
 	for k in values:
 		d[str(k)] = values[k]
-	campaign["game_values"] = d
-	save_campaign()
+	_pending_campaign()["game_values"] = d
 
 
 func is_unlocked(id: String) -> bool:
@@ -534,8 +748,12 @@ func sas_team_mode(id: String) -> String:
 	var mode := SAS.team_mode(SAS.mission_info(orig_folder(id)))
 	if sas_team().is_empty():
 		return "select"
-	if mode == "keep" and sas_team().size() < SQUAD_SIZE and _alive_team().size() == 0:
+	if single_mission:
+		return "select"            # Einzelmission: Ablauf Team (Typ 2) → Ausrüstung (0x6B9680)
+	if mode == "keep" and sas_team().size() < team_size() and _alive_team().size() == 0:
 		return "select"
+	if mode == "refill" and game_mode == MODE_LONE_WOLF:
+		return "keep" if not _alive_team().is_empty() else "select"     # 0x6C20F0: Auffüllen entfällt
 	return mode
 
 
@@ -557,10 +775,18 @@ func prepare_sas(id: String, force := false) -> void:
 	var team := _alive_team()
 	var mode := sas_team_mode(id)
 	var new_storage: bool = info.get("equipment_screen") == "equipment_new_storage"   # null = kein Ausrüstungsbildschirm
+	if team.size() > team_size():
+		team = team.slice(0, team_size())
 	if team.is_empty() or mode in ["select", "refill"]:
-		team = SAS.auto_select(st, SQUAD_SIZE, team if mode != "select" or not team.is_empty() else [])
+		team = SAS.auto_select(st, team_size(), team if mode != "select" or not team.is_empty() else [])
 	set_sas_team(team)
-	campaign["storage"] = SAS.mission_storage(info, campaign.get("storage", []))
+	if mode == "select" and not single_mission:
+		_defence_medal(info)
+	if single_mission:
+		campaign["storage"] = single_mission_storage(id)
+		new_storage = true
+	else:
+		campaign["storage"] = SAS.mission_storage(info, campaign.get("storage", []))
 	var rec := SAS.recommended_presets(info)
 	# Empfohlene Presets: schwerstes Preset an den kräftigsten Soldaten (Traglast = Kraft)
 	var need: Array = []
@@ -588,6 +814,53 @@ func prepare_sas(id: String, force := false) -> void:
 		fit_inventory(idx, id)
 	campaign["sas_prepared"] = id
 	save_campaign()
+
+
+## Kampagnenbeginn (Teamauswahl Typ 2, 0x6908F0): lebende Soldaten der Tabelle 0x841CB0[Kampagne] erhalten die
+## Defence Medal (Orden 6), sofern noch nicht vorhanden.
+func _defence_medal(info: Dictionary) -> void:
+	var camp := String(info.get("campaign", ""))
+	var given: Array = campaign.get("defence_given", [])
+	if camp == "" or given.has(camp):
+		return
+	var r = LsRuntime._read_json(OrigLevel.cache_root() + "/roster.json")
+	var table: Array = r.get("defence_medal_table_0x841CB0", {}).get(camp, []) if typeof(r) == TYPE_DICTIONARY else []
+	var st := sas_states()
+	for idx in table:
+		var s: Dictionary = st.get(str(int(idx)), {})
+		if s.is_empty() or bool(s.get("dead", false)):
+			continue
+		var med: Array = s.get("medals", [])
+		if not med.has(SAS.MEDAL_DEFENCE):
+			med.append(SAS.MEDAL_DEFENCE)
+		s["medals"] = med
+	given.append(camp)
+	campaign["defence_given"] = given
+
+
+## Einzelmission (0x6B93C0): Lager = Summe aller Lagerlisten der Kampagne bis einschließlich dieser Mission
+func single_mission_storage(id: String) -> Array:
+	var info := SAS.mission_info(orig_folder(id))
+	var camp := String(info.get("campaign", ""))
+	var ord := int(info.get("ordinal", -1))
+	var out: Array = []
+	for i in range(0, ord + 1):
+		var mi := {}
+		for c in CAMPAIGN_ORDER:
+			var m := SAS.mission_info(orig_folder(c))
+			if int(m.get("ordinal", -2)) == i:
+				mi = m
+		if mi.is_empty() or String(mi.get("campaign", "")) != camp:
+			continue
+		for e in SAS.mission_storage(mi, []):
+			var found := false
+			for o in out:
+				if int(o[0]) == int(e[0]):
+					o[1] = int(o[1]) + int(e[1])
+					found = true
+			if not found:
+				out.append([int(e[0]), int(e[1])])
+	return out
 
 
 ## Überladung abbauen (Original sperrt das Fortsetzen bei Überladung): zuerst Munition/Kleinteile aus dem
@@ -706,13 +979,24 @@ func apply_sas(s: Soldier, pid: String) -> void:
 
 
 ## Nach dem Einsatz: Verbrauch ins Inventar zurückschreiben (Magazine, Granaten, Verbände), Training,
-## Erfahrung, Beförderungen, Gefallene. Ergebnis für die Nachbesprechung.
+## Erfahrung, Beförderungen, Orden, Gefallene – auf dem vorbereiteten Stand (Übernahme erst mit
+## SPEICHERN UND FORTSETZEN, commit_debrief). Ergebnis für die Nachbesprechung inkl. Soldatenpanels.
 func finish_sas(members: Array, success: bool) -> Dictionary:
+	var done := 0
+	for o in last_result.get("objectives", []):
+		if int(o[1]) == Objective.State.DONE:
+			done += 1
+	return _on_pending(func(): return _finish_sas(members, success, done))
+
+
+func _finish_sas(members: Array, success: bool, objectives_done: int) -> Dictionary:
 	var st := sas_states()
 	var gains := {}
 	var xp := {}
 	var fallen: Array = []
 	var team := sas_team()
+	var before := {}
+	var order: Array = []
 	for s in members:
 		var sol := s as Soldier
 		if sol == null or not is_sas_pid(sol.persistent_id):
@@ -720,30 +1004,52 @@ func finish_sas(members: Array, success: bool) -> Dictionary:
 		var idx := sas_index(sol.persistent_id)
 		if not st.has(str(idx)):
 			continue
+		order.append(idx)
+		before[idx] = {"stats": (st[str(idx)]["stats"] as Dictionary).duplicate(), "rank": int(st[str(idx)]["rank"]),
+			"medals": (st[str(idx)].get("medals", []) as Array).duplicate()}
+		xp[idx] = SAS.experience_gain(sol.training, sol.alive, success, objectives_done)
 		if not sol.alive:
 			st[str(idx)]["dead"] = true
 			fallen.append(idx)
 			continue
 		gains[idx] = SAS.training_gain(sol.training)
-		xp[idx] = SAS.experience_gain(sol.training, true, success)
 		_write_back_inventory(sol, idx)
-	var before := {}
-	for idx in gains:
-		before[idx] = (st[str(idx)]["stats"] as Dictionary).duplicate()
 	var promoted := SAS.apply_mission(st, team.filter(func(i): return not fallen.has(i)), gains, xp)
+	# Orden (0x68C900, nur Kampagne): je Teammitglied höchstens einer je Einsatz
+	var camp := int(SAS.CAMPAIGN_INDEX.get(String(SAS.mission_info(orig_folder(current_mission_id)).get("campaign", "")).to_lower(), -1))
+	var new_medals := {}
+	if not single_mission and camp >= 0:
+		for idx in order:
+			var sd: Dictionary = st[str(idx)]
+			if bool(sd["dead"]):
+				sd["missions"] = int(sd.get("missions", 0)) + 1
+				sd["experience"] = int(sd["experience"]) + int(xp.get(idx, 0))
+			var m := SAS.award_medal(sd, int(xp.get(idx, 0)), camp)
+			if m >= 0:
+				var med: Array = sd.get("medals", [])
+				if not med.has(m):
+					med.append(m)
+				sd["medals"] = med
+				new_medals[idx] = m
 	set_sas_team(team.filter(func(i): return not fallen.has(i)))
 	var improved := {}
-	for idx in before:
+	var panels: Array = []
+	for idx in order:
+		var sd: Dictionary = st[str(idx)]
 		var diff := {}
-		for k in before[idx]:
-			var d := float(st[str(idx)]["stats"][k]) - float(before[idx][k])
+		for k in before[idx]["stats"]:
+			var d := float(sd["stats"][k]) - float(before[idx]["stats"][k])
 			if d > 0.0005:
 				diff[k] = d
-		improved[SAS.short_name(idx, int(st[str(idx)]["rank"]))] = diff
+		if not bool(sd["dead"]):
+			improved[SAS.short_name(idx, int(sd["rank"]))] = diff
+		panels.append({"idx": idx, "name": SAS.display_name(idx), "rank": int(sd["rank"]), "rank_before": int(before[idx]["rank"]),
+			"dead": bool(sd["dead"]), "stats": (before[idx]["stats"] as Dictionary).duplicate(), "gains": diff,
+			"medals": (sd.get("medals", []) as Array).duplicate(), "new_medal": int(new_medals.get(idx, -1)),
+			"xp": int(xp.get(idx, 0))})
 	campaign["sas_prepared"] = ""
-	save_campaign()
 	return {"promoted": promoted.map(func(i): return [SAS.display_name(i), SAS.rank_name(int(st[str(i)]["rank"]))]),
-		"improved": improved, "fallen": fallen.map(func(i): return SAS.display_name(i))}
+		"improved": improved, "fallen": fallen.map(func(i): return SAS.display_name(i)), "members": panels}
 
 
 func _write_back_inventory(s: Soldier, idx: int) -> void:
@@ -800,6 +1106,19 @@ func alive_roster() -> Array:
 	return r
 
 
+## Gesamter Kader gefallen? (Menü: Kampagne beendet) – ohne Nebenwirkung (alive_roster bereitet ein Team vor)
+func roster_exhausted() -> bool:
+	if SAS.available() and campaign.has("sas"):
+		for k in sas_states():
+			if not bool(sas_states()[k]["dead"]):
+				return false
+		return true
+	for x in ROSTER + RESERVE:
+		if not is_fallen(x["pid"]):
+			return false
+	return true
+
+
 func roster_entry(pid: String) -> Dictionary:
 	if is_sas_pid(pid):
 		return _sas_entry(sas_index(pid))
@@ -809,8 +1128,13 @@ func roster_entry(pid: String) -> Dictionary:
 	return {}
 
 
-## Von Mission.finish() aufgerufen: Fortschritt und Verluste fortschreiben.
+## Von Mission.finish() aufgerufen: Fortschritt und Verluste fortschreiben (im vorbereiteten Stand;
+## übernommen mit SPEICHERN UND FORTSETZEN).
 func record_mission_result(id: String, success: bool, fallen_pids: Array) -> void:
+	_on_pending(func(): _record_mission_result(id, success, fallen_pids))
+
+
+func _record_mission_result(id: String, success: bool, fallen_pids: Array) -> void:
 	for pid in fallen_pids:
 		if not campaign["fallen"].has(pid):
 			campaign["fallen"].append(pid)
@@ -835,6 +1159,7 @@ func _ready() -> void:
 		if arg.begins_with("--"):
 			var kv := arg.substr(2).split("=", true, 1)
 			cli[kv[0]] = kv[1] if kv.size() > 1 else "1"
+	_load_local_content()
 	_register_orig_missions()
 	_load_current_profile()
 	if cli.has("screenshot"):
@@ -878,17 +1203,126 @@ func start_mission(id: String) -> void:
 		push_error("Unbekannte Mission: %s" % id)
 		return
 	current_mission_id = id
+	discard_debrief()
+	# Speicherzähler je Einsatz (Original: Missionsobjekt +0x10); beim Laden aus dem Spielstand
+	saves_used = int(pending_load.get("_saves_used", 0)) if not pending_load.is_empty() else 0
+	_diary_pending = (pending_load.get("_diary", []) as Array).duplicate() if not pending_load.is_empty() else []
 	prepare_sas(id)
 	get_tree().paused = false
-	get_tree().change_scene_to_file(MISSION_SCENE)
+	if MissionLoader.enabled():
+		MissionLoader.load_mission(id)     # Ladebildschirm (loader.4ds) + Hintergrundladen/Zwischenspeicher
+	else:
+		get_tree().change_scene_to_file(MISSION_SCENE)
 
 
 func return_to_menu() -> void:
+	MissionLoader.cancel()
 	if Net.is_online:
 		Net.leave(false)      # Mehrspieler-Verbindung beenden
+	discard_debrief()
+	end_single_mission()
 	get_tree().paused = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().change_scene_to_file(MAIN_MENU)
+
+
+# --- Filme (Gamemovie\*.bik → orig_cache/movies/<name>.ogv, tools/convert_movies.ps1) -----------------------
+## Menü FILME: Filmliste des Profils (profile.sav 0x1EC8, 0x6A6B10) mit Texten 160–169; „Intro“ ab Werk gesehen.
+const FILMS := [[160, "Intro"], [161, "IntroArctic"], [162, "IntroAfrica"], [163, "IntroNorway"], [164, "IntroBurma"],
+	[165, "IntroAlps"], [166, "IntroNormandy"], [167, "IntroCzech"], [168, "Outro1"], [169, "Outro2"]]
+
+
+## Pfad des konvertierten Films („" = nicht vorhanden; Bink selbst spielt Godot nicht ab)
+static func movie_path(name: String) -> String:
+	var base := OrigLevel.cache_root() + "/movies/" + name.get_basename()
+	for ext in [".ogv", ".OGV"]:
+		if FileAccess.file_exists(base + ext):
+			return base + ext
+	var lower := OrigLevel.cache_root() + "/movies/" + name.get_basename().to_lower() + ".ogv"
+	return lower if FileAccess.file_exists(lower) else ""
+
+
+func film_seen(name: String) -> bool:
+	return name == "Intro" or (profile.get("films_seen", []) as Array).has(name)
+
+
+func mark_film_seen(name: String) -> void:
+	var seen: Array = profile.get("films_seen", [])
+	if not seen.has(name):
+		seen.append(name)
+		profile["films_seen"] = seen
+		save_profile()
+
+
+## Film im Einsatz (Skriptbefehl PlayAvi, z. B. Czech6 „Outro1.bik“): Spiel angehalten, danach weiter
+func play_movie(name: String) -> void:
+	if movie_path(name) == "" or cli.has("autoplay"):
+		return
+	var was := get_tree().paused
+	get_tree().paused = true
+	load("res://src/ui/movie_player.gd").play_list(get_tree().root, [name.get_basename()], func(): get_tree().paused = was)
+
+
+## Videoknoten vor einer Mission (Gamedata00.gdt): Kampagnen-Intro (vor der Teamauswahl am Kampagnenbeginn) und
+## Briefing-Video der Mission. Rückgabe: Dateinamen ohne Endung in Abspielreihenfolge.
+func mission_videos(id: String) -> Array:
+	var out: Array = []
+	var info := SAS.mission_info(orig_folder(id))
+	if info.is_empty():
+		return out
+	var r = LsRuntime._read_json(OrigLevel.cache_root() + "/inventory_rules.json")
+	if typeof(r) == TYPE_DICTIONARY:
+		for c in r.get("campaigns", []):
+			if String(c.get("name", "")).to_lower() != String(info.get("campaign", "")).to_lower():
+				continue
+			var flow: Array = c.get("flow", [])
+			var first := ""
+			for n in flow:
+				if n.has("mission"):
+					first = String(n["mission"])
+					break
+			if first.to_lower() == String(info.get("folder", "")).to_lower():
+				for n in flow:
+					if n.has("video"):
+						out.append(String(n["video"]).get_basename())
+					elif n.has("mission"):
+						break
+	for n in info.get("flow", []):
+		if n is Dictionary and n.has("video"):
+			out.append(String(n["video"]).get_basename())
+	return out
+
+
+## Wunsch an das Hauptmenü beim nächsten Aufbau (z. B. nach der Nachbesprechung: Missionsliste mit der nächsten
+## Mission); {"menu": "campaign", "select": id}
+var menu_request := {}
+
+
+## Nach SPEICHERN UND FORTSETZEN: zur Missionsliste des Modus mit dem nächsten Teil
+func continue_campaign() -> void:
+	var idx := CAMPAIGN_ORDER.find(current_mission_id)
+	var nxt: String = CAMPAIGN_ORDER[idx + 1] if idx >= 0 and idx + 1 < CAMPAIGN_ORDER.size() else ""
+	var sm := single_mission
+	menu_request = {"menu": "single_mission" if sm else "campaign", "select": "" if sm else nxt,
+		"mode": game_mode, "single": sm, "videos": _videos_after(current_mission_id)}
+	return_to_menu()
+
+
+## Videoknoten nach einer Mission im Kampagnenablauf (Czech6: Outro2, credits)
+func _videos_after(id: String) -> Array:
+	var out: Array = []
+	var info := SAS.mission_info(orig_folder(id))
+	var r = LsRuntime._read_json(OrigLevel.cache_root() + "/inventory_rules.json")
+	if info.is_empty() or typeof(r) != TYPE_DICTIONARY:
+		return out
+	for c in r.get("campaigns", []):
+		var after := false
+		for n in c.get("flow", []):
+			if n.has("mission"):
+				after = String(n["mission"]).to_lower() == String(info.get("folder", "")).to_lower()
+			elif after and n.has("video"):
+				out.append(String(n["video"]).get_basename())
+	return out
 
 
 func current_mission() -> Node:
@@ -901,28 +1335,118 @@ func save_path(slot: String) -> String:
 	return "%s/%s.json" % [save_dir(), slot]
 
 
+## Speicherbegrenzung je Einsatz (hd2.exe 0x69A619/0x69CEFA): Wert aus 0x6B6700 = Schwierigkeitsgrad des Profils
+## (+0x34, re_notes_profiles). 3 „Schwer“: höchstens 3 Speicherungen je Einsatz, danach Hinweis T9526 mit der
+## Zahl freier Plätze (3 − Zähler); 4 „Sehr schwer“: Speichern nicht möglich (T6599). Leicht/Normal unbegrenzt.
+const SAVES_PER_MISSION_HARD := 3
+var saves_used := 0              ## Speicherungen im laufenden Einsatz (Missionsobjekt +0x10; im Spielstand)
+
+
+## Freie Speicherplätze im Einsatz (-1 = unbegrenzt)
+func saves_left() -> int:
+	match difficulty():
+		3:
+			return maxi(SAVES_PER_MISSION_HARD - saves_used, 0)
+		4:
+			return 0
+	return -1
+
+
+func can_save() -> String:
+	if current_mission() == null or Net.is_online:
+		return SAS.text(6599, "Speichern eines Spielstands ist in diesem Spielmodus nicht möglich")
+	if difficulty() >= 4:
+		return SAS.text(6599, "Speichern eines Spielstands ist in diesem Spielmodus nicht möglich")
+	if saves_left() == 0:
+		return SAS.text(9526, "Es sind %d Speicherplätze frei").replace("%d", "0")
+	return ""
+
+
+## Neuer Spielstandname im Modus-Slot (Original XXX_%02d%02d.sav, hier mit laufender Nummer je Mission)
+func new_save_slot() -> String:
+	var ord := CAMPAIGN_ORDER.find(current_mission_id) + 1
+	var base: String = "%s_%02d" % [mode_prefix(), ord] if ord > 0 else "%s_%s" % [mode_prefix(), current_mission_id]
+	var n := 1
+	while has_save("%s_%02d" % [base, n]):
+		n += 1
+	return "%s_%02d" % [base, n]
+
+
 func save_game(slot: String = "quick") -> bool:
 	var mission := current_mission()
 	if mission == null:
 		return false
+	var why := can_save()
+	if why != "":
+		Events.say(why, 3.0)
+		return false
+	var state: Dictionary = mission.serialize()
+	saves_used += 1
+	state["_saves_used"] = saves_used
+	state["_diary"] = _diary_pending.duplicate()
 	var data := {
-		"version": 1,
+		"version": 2,
 		"mission": current_mission_id,
-		"timestamp": Time.get_datetime_string_from_system(),
-		"state": mission.serialize(),
+		"title": String(MISSIONS.get(current_mission_id, {}).get("title", current_mission_id)),
+		"mode": game_mode, "single": single_mission, "mode_title": mode_title(),
+		"timestamp": Time.get_datetime_string_from_system(false, true),
+		"state": state,
 	}
 	DirAccess.make_dir_recursive_absolute(save_dir())
 	var f := FileAccess.open(save_path(slot), FileAccess.WRITE)
 	if f == null:
+		saves_used -= 1
 		push_error("Speichern fehlgeschlagen: %s" % error_string(FileAccess.get_open_error()))
 		return false
 	f.store_string(JSON.stringify(data, "\t"))
-	Events.say("Spiel gespeichert.")
+	if has_profile():
+		profile["last_save"] = slot
+		profile["last_save_text"] = "%s$%s$%s" % [mode_title(), data["title"], data["timestamp"]]
+		save_profile()
+	Events.say(SAS.text(2041, "Speichern abgeschlossen."), 2.0)
+	var left := saves_left()
+	if left >= 0:
+		Events.say(SAS.text(9526, "Es sind %d Speicherplätze frei").replace("%d", str(left)), 3.0)
 	return true
 
 
 func has_save(slot: String = "quick") -> bool:
 	return FileAccess.file_exists(save_path(slot))
+
+
+func delete_save(slot: String) -> void:
+	if has_save(slot):
+		DirAccess.remove_absolute(save_path(slot))
+
+
+## Spielstandliste des Profils (neueste zuerst): [{slot, title, mode_title, timestamp, mission}]
+func list_saves() -> Array:
+	var out: Array = []
+	var d := DirAccess.open(save_dir())
+	if d == null:
+		return out
+	for f in d.get_files():
+		if not f.ends_with(".json"):
+			continue
+		var slot := f.get_basename()
+		var data = JSON.parse_string(FileAccess.get_file_as_string(save_path(slot)))
+		if typeof(data) != TYPE_DICTIONARY or not MISSIONS.has(String(data.get("mission", ""))):
+			continue
+		var mt := FileAccess.get_modified_time(ProjectSettings.globalize_path(save_path(slot)))
+		out.append({"slot": slot, "mission": String(data["mission"]),
+			"title": String(data.get("title", MISSIONS[data["mission"]].get("title", ""))),
+			"mode_title": String(data.get("mode_title", "")), "timestamp": String(data.get("timestamp", "")), "mtime": mt})
+	out.sort_custom(func(a, b): return int(a["mtime"]) > int(b["mtime"]))
+	return out
+
+
+## Letzter Spielstand des Profils (Original LASTSAVE) – für WEITER SPIELEN
+func last_save() -> String:
+	var s := String(profile.get("last_save", ""))
+	if s != "" and has_save(s):
+		return s
+	var all := list_saves()
+	return String(all[0]["slot"]) if not all.is_empty() else ""
 
 
 func load_game(slot: String = "quick") -> bool:
@@ -933,8 +1457,14 @@ func load_game(slot: String = "quick") -> bool:
 	if typeof(data) != TYPE_DICTIONARY or not MISSIONS.has(data.get("mission", "")):
 		push_error("Spielstand beschädigt: %s" % slot)
 		return false
+	# Spielmodus des Spielstands herstellen (Modus-Slot)
+	var m := int(data.get("mode", game_mode))
+	var single := bool(data.get("single", false))
+	if m != game_mode or single != single_mission:
+		set_game_mode(m, single)
 	pending_load = data["state"]
 	start_mission(data["mission"])
+	Events.say(SAS.text(2042, "Laden abgeschlossen."), 2.0)
 	return true
 
 

@@ -33,6 +33,10 @@ var enemy_uniform := Color(0.34, 0.37, 0.33)   ## Feldgrau; Afrika: Khaki
 var alarm_bell_pos := Vector3.INF   ## Ort der Alarmglocke (Mission setzt ihn)
 ## Lokale Lichtquellen für die Sichtbarkeit: [Position, Radius, Stärke]
 var lamps: Array = []
+## Klang (Übungseinsätze; Originalmissionen nutzen sounds.bin/tree.klz): Umgebungsschleife (Original-Aufnahme)
+## und Untergrund für Schritte/Einschläge als Zeile in TABLES\hdmaterials.def (−1 = keiner)
+var ambience_sound := ""
+var ground_material := -1
 
 
 ## Helligkeitsfaktor an einer Position (für die Sicht-Erkennung).
@@ -87,6 +91,7 @@ func _ready() -> void:
 	add_to_group("mission")
 	process_mode = Node.PROCESS_MODE_PAUSABLE
 	Ballistics.clear()
+	OrigAudio.clear_mission()
 	_setup_environment()
 	nav_region = NavigationRegion3D.new()
 	nav_region.name = "Nav"
@@ -106,6 +111,7 @@ func _ready() -> void:
 	Effects.set_container(effects_root)
 	lb = LevelBuilder.new(static_root, dynamic_root)
 	_build_world()
+	OrigAudio.default_material = ground_material
 	_bake_navigation()
 
 	squad = SquadManager.new()
@@ -150,8 +156,7 @@ func _ready() -> void:
 	if not Game.cli.has("screenshot") and not Game.cli.has("autoplay"):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	Settings.changed.connect(_apply_settings)
-	Effects.start_ambience(self, func() -> Vector3:
-		return rig.camera.global_position if is_instance_valid(rig) else Vector3.ZERO)
+	Effects.start_ambience(self, ambience_sound)
 	if Net.is_online:
 		Net.mission_ready.call_deferred(self)    # Mehrspieler: Spielerfiguren kommen vom Server
 
@@ -209,9 +214,11 @@ func _setup_environment() -> void:
 
 func _bake_navigation() -> void:
 	var nm := NavigationMesh.new()
-	# Werte als Vielfache der Zellgröße (sonst rundet Recast mit Warnung)
-	nm.agent_radius = 0.4
-	nm.agent_height = 1.8
+	# Werte als Vielfache der Zellgröße (sonst rundet Recast mit Warnung). Radius 0,2 m (eine Zelle Erosion; Kapsel
+	# 0,3 m gleitet an Ecken ab): schmale Original-Treppenhäuser/Podeste (≈ 1 m) bleiben im Netz. Zelle 0,15 m wäre
+	# genauer, sprengt aber auf großen Karten (AFRICA3/4) das Recast-Raster. Steigen 0,4 m = Soldier.STEP_HEIGHT.
+	nm.agent_radius = 0.2
+	nm.agent_height = 1.6    # Treppen unter Deckenkanten (AFRICA1-Dach) bleiben im Netz
 	nm.agent_max_climb = 0.4
 	nm.agent_max_slope = 40.0
 	nm.cell_size = 0.2
@@ -223,11 +230,293 @@ func _bake_navigation() -> void:
 	nm.filter_ledge_spans = true
 	nm.filter_walkable_low_height_spans = true
 	nav_region.navigation_mesh = nm   # Kartenzellgröße: project.godot navigation/3d/*
-	nav_region.bake_finished.connect(func():
-		nav_ready = true
-		print("NAV: Navigationsnetz fertig (%d Polygone)" % nav_region.navigation_mesh.get_polygon_count()))
 	# Asynchron backen; KI läuft bis dahin direkt auf Ziele zu.
-	nav_region.bake_navigation_mesh.call_deferred(true)
+	_bake_tiles.call_deferred(nm)
+
+
+## Große Originalkarten (AFRICA5/6, NORWAY: > 1 km) überschreiten im Ganzen die Recast-Grenze (Godot bricht mit
+## „would likely crash the engine“ ab → leeres Netz). Daher in Kacheln NAV_TILE × NAV_TILE m backen (Randzone
+## border_size, Kanten verbinden sich in der Navigationskarte); kleine Karten = eine Kachel wie bisher.
+const NAV_TILE := 160.0
+var _nav_pending := 0
+var _nav_regions: Array[NavigationRegion3D] = []
+
+
+func _bake_tiles(nm: NavigationMesh) -> void:
+	var src := NavigationMeshSourceGeometryData3D.new()
+	NavigationServer3D.parse_source_geometry_data(nm, src, nav_region)
+	# In einem Stück backen. Godot bricht ab, wenn das Raster zu viele Säulen hätte (Absturzschutz, beobachtet:
+	# AFRICA5_MP 1182 × 1180 m bei 0,2 m = 35 Mio. scheitert, 0,3 m = 15,5 Mio. geht) → Zelle so weit vergröbern, dass
+	# höchstens NAV_MAX_COLUMNS bleiben (Radius = eine Zelle, Navigationskarte auf dieselbe Zelle).
+	var box := src.get_bounds()
+	var cs := nm.cell_size
+	while (box.size.x / cs) * (box.size.z / cs) > NAV_MAX_COLUMNS and cs < 1.0:
+		cs = snappedf(cs + 0.1, 0.1)
+	if cs > nm.cell_size:
+		nm.cell_size = cs
+		nm.agent_radius = cs
+		print("NAV: Karte %.0f × %.0f m → Zelle %.1f m" % [box.size.x, box.size.z, cs])
+	# Navigationskarte gehört zur Welt des Hauptfensters und bleibt über Kartenwechsel bestehen → immer setzen
+	NavigationServer3D.map_set_cell_size(nav_region.get_navigation_map(), nm.cell_size)
+	NavigationServer3D.bake_from_source_geometry_data_async(nm, src, _nav_whole_done.bind(nm, src))
+
+
+const NAV_MAX_COLUMNS := 24000000.0
+
+
+func _nav_whole_done(nm: NavigationMesh, src: NavigationMeshSourceGeometryData3D) -> void:
+	if not is_inside_tree():
+		return
+	if nm.get_polygon_count() > 0:
+		if Game.cli.has("nav_debug"):
+			print("NAV: Karte Zelle %.2f, Netz Zelle %.2f, Regionen in der Karte %d" % [NavigationServer3D.map_get_cell_size(
+				nav_region.get_navigation_map()), nm.cell_size, NavigationServer3D.map_get_regions(nav_region.get_navigation_map()).size()])
+		nav_region.navigation_mesh = nm
+		_nav_regions = [nav_region]
+		_nav_pending = 1
+		_nav_tile_done(nav_region, nm)
+		return
+	# Godot verweigert sehr große Karten (Raster > ~2^24 Säulen, z. B. AFRICA5 1,2 × 1,2 km bei 0,2 m) → in einem
+	# Stück mit gröberer Zelle (0,3 m, Radius eine Zelle) backen; Navigationskarte auf dieselbe Zelle stellen.
+	if nm.cell_size < 0.95:
+		var coarse := nm.duplicate() as NavigationMesh
+		coarse.cell_size = snappedf(nm.cell_size + 0.1, 0.1)
+		coarse.agent_radius = coarse.cell_size
+		NavigationServer3D.map_set_cell_size(nav_region.get_navigation_map(), coarse.cell_size)
+		print("NAV: Bake verweigert → Zelle %.1f m" % coarse.cell_size)
+		NavigationServer3D.bake_from_source_geometry_data_async(coarse, src, _nav_whole_done.bind(coarse, src))
+		return
+	var box := src.get_bounds()
+	var nx := maxi(ceili(box.size.x / NAV_TILE), 1)
+	var nz := maxi(ceili(box.size.z / NAV_TILE), 1)
+	if nx * nz == 1:
+		nx = 2           # nur bei zu großem Höhenumfang: dennoch teilen
+	print("NAV: Karte zu groß für einen Bake (%.0f × %.0f m, Höhe %.0f m, ab %s) → %d Kacheln" % [box.size.x,
+		box.size.z, box.size.y, str(box.position), nx * nz])
+	_nav_pending = nx * nz
+	_nav_regions.clear()
+	var tw := box.size.x / nx
+	var td := box.size.z / nz
+	for ix in nx:
+		for iz in nz:
+			var tile := nm.duplicate() as NavigationMesh
+			# Godot-Kachelbake: Filter-AABB = Kachel + Randzone, border_size = Randzone → Recast schneidet den Rand
+			# nach dem Erodieren wieder ab, die Kachelkanten liegen deckungsgleich und verbinden sich
+			tile.border_size = 2.0
+			tile.filter_baking_aabb = AABB(Vector3(box.position.x + ix * tw - 2.0, box.position.y - 1.0,
+				box.position.z + iz * td - 2.0), Vector3(tw + 4.0, box.size.y + 2.0, td + 4.0))
+			var reg := nav_region
+			if ix + iz > 0:
+				reg = NavigationRegion3D.new()
+				reg.name = "Nav_%d_%d" % [ix, iz]
+				add_child(reg)
+			_nav_regions.append(reg)
+			NavigationServer3D.bake_from_source_geometry_data_async(tile, src, _nav_tile_done.bind(reg, tile))
+
+
+func _nav_tile_done(reg: NavigationRegion3D, tile: NavigationMesh) -> void:
+	if not is_instance_valid(reg):
+		return
+	reg.navigation_mesh = tile
+	_nav_pending -= 1
+	if _nav_pending == 0:
+		# Regionen werden erst beim Abgleich der Navigationskarte wirksam; große Regionen synchronisiert Godot
+		# asynchron über mehrere Bilder (BURMA1_MP_ZONE: Abfragen lieferten noch (0,0,0)) → warten, bis ein Eckpunkt
+		# jeder Region über die Karte auffindbar ist (höchstens 2 min; AFRICA2 1,1 km braucht lange)
+		var probes: Array[Vector3] = []
+		for r in _nav_regions:
+			if r.navigation_mesh and r.navigation_mesh.get_vertices().size() > 0:
+				probes.append(r.global_transform * r.navigation_mesh.get_vertices()[0])
+		for i in 7200:
+			await get_tree().physics_frame
+			if not is_inside_tree():
+				return
+			var ok := i >= 2
+			var map := nav_region.get_navigation_map()
+			for p in probes:
+				if NavigationServer3D.map_get_closest_point(map, p).distance_to(p) > 0.6:
+					ok = false
+					break
+			if ok:
+				print("NAV: Karte abgeglichen nach %d Physikschritten" % i)
+				break
+			if i == 7199:
+				push_warning("NAV: Navigationskarte nach 2 min noch nicht abgeglichen")
+		if Game.cli.has("nav_bridges"):      # Inselbrücken: ungetestet → nur auf Anforderung (Backlog)
+			_bridge_islands()
+		_add_ladder_links()
+		if not ladder_links.is_empty() or not bridge_links.is_empty():
+			await get_tree().physics_frame
+			await get_tree().physics_frame
+			if not is_inside_tree():
+				return
+		nav_ready = true
+		var polys := 0
+		for r in _nav_regions:
+			polys += r.navigation_mesh.get_polygon_count() if r.navigation_mesh else 0
+		print("NAV: Navigationsnetz fertig (%d Polygone, %d Kacheln)" % [polys, _nav_regions.size()])
+		if _nav_regions.size() > 1 and Game.cli.has("nav_debug"):
+			var counts: Array = []
+			for r in _nav_regions:
+				counts.append(r.navigation_mesh.get_polygon_count() if r.navigation_mesh else -1)
+				if r.navigation_mesh and r.navigation_mesh.get_polygon_count() == 0:
+					print("NAV: leere Kachel ", r.navigation_mesh.filter_baking_aabb)
+			print("NAV: Kacheln ", counts)
+
+
+## Inselbrücken: Recast trennt begehbare Flächen, die ein Soldat physisch verbindet – Türschwellen, Erosion an engen
+## Durchgängen (Radius), Stufen an Kachel-/Zellgrenzen. Je Paar von Netzinseln wird die kürzeste Verbindung gesucht
+## (waagerecht ≤ BRIDGE_MAX_GAP, Höhenunterschied ≤ Soldier.STEP_HEIGHT); passt die Soldatenkapsel frei hindurch
+## (Formabfrage über die Strecke, Boden darunter), entsteht eine NavigationLink3D in beide Richtungen.
+const BRIDGE_MAX_GAP := 1.2
+var bridge_links: Array[NavigationLink3D] = []
+
+
+func _bridge_islands() -> void:
+	var t0 := Time.get_ticks_msec()
+	var verts := PackedVector3Array()
+	var island := PackedInt32Array()       # Vertex -> Insel
+	var base := 0
+	var uf: Array = []                     # Union-Find über Polygone (global nummeriert; Array = Referenz)
+	var pcount := 0
+	var vpoly: Array = []                  # Vertex -> Polygon (global)
+	for r in _nav_regions:
+		var nm := r.navigation_mesh
+		if nm == null:
+			continue
+		var vs := nm.get_vertices()
+		var xf := r.global_transform
+		for v in vs:
+			verts.append(xf * v)
+			vpoly.append(-1)
+		for pi in nm.get_polygon_count():
+			uf.append(pcount)
+			for k in nm.get_polygon(pi):
+				var gv := base + k
+				if vpoly[gv] < 0:
+					vpoly[gv] = pcount
+				else:
+					_uf_union(uf, vpoly[gv], pcount)
+			pcount += 1
+		base += vs.size()
+	if pcount == 0:
+		return
+	island.resize(verts.size())
+	var isl_size := {}
+	for i in verts.size():
+		island[i] = _uf_find(uf, vpoly[i]) if vpoly[i] >= 0 else -1
+		if island[i] >= 0:
+			isl_size[island[i]] = int(isl_size.get(island[i], 0)) + 1
+	if isl_size.size() < 2:
+		return
+	# Raster 1,5 m
+	var grid := {}
+	for i in verts.size():
+		if island[i] < 0:
+			continue
+		var k := Vector2i(floori(verts[i].x / 1.5), floori(verts[i].z / 1.5))
+		if not grid.has(k):
+			grid[k] = PackedInt32Array()
+		grid[k].append(i)
+	var best := {}                         # Inselpaar -> [Abstand, a, b]
+	for i in verts.size():
+		var ii := island[i]
+		if ii < 0:
+			continue
+		var a := verts[i]
+		var k0 := Vector2i(floori(a.x / 1.5), floori(a.z / 1.5))
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				var cell = grid.get(k0 + Vector2i(dx, dz))
+				if cell == null:
+					continue
+				for j in cell:
+					var jj := island[j]
+					if jj <= ii:
+						continue
+					var b := verts[j]
+					if absf(a.y - b.y) > Soldier.STEP_HEIGHT:
+						continue
+					var d := Vector2(a.x - b.x, a.z - b.z).length()
+					if d > BRIDGE_MAX_GAP:
+						continue
+					var key := Vector2i(ii, jj)
+					if not best.has(key) or d < best[key][0]:
+						best[key] = [d, a, b]
+	var space := get_world_3d().direct_space_state
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.25
+	cap.height = 1.4
+	var params := PhysicsShapeQueryParameters3D.new()
+	params.shape = cap
+	params.collision_mask = 1 | (1 << 4)
+	for key in best:
+		var a: Vector3 = best[key][1]
+		var b: Vector3 = best[key][2]
+		# Kapsel (Unterkante 0,45 m über dem höheren Punkt) muss frei vom einen zum anderen Punkt gleiten können
+		var lift := maxf(a.y, b.y) - a.y + 0.45 + cap.height * 0.5
+		params.transform = Transform3D(Basis(), a + Vector3.UP * lift)
+		params.motion = Vector3(b.x - a.x, b.y - a.y, b.z - a.z)
+		var cm := space.cast_motion(params)
+		if cm.is_empty() or cm[0] < 0.99:
+			continue
+		# Boden in der Mitte (keine Brücke über Abgründe)
+		var mid := (a + b) * 0.5
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(mid + Vector3.UP * 0.5, mid + Vector3.DOWN * 0.6, 1))
+		if hit.is_empty():
+			continue
+		var link := NavigationLink3D.new()
+		link.name = "IslandBridge_%d" % bridge_links.size()
+		link.bidirectional = true
+		link.start_position = a
+		link.end_position = b
+		dynamic_root.add_child(link)
+		bridge_links.append(link)
+	print("NAV: %d Inseln, %d Inselbrücken (%d ms)" % [isl_size.size(), bridge_links.size(), Time.get_ticks_msec() - t0])
+
+
+static func _uf_find(uf: Array, x: int) -> int:
+	while uf[x] != x:
+		uf[x] = uf[uf[x]]
+		x = uf[x]
+	return x
+
+
+static func _uf_union(uf: Array, a: int, b: int) -> void:
+	var ra := _uf_find(uf, a)
+	var rb := _uf_find(uf, b)
+	if ra != rb:
+		uf[rb] = ra
+
+
+## Original-Leitern (OrigInteractive.OrigLadder, Gruppe „ladders“) als Navigationsverbindungen Fuß ↔ Austritt, damit
+## Türme/Dächer mit Spawnpunkten (z. B. ARCTIC1_MP) im Netz erreichbar sind. Die KI erkennt die Verbindung über
+## NavigationAgent3D.link_reached; Metadaten „ladder“ = Leiter-Knoten am Fuß (Benutzen klettert hinauf/hinunter).
+var ladder_links: Array[NavigationLink3D] = []
+
+
+func _add_ladder_links() -> void:
+	var map := nav_region.get_navigation_map()
+	for l in get_tree().get_nodes_in_group("ladders"):
+		if not ("at_top" in l) or l.at_top or not ("top" in l):
+			continue
+		var bottom: Vector3 = l.bottom
+		var top: Vector3 = l.top
+		var a := NavigationServer3D.map_get_closest_point(map, bottom)
+		# Austritt: Netzpunkt nahe der Oberkante (Kletterweg setzt den Soldaten 0,7 m vom Leiterkopf ab)
+		var b := NavigationServer3D.map_get_closest_point(map, top + Vector3.UP * 0.1)
+		if a.distance_to(bottom) > 2.0 or b.distance_to(top) > 2.0 or absf(b.y - a.y) < 1.0:
+			continue
+		var link := NavigationLink3D.new()
+		link.name = "LadderLink_%d" % ladder_links.size()
+		link.bidirectional = true
+		link.start_position = a
+		link.end_position = b
+		link.set_meta("ladder", l)
+		dynamic_root.add_child(link)
+		ladder_links.append(link)
+	if not ladder_links.is_empty():
+		print("NAV: %d Leiter-Verbindungen" % ladder_links.size())
 
 
 # --- Erzeugung --------------------------------------------------------------------
@@ -248,6 +537,10 @@ func _exit_tree() -> void:
 	# Statischer Materialcache hält GPU-Ressourcen; vor dem Herunterfahren der Server freigeben
 	# (sonst Absturz beim Beenden im Release-Export, 0xC0000374)
 	SoldierModel._mat_cache.clear()
+	OrigWeapons.release()
+	OrigAudio.clear_mission()
+	OrigAudio.stop_music()
+	OrigAudio.stop_cutscene_music()
 
 
 func spawn_soldier(pos: Vector3, yaw: float, team: int, sname: String, loadout: Array,
@@ -463,6 +756,13 @@ func _on_soldier_died(s: Node, attacker: Node) -> void:
 		var eb: EnemyBrain = s.get_node_or_null("EnemyBrain")
 		if eb and eb.state in [EnemyBrain.State.GUARD, EnemyBrain.State.PATROL]:
 			att.train("unseen_kills")
+	elif s is Soldier and attacker is Soldier and (attacker as Soldier).team == Soldier.TEAM_ALLIED:
+		# Wehrlose getötet (Original 0x5A0BE0): Gefangener −1000, Ergebener −500 Erfahrung
+		var eb2: EnemyBrain = s.get_node_or_null("EnemyBrain")
+		if eb2 and eb2.captured:
+			(attacker as Soldier).train("prisoner_kills")
+		elif eb2 and eb2.surrendered:
+			(attacker as Soldier).train("defenseless_kills")
 	if squad.all_dead():
 		finish(false, "Der gesamte Trupp ist gefallen.")
 

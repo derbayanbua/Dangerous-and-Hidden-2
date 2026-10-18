@@ -53,20 +53,33 @@ func _run() -> void:
 			b.hold_pos = mm.global_position
 			mm.set_physics_process(false)
 
-	# --- Uniform vom Vorposten erbeuten ---
+	# --- Uniform vom Vorposten erbeuten: nur vom Gefangenen (Vorgabe Auftraggeber, Original T7044) ---
 	var post := enemy("s_outpost")
 	place(post, -20, 28, 0.0)
 	post.set_physics_process(true)
-	post.die(null)
+	var pb := post.get_node("EnemyBrain") as EnemyBrain
+	pb.enabled = true
+	pb.surrender(hale)
 	await seconds(1.0)
 	place(hale, -19.3, 28, PI * 0.5)
 	await frames(10)
-	var loot := m.controller.interact_target as Pickups.Loot
-	check(loot != null, "Gefallener Vorposten durchsuchbar")
+	var cap := m.controller.interact_target as Interactable
+	check(cap != null and cap == pb.capture_action, "Ergebener Vorposten: Gefangennehmen angeboten")
 	await tap("interact")
-	check(loot != null and loot.prompt == "Uniform anziehen" and m.controller.interact_target == loot, "Nach dem Durchsuchen: Uniform anziehen angeboten")
+	check(pb.captured, "Vorposten gefangen genommen")
+	await frames(4)
+	await tap("interact")          # durchsuchen (öffnet seit 17.10.2026 das Ingame-Inventar mit zwei Seiten)
+	await frames(4)
+	for n in m.controller.find_children("*", "", true, false):
+		if n.has_method("is_open") and n.has_method("open_for") and n.is_open():
+			n.close()
+	await frames(4)
+	check(m.controller.interact_target == cap and cap.prompt == OrigInteractive.text(7044, "Uniform benutzen"),
+		"Nach dem Durchsuchen: Uniform benutzen angeboten")
 	await tap("interact")
 	check(hale.disguised and hale.uniform_color.is_equal_approx(m.enemy_uniform), "Uniform angezogen (Khaki)")
+	post.global_position = Vector3(-120, 30, -120)
+	post.set_physics_process(false)
 
 	# --- Tarnung wirkt auf Distanz bei Tageslicht ---
 	place(hale, -25, 28, -PI * 0.5)

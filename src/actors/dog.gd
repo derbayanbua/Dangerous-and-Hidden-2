@@ -90,11 +90,14 @@ func _physics_process(delta: float) -> void:
 			if _bite_t <= 0.0:
 				_bite_t = BITE_INTERVAL
 				target.apply_hit(bite_damage, &"leg", self, (target.global_position - global_position).normalized())
-				Effects.play(&"step", global_position, 2.0, 0.5, 40.0)
+				OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_DOG_ATTACK, global_position, self)   # „Dog Attack“
 		_bark_t -= delta
 		if _bark_t <= 0.0:
 			_bark_t = 1.6
 			Events.emit_noise(global_position, 70.0, self, Soldier.TEAM_AXIS, &"bark")
+			# Original Kat. 11: „Dog Woof“ (Bellen), beim Rennen „Dog Runing“ (Takt 1,6 s = Annahme)
+			OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_DOG_WOOF if randf() < 0.7 else OrigAudio.MISC_DOG_RUN,
+				global_position, self)
 	elif move_target.is_finite():
 		if global_position.distance_to(move_target) < 1.2:
 			move_target = Vector3.INF
@@ -178,6 +181,7 @@ func raise(by: Soldier) -> void:
 	else:
 		attack_any = true
 	Events.emit_noise(global_position, 70.0, self, Soldier.TEAM_AXIS, &"bark")
+	OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_DOG_WOOF, global_position, self)
 	if runtime:
 		runtime.notify(self, "ONALARM")
 
@@ -198,7 +202,9 @@ func apply_hit(amount: float, _zone: StringName, attacker: Node, _dir: Vector3) 
 	health -= amount
 	if health <= 0.0:
 		die()
-	elif attacker is Soldier and not alarmed:
+		return
+	OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_DOG_HURT, global_position, self)   # „Dog Injure“
+	if attacker is Soldier and not alarmed:
 		raise(attacker)
 
 
@@ -206,6 +212,7 @@ func die() -> void:
 	alive = false
 	collision_layer = 0
 	velocity = Vector3.ZERO
+	OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_DOG_DEATH, global_position)   # „Dog Death“
 	if _visual:
 		_visual.rotation.z = PI * 0.5
 		_visual.position.y = 0.2

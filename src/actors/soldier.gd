@@ -15,12 +15,18 @@ signal damaged(amount: float, zone: StringName)
 signal weapon_changed(weapon: Weapon)
 signal stance_changed(stance: int)
 signal shot_fired(weapon: Weapon)
+## Animierte Aktion begonnen ("reload", "draw", "throw", "heal"); die 1. Person spielt dazu die FPV-Animation
+signal action_started(kind: String, duration: float)
+signal grenade_released(grenade: Node)
+## Figur/Modell gewechselt (Uniform): Kamera setzt Anker und Sichtbarkeit neu
+signal model_changed(model: Node3D)
 
 enum Stance { STAND, CROUCH, PRONE }
 ## WALK/SNEAK: KI und Originalskripte (Patrouille, HUMAN_SETMODE_*); JOG: Normaltempo des
 ## Spielers (moderne Steuerung: immer Laufschritt, Shift = Sprint/RUN, leise nur geduckt/liegend)
 enum MoveMode { WALK, RUN, SNEAK, JOG }
 
+const FALL_SAFE_V := 9.0
 const TEAM_ALLIED := 0
 const TEAM_AXIS := 1
 ## Neutral (Original actors.bin Seite 3/4: Zivilisten, Gefangene, Sonderfiguren): wird von keiner Seite
@@ -42,6 +48,9 @@ const JUMP_VELOCITY := 4.2
 ## Klettern/Überspringen beim Sprung vor einem Hindernis (Höhe über den Füßen, m)
 const CLIMB_MIN := 0.45
 const CLIMB_MAX := 2.3
+## Stufen automatisch hinauf (Original: Stufen mit eigener Klz-Flächenkollision, z. B. CZECH3-Wendeltreppe 0,17 m,
+## begeht die Figur ohne Rampe [B]; Höhe 0,4 m = Navmesh agent_max_climb [E]). Abwärts hält floor_snap_length.
+const STEP_HEIGHT := 0.4
 
 @export var soldier_name := "Soldat"
 @export var team := TEAM_ALLIED
@@ -99,10 +108,64 @@ const HEAL_AMOUNT := 45.0
 var explosives := 0
 var mines := 0
 ## Gewähltes Hilfsmittel statt Waffe ("" = Waffe; "explosive", "mine", "medkit", "binoculars"):
-## Linksklick benutzt es (vereinfachte Steuerung, Vorgabe Auftraggeber)
-var tool := ""
+## Linksklick benutzt es (vereinfachte Steuerung, Vorgabe Auftraggeber). Wechsel steckt die Waffe weg und
+## nimmt das Original-Modell des Hilfsmittels in die Hand (_on_tool_changed); zurück zur Waffe = Ziehen.
+var tool := "":
+	set(v):
+		if v == tool:
+			return
+		var was := tool
+		tool = v
+		_on_tool_changed(was)
 var _tool_trigger_prev := false
+## Laufende Arbeit mit Fortschrittsanzeige (z. B. Mine entschärfen, PlacedCharge.DefuseSpot); work_left > 0 = aktiv
+var work_label := ""
+var work_left := 0.0
+var work_total := 0.0
+var _tool_quiet := false             ## Wechsel ohne Zieh-Animation (select_slot wechselt gleich die Waffe)
+## Original-Weltmodelle der Hilfsmittel (items.sav: 54 l_medkit, 70 w_antiman, 67/68 Sprengladung, 99 w_binocul),
+## erstes vorhandenes wird genommen
+const TOOL_MODELS := {"medkit": ["l_medkit"], "mine": ["w_antiman"],
+	"explosive": ["w_explosive", "w_dynamite", "d_explbag"], "binoculars": ["w_binocul"]}
+## Original-FPV-Modelle der Hilfsmittel (items.sav fpv_model; nur die Mine ist im Cache exportiert)
+const TOOL_FPV := {"mine": "w_antimanfpv"}
+## Netzcode der Hilfsmittel (Aktion „tool“, Index in a.x)
+const TOOL_KEYS := ["", "explosive", "mine", "medkit", "binoculars"]
+
+
+## Modellname des Hilfsmittels in der Hand ("" = keins gewählt; Platzhalter, wenn kein Original im Cache).
+func tool_model_name(key: String = tool) -> String:
+	if key == "":
+		return ""
+	var names: Array = TOOL_MODELS.get(key, [])
+	var found := OrigWeapons.first_model(names)
+	return found if found != "" else "placeholder:" + key
+
+
+func _on_tool_changed(was: String) -> void:
+	if not is_node_ready():
+		return
+	if tool != "":
+		var cw := current_weapon()
+		if cw:
+			cw.cancel_reload()
+	if model:
+		model.stop_action()
+		if heal_time_left <= 0.0:
+			model.set_prop(tool_model_name())
+	_net("tool", Vector3(maxi(TOOL_KEYS.find(tool), 0), 0, 0), Vector3.ZERO, "")   # wid bleibt leer (Waffen-ID)
+	if _tool_quiet:
+		return
+	weapon_changed.emit(current_weapon())
+	if tool == "" and was != "":
+		var w := current_weapon()
+		if w:
+			w.cooldown = maxf(w.cooldown, 0.5)
+			OrigAudio.play_weapon(w.data, "armed", global_position, self, team)
+		play_weapon_action("draw")          # Waffe wieder ziehen (anim.sav „vyt*“, 1. Person „arm“)
+var _trigger_prev := false
 var _melee_cd := 0.0
+var _lean_sent := 0.0
 ## Mehrspieler (Net): Soldat eines anderen Spielers – Position/Blick kommen aus dem Netz
 var net_puppet := false
 var net_target := Vector3.ZERO
@@ -153,6 +216,19 @@ func start_heal(candidates: Array) -> bool:
 	heal_target = best
 	heal_time_left = HEAL_DURATION
 	using_binoculars = false
+	var cw := current_weapon()
+	if cw:
+		cw.cancel_reload()
+	# Verbandskasten in die Hand (Original-Weltmodell l_medkit, items.sav 54) und kniende Original-Animation
+	# (anim.sav „!medik01“ Kamerad / „!medik“ selbst – Zuordnung [P])
+	if model:
+		model.stop_action()
+		model.set_prop(MEDKIT_MODEL)
+		model.play_full("medic_self" if best == self else "medic")
+	action_started.emit("heal", HEAL_DURATION)
+	# Original Kat. 11 „Medic“ (24) bzw. „Medic samolecitel“ (26, Selbstversorgung)
+	OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_SELF_MEDIC if best == self else OrigAudio.MISC_MEDIC,
+		global_position, self)
 	return true
 
 
@@ -162,16 +238,30 @@ func _update_heal(delta: float) -> void:
 	trigger = false
 	move_input = Vector3.ZERO
 	heal_time_left -= delta
-	if not is_instance_valid(heal_target) or not heal_target.alive:
+	if not is_instance_valid(heal_target) or not heal_target.alive or not alive:
 		heal_time_left = 0.0
+		_end_heal_anim()
 		return
 	if heal_time_left <= 0.0:
 		heal_time_left = 0.0
+		_end_heal_anim()
 		medkits -= 1
 		var amount := HEAL_AMOUNT * skill_k(skill_first_aid, 0.7, 1.4)
 		heal_target.heal(amount)
 		train("heals")
+		if medkits <= 0 and tool == "medkit":
+			tool = ""                       # letzter Verband verbraucht: zurück zur Waffe
 		Events.say("%s versorgt %s (+%d)." % [soldier_name, "sich selbst" if heal_target == self else heal_target.soldier_name, int(amount)], 2.5)
+
+
+const MEDKIT_MODEL := "l_medkit"
+
+
+func _end_heal_anim() -> void:
+	if model:
+		model.play_full("")
+		model.set_prop(tool_model_name())   # gewähltes Hilfsmittel bleibt in der Hand, sonst wieder die Waffe
+	action_started.emit("heal_end", 0.0)
 
 
 ## Tarnung (Original: Mission_SetUniformDisguise). Gegner erkennen einen
@@ -180,10 +270,20 @@ var disguised := false
 var last_shot_time := -100.0
 
 
-func put_on_uniform(color: Color, helmet: String) -> void:
+## figure: Original-Figur der neuen Uniform (z. B. OrigLevel.character_instance("ge01a")). Trägt der Soldat schon
+## eine Original-Figur, bleibt das Modell erhalten und nur die Figur wird getauscht (SoldierModel.attach_orig löst die
+## alte samt Kamerapunkten, Hand-Dummy und Waffe); ohne neue Figur bleibt die bisherige Original-Figur.
+func put_on_uniform(color: Color, helmet: String, figure: Node3D = null) -> void:
 	disguised = true
 	uniform_color = color
 	helmet_style = helmet
+	if model and is_instance_valid(model.orig_figure):
+		if figure:
+			model.attach_orig(figure)
+			if tool != "":
+				model.set_prop(tool_model_name())   # Hilfsmittel an die Hand der neuen Figur
+		model_changed.emit(model)
+		return
 	var old := model
 	model = SoldierModel.new()
 	model.name = "Model"
@@ -194,7 +294,10 @@ func put_on_uniform(color: Color, helmet: String) -> void:
 	_hitbox_rids.clear()
 	for hb in model.find_children("*", "Hitbox", true, false):
 		_hitbox_rids.append((hb as Hitbox).get_rid())
+	if figure:
+		model.attach_orig(figure)
 	_on_weapon_switched()
+	model_changed.emit(model)
 
 
 func seconds_since_shot() -> float:
@@ -279,6 +382,14 @@ func current_weapon() -> Weapon:
 func exclude_rids() -> Array[RID]:
 	var r: Array[RID] = _hitbox_rids.duplicate()
 	r.append(get_rid())
+	if model:
+		for hb in model.orig_zones:      # Trefferzonen der Original-Figur (an Gelenken, bei Figurwechsel neu)
+			if is_instance_valid(hb):
+				r.append(hb.get_rid())
+	if is_instance_valid(mounted) and mounted.has_method("shot_exclusions"):
+		r.append_array(mounted.shot_exclusions())
+	if vehicle != null and is_instance_valid(vehicle) and vehicle is CollisionObject3D:
+		r.append((vehicle as CollisionObject3D).get_rid())   # Insassen schießen nicht ins eigene Fahrzeug
 	return r
 
 
@@ -324,10 +435,19 @@ func _physics_process(delta: float) -> void:
 		var d := net_target - global_position
 		global_position = net_target if d.length() > 4.0 else global_position + d * clampf(12.0 * delta, 0.0, 1.0)
 		velocity = net_velocity
+		# Schritte der Netzfigur hörbar machen (KI-Soldaten auf dem Server hören Spieler wie im Einzelspiel)
+		var spd := Vector2(net_velocity.x, net_velocity.z).length()
+		_step_accum += spd * delta
+		if spd > 0.4 and _step_accum > 1.6:
+			_step_accum = 0.0
+			var r := 20.0 if spd > 4.5 else (9.0 if stance == Stance.STAND else 2.5)
+			Events.emit_noise(global_position, r, self, team, &"step")
+			if stance != Stance.PRONE:
+				OrigAudio.play_step(global_position, null, clampf(r / 20.0, 0.35, 1.0))
 		_update_stance(delta)
 		_update_weapon_timers(delta)
 		rotation.y = look_yaw
-		model.update_anim(delta, stance, Vector2(net_velocity.x, net_velocity.z).length(), look_pitch, aiming, 0.0)
+		model.update_anim(delta, stance, Vector2(net_velocity.x, net_velocity.z).length(), look_pitch, aiming, lean)
 		return
 	if vehicle != null:
 		# im Fahrzeug: Position folgt dem Sitz, Waffen (Mitfahrer) bleiben nutzbar
@@ -352,6 +472,11 @@ func _physics_process(delta: float) -> void:
 	_update_movement(delta)
 	_update_weapon(delta)
 	rotation.y = look_yaw
+	# Lehnen an die anderen Rechner (Netzfigur zeigt den Original-Lehnclip)
+	var lq := roundf(lean * 4.0) / 4.0
+	if lq != _lean_sent:
+		_lean_sent = lq
+		_net("lean", Vector3(lq, 0, 0), Vector3.ZERO, "")
 	model.update_anim(delta, stance, current_speed(), look_pitch, aiming, lean)
 
 
@@ -367,6 +492,9 @@ func _update_stance(delta: float) -> void:
 	_stance_lock = maxf(STANCE_TIME[stance], STANCE_TIME[from] * 0.8)
 	_apply_capsule(stance)
 	stance_changed.emit(stance)
+	# Original-Figurenklänge (hd2.exe 0x84E938, Ereignisse 4/5/6 aus der Haltungsänderung 0x779F65)
+	if alive:
+		OrigAudio.human_event(["to_stand", "to_crouch", "to_prone"][stance], global_position, self)
 
 
 func _apply_capsule(s: int) -> void:
@@ -426,7 +554,17 @@ func _update_movement(delta: float) -> void:
 	else:
 		velocity.y -= _gravity * delta
 	_jump_request = false
+	var vy_before := velocity.y
+	var was_floor := is_on_floor()
+	_step_up(delta)
 	move_and_slide()
+	# Landung nach Sprung/Fall: Schritt auf dem Untergrund (Original-Schrittklang, Lautstärke nach Aufprall – Annahme)
+	if not was_floor and is_on_floor() and vy_before < -3.0:
+		OrigAudio.play_step(global_position, null, clampf(-vy_before / 6.0, 0.5, 1.0))
+	# Mehrspieler-Regel „Verletzung beim Fallen“ (fallingdmg): Aufprall > 9 m/s (≈ 4 m Fallhöhe) verletzt;
+	# Schwelle und Stärke sind Annahmen (Originalformel nicht dekodiert). Einzelspieler unverändert.
+	if Net.is_online and is_on_floor() and vy_before < -FALL_SAFE_V and (is_player_controlled or Net.is_authority()):
+		Net.fall_damage(self, (-vy_before - FALL_SAFE_V) * 15.0)
 
 	# Ausdauer: Rennen kostet, Gewicht der Ausrüstung erhöht den Verbrauch.
 	var moving := current_speed() > 0.3
@@ -445,8 +583,19 @@ func _update_movement(delta: float) -> void:
 			_step_accum = 0.0
 			var r: float = STEP_NOISE[stance][mode]
 			Events.emit_noise(global_position, r, self, team, &"step")
-			if r > 3.0:
-				Effects.play(&"step", global_position, -18.0 if mode != MoveMode.RUN else -10.0, 1.0, 30.0)
+			_step_count += 1
+			# Original: Schritt je Untergrund (tree.klz-Material -> hdmaterials.def +0x20 -> Kat. 0); dazu
+			# Ausrüstungsgeräusch je Haltung (hd2.exe-Tabelle Ereignis 7/8/9: o_lwmv/o_mimv/o_frun, 0x7596AA).
+			# Lautstärke nach Gangart und Takt der Ausrüstungsgeräusche sind Annahmen.
+			if stance == Stance.PRONE:
+				OrigAudio.human_event("move_prone", global_position, self)
+			else:
+				OrigAudio.play_step(global_position, null, clampf(r / 20.0, 0.35, 1.0))
+				if _step_count % 2 == 0:
+					if stance == Stance.CROUCH:
+						OrigAudio.human_event("move_crouch", global_position, self)
+					elif mode == MoveMode.RUN:
+						OrigAudio.human_event("move_run", global_position, self)
 
 
 # --- Springen / Klettern (moderne Steuerung: Sprungtaste vor Hindernis = klettern) ---
@@ -456,6 +605,7 @@ var _climb_dur := 0.0
 var _climb_from := Vector3.ZERO
 var _climb_mid := Vector3.ZERO
 var _climb_to := Vector3.ZERO
+var _step_count := 0
 
 
 func is_climbing() -> bool:
@@ -523,9 +673,54 @@ func try_climb() -> bool:
 	_climb_to = dest + Vector3.UP * 0.02
 	_climb_dur = 0.35 + h_top * 0.35
 	_climb_t = _climb_dur
+	_climb_ladder = false
 	velocity = Vector3.ZERO
 	Events.emit_noise(global_position, 6.0, self, team, &"climb")
+	# Original-Figurenklänge: Ereignis 17 „o_juover“ (über Zaun/Mauer), 13–15 „o_over…“ (Klettern; Zuordnung
+	# der drei Varianten nach Höhe = Annahme)
+	var ev: String = "jump_over" if dest == beyond else ("climb_over" if h_top < 1.0 else ("climb_over2" if h_top < 1.7 else "climb_over3"))
+	OrigAudio.human_event(ev, global_position, self)
 	return true
+
+
+## Step-up (CharacterBody3D kennt keinen): Stufenkante vor den Füßen → anheben, falls darüber frei und dahinter
+## begehbarer Boden höchstens STEP_HEIGHT höher liegt; die Bewegung übernimmt danach move_and_slide.
+func _step_up(delta: float) -> void:
+	var h := Vector3(velocity.x, 0.0, velocity.z)
+	if velocity.y > 0.5 or h.length() < 0.2:
+		return
+	var xf := global_transform
+	# auf dem Boden oder an Kanten hängend (Rampe über Stufen: Kontakte mit steilen Kantennormalen)
+	if not is_on_floor() and not test_move(xf, Vector3.DOWN * 0.08):
+		return
+	var dir := h.normalized()
+	var hit := KinematicCollision3D.new()
+	if not test_move(xf, dir * maxf(h.length() * delta, 0.12), hit) or hit.get_normal().y > cos(floor_max_angle):
+		return                                  # frei oder begehbare Schräge
+	var raised := xf
+	var up_hit := KinematicCollision3D.new()
+	raised.origin += up_hit.get_travel() if test_move(xf, Vector3.UP * STEP_HEIGHT, up_hit) else Vector3.UP * STEP_HEIGHT
+	if raised.origin.y - xf.origin.y < 0.1:
+		return                                  # keine Kopffreiheit
+	var space := get_world_3d().direct_space_state
+	for dist in [0.12, 0.25, 0.4]:
+		var probe: Vector3 = dir * maxf(h.length() * delta, dist)
+		if test_move(raised, probe):
+			return                              # Wand statt Stufe
+		var ahead := raised.translated(probe)
+		var down := KinematicCollision3D.new()
+		if not test_move(ahead, Vector3.DOWN * (STEP_HEIGHT + 0.05), down):
+			continue
+		var land := ahead.origin + down.get_travel()
+		# Neigung der Trittfläche per Strahl (Kapselkontakt an Kanten liefert schräge Normalen)
+		var ray := space.intersect_ray(PhysicsRayQueryParameters3D.create(land + Vector3.UP * 0.1, land + Vector3.DOWN * 0.3,
+			collision_mask, [get_rid()]))
+		var ny: float = ray.normal.y if not ray.is_empty() else down.get_normal().y
+		var rise := land.y - xf.origin.y
+		if ny >= cos(floor_max_angle) and rise > 0.02 and rise <= STEP_HEIGHT:
+			global_position.y += rise + 0.01
+			velocity.y = minf(velocity.y, 0.0)
+			return
 
 
 func _ray_down(space: PhysicsDirectSpaceState3D, at: Vector3, from_y: float, to_y: float, ex: Array[RID]) -> Vector3:
@@ -552,6 +747,7 @@ func _fits(at: Vector3) -> bool:
 const AIR_MAX := 30.0
 var swimming := false
 var air := AIR_MAX
+var _swim_snd := 0.0
 var _mission_ref: Node
 
 
@@ -588,6 +784,18 @@ func _update_swim(delta: float, lvl: float, mode: int) -> void:
 	move_and_slide()
 	trigger = false
 	aiming = false
+	# Original-Figurenklänge: Schwimmen (Ereignis 0 p_swim) bzw. Tauchen (1 p_swuw), Ertrinken (18 drown);
+	# Takt 1,2 s = Annahme
+	_swim_snd -= delta
+	var under := global_position.y + 1.45 < lvl
+	if _swim_snd <= 0.0 and (wish.length() > 0.1 or (under and air <= 0.0)):
+		_swim_snd = 1.2
+		var ev := "swim"
+		if under and air <= 0.0:
+			ev = "drown"
+		elif under:
+			ev = "swim_underwater"
+		OrigAudio.human_event(ev, global_position, self)
 	if global_position.y + 1.45 < lvl and not get_meta("orig_items", []).has(231):
 		air -= delta
 		if air <= 0.0 and alive:
@@ -605,8 +813,21 @@ func start_path_climb(from: Vector3, mid: Vector3, to: Vector3, duration: float)
 	_climb_to = to
 	_climb_dur = maxf(duration, 0.2)
 	_climb_t = _climb_dur
+	# Leiter: überwiegend senkrechter Weg (Original-Leiter, Kletterstellen) -> Leiteranimation #LEZUP/#LEZDWN
+	_climb_ladder = absf(to.y - from.y) > 1.2 and Vector2(to.x - from.x, to.z - from.z).length() < absf(to.y - from.y)
 	velocity = Vector3.ZERO
 	Events.emit_noise(global_position, 6.0, self, team, &"climb")
+
+
+var _climb_ladder := false
+
+
+## Laufende Kletterbewegung für die Animation (BodyAnim): ladder, dy (Höhe), duration, left (Restzeit).
+func climb_info() -> Dictionary:
+	var dy := _climb_to.y - _climb_from.y
+	if not _climb_ladder:
+		dy = maxf(_climb_mid.y - 0.15 - _climb_from.y, 0.0)    # Hindernishöhe (try_climb: mid = Oberkante + 0,15)
+	return {"ladder": _climb_ladder, "dy": dy, "duration": _climb_dur, "left": _climb_t}
 
 
 func _update_climb(delta: float) -> void:
@@ -632,14 +853,28 @@ func _carried_weight() -> float:
 
 func _update_weapon_timers(delta: float) -> void:
 	grenade_cooldown = maxf(grenade_cooldown - delta, 0.0)
+	if _stab_left >= 0.0:
+		_stab_left -= delta
+		if _stab_left < 0.0:
+			_melee_hit()            # Stichbild erreicht (auch Netzfiguren auf dem Server)
+	if net_puppet:
+		_melee_cd = maxf(_melee_cd - delta, 0.0)
 	for w in weapons:
 		if w:
 			w.tick(delta)
+	if _throw_left > 0.0:
+		_throw_left -= delta
+		if _throw_left <= 0.0:
+			_throw_left = 0.0
+			if alive:
+				_release_grenade()
 
 
 func _update_weapon(delta: float) -> void:
 	_update_weapon_timers(delta)
 	_melee_cd = maxf(_melee_cd - delta, 0.0)
+	if is_throwing():
+		return                      # Wurfanimation läuft: Waffe ruht bis die Granate die Hand verlassen hat
 	if tool != "":
 		if trigger and not _tool_trigger_prev:
 			use_tool()
@@ -650,7 +885,11 @@ func _update_weapon(delta: float) -> void:
 		return
 	var can_fire := not stance_transitioning() and not (move_mode == MoveMode.RUN and is_moving() and not aiming)
 	if w.data.action == WeaponData.Action.MELEE:
-		if trigger and not _tool_trigger_prev and _melee_cd <= 0.0:
+		# Klick wird gemerkt (auch während der Erholung), gehaltene Taste sticht weiter
+		if trigger and not _tool_trigger_prev:
+			_stab_queued = true
+		if (_stab_queued or trigger) and _melee_cd <= 0.0 and _stab_left < 0.0:
+			_stab_queued = false
 			_melee(w)
 		_tool_trigger_prev = trigger
 		return
@@ -658,12 +897,18 @@ func _update_weapon(delta: float) -> void:
 		if trigger and can_fire and grenade_cooldown <= 0.0 and w.total_ammo() > 0:
 			throw_grenade(w)
 		return
+	# Abzug bei leerem Magazin: Original „All Empty“ (Kat. 3/4)
+	if trigger and not _trigger_prev and can_fire and w.in_mag <= 0 and not w.is_reloading():
+		OrigAudio.play_weapon(w.data, "empty", global_position, self, team)
+	_trigger_prev = trigger
 	if w.trigger(trigger and can_fire):
 		_fire_shot(w)
 
 
 func _fire_shot(w: Weapon) -> void:
 	var origin := eye_position()
+	if is_instance_valid(mounted) and mounted.has_method("shot_origin"):
+		origin = mounted.shot_origin()
 	var dir := aim_direction()
 	if has_aim_point:
 		var to := aim_point - origin
@@ -678,10 +923,18 @@ func _fire_shot(w: Weapon) -> void:
 		Ballistics.fire(self, origin, dir, w.data, exclude_rids(), team)
 		_net("shot", origin, dir, String(w.data.id))
 	var muzzle := origin + dir * 0.9
-	if model and model.weapon_socket:
-		muzzle = model.weapon_socket.global_position + dir * w.data.model_length * 0.8
+	if is_instance_valid(mounted) and mounted.has_method("shot_origin"):
+		muzzle = origin                     # Waffenstellung: Mündungsfeuer an der Mündung des Stellungsmodells
+	elif model and model.weapon_socket:
+		muzzle = model.muzzle_point(dir, w.data.model_length)
 	Effects.muzzle_flash(muzzle, dir)
-	Effects.play(Effects.weapon_sound(w.data), muzzle, 0.0, 1.0, w.data.noise_radius * 2.0)
+	# Original-Schussklang der Waffe (items.sav +u4 -> Kat. 2), beim letzten Schuss zusätzlich +u17
+	# („(LS)“: Garand-Ping, P08/Colt/Tokarev/Taisho); Hülsen auf hartem Boden Kat. 5/0 (Zuordnung = Annahme)
+	OrigAudio.play_weapon(w.data, "shoot", muzzle, null, team)
+	if w.in_mag == 0:
+		OrigAudio.play_weapon(w.data, "last_shot", muzzle, null, team)
+	if w.data.action != WeaponData.Action.ROCKET:
+		get_tree().create_timer(0.45, false).timeout.connect(_shell_sound)
 	Events.emit_noise(global_position, w.data.noise_radius, self, team, &"gunshot")
 	# Rückstoß: liegend mit Zweibein (Bren) / aufgelegt deutlich weniger
 	var k := 1.0
@@ -707,41 +960,151 @@ func _fire_rocket(w: Weapon, origin: Vector3, dir: Vector3) -> void:
 	g.global_position = origin + dir * 1.0
 	g.linear_velocity = dir * w.data.muzzle_velocity
 	g.add_collision_exception_with(self)
-	# Panzerfaust ist eine Einwegwaffe: leer = weg
-	if w.data.id == &"panzerfaust" and w.total_ammo() <= 0:
-		get_tree().create_timer(0.6, false).timeout.connect(func():
-			if current_slot == WeaponData.Slot.LAUNCHER and weapons[WeaponData.Slot.LAUNCHER] == w and w.total_ammo() <= 0:
-				weapons[WeaponData.Slot.LAUNCHER] = null
-				cycle_weapon(-1))
+	if vehicle != null and is_instance_valid(vehicle) and vehicle is PhysicsBody3D:
+		g.add_collision_exception_with(vehicle)    # Bordkanone: Geschoss trifft nicht das eigene Fahrzeug
+	# Panzerfaust: im Original Einwegwaffe; Vorgabe Auftraggeber: das Rohr bleibt und wird mit Raketen-Munition
+	# (WeaponDB.PANZERFAUST_AMMO) nachgeladen – auch ohne Vorrat, damit aufgenommene Raketen nutzbar sind.
 
 
-## Messer: Ziel bis 1,6 m vor dem Soldaten; von hinten tödlich (lautlos)
-func _melee(w: Weapon) -> void:
-	_melee_cd = 60.0 / maxf(w.data.rpm, 1.0)
-	_net("melee", Vector3.ZERO, Vector3(look_yaw, 0, 0), "")
+## --- Messer (Original: Haltesatz „hand“ in TABLES\anim.sav, +0xF40 „(bodnuti“ stehend / „(bodnutidrep“ hockend,
+## +0xFA0 von hinten „!podrezSTa“ stehend (Ganzkörper) / „(podrezKL02“ hockend; Opfer „!smrtpodrez“).
+## Vorgabe Auftraggeber „schneller“: Clips mit KNIFE_RATE statt Original-Tempo 0,9/1,0, Treffer zum Stichbild
+## (5DS-Ereignis „t“), kurze Erholung, Klick während der Erholung wird gemerkt, gehaltene Taste sticht weiter.
+## Ziel wird zum Stichzeitpunkt bestimmt (bis KNIFE_RANGE vor dem Soldaten, ganz nah in jeder Richtung);
+## von hinten tödlich. Mehrspieler: Treffer nur auf dem Server (Soldier.apply_hit), Ziel-Hinweis des Clients mit
+## Lagetoleranz (Netzfiguren hinken ~0,1 s hinterher).
+const KNIFE_RATE := 2.5
+const KNIFE_RECOVER := 0.3          ## s nach dem Stich bis zum nächsten (vorher feste Sperre 60/rpm = 0,75 s)
+const KNIFE_RANGE := 1.8
+const KNIFE_NET_TOLERANCE := 0.9    ## zusätzliche Reichweite (m) für den Ziel-Hinweis eines Clients auf dem Server
+var _stab_left := -1.0              ## > 0: Zeit bis zum Treffer des laufenden Stichs
+var _stab_weapon: Weapon
+var _stab_hint: Node3D
+var _stab_hint_net := false
+var _stab_queued := false
+var _stab_started_ms := 0
+## Tests/Messung: letzte Stiche {start_ms, hit_ms, target, behind, clip}
+var knife_log: Array = []
+
+
+## Bestes Messerziel: nah (≤ 0,8 m, Kapseln berühren sich bei 0,6 m) in jeder Richtung, sonst bis KNIFE_RANGE (+extra) im Kegel ±55° vor dem Soldaten.
+func _knife_target(extra: float = 0.0) -> Node3D:
 	var fwd := forward()
 	var best: Node3D = null
-	var best_d := 1.7
+	var best_d := KNIFE_RANGE + extra
 	for n in get_tree().get_nodes_in_group("soldiers") + get_tree().get_nodes_in_group("dogs"):
 		var t := n as Node3D
-		if t == null or t == self:
-			continue
-		if t is Soldier and (not (t as Soldier).alive or (t as Soldier).team == team):
+		if not _knife_valid(t):
 			continue
 		var to := t.global_position - global_position
+		if absf(to.y) > 1.6:
+			continue
 		to.y = 0.0
-		if to.length() < best_d and (to.length() < 0.5 or fwd.angle_to(to) < 0.9):
+		var d := to.length()
+		if d < best_d and (d < 0.8 + extra * 0.5 or fwd.angle_to(to) < 0.96):
 			best = t
-			best_d = to.length()
+			best_d = d
+	return best
+
+
+func _knife_valid(t: Node3D) -> bool:
+	if t == null or t == self or not is_instance_valid(t) or not t.is_inside_tree():
+		return false
+	if t is Soldier and (not (t as Soldier).alive or (t as Soldier).team == team):
+		return false
+	return true
+
+
+func _knife_behind(t: Node3D) -> bool:
+	return t is Soldier and (t as Soldier).forward().dot((t.global_position - global_position).normalized()) > 0.4
+
+
+## Stich beginnen (Animation, Klang); der Treffer folgt zum Stichbild (_melee_hit). hint: Ziel-Vorschlag (Client).
+func _melee(w: Weapon, hint: Node3D = null, hint_from_net := false) -> void:
+	var target := hint if _knife_valid(hint) else _knife_target()
+	var behind := _knife_behind(target)
+	var crouched := stance != Stance.STAND
+	var key := ("knife_back_kl" if crouched else "knife_back_st") if behind else ("knife_dr" if crouched else "knife_st")
+	var c := BodyAnim.upper(key) if key != "knife_back_st" else BodyAnim.full(key)
+	var ln := BodyAnim.clip_length(c)
+	var t_hit := BodyAnim.event_time(c, "t")
+	if ln <= 0.0 or t_hit < 0.0:
+		ln = 0.5
+		t_hit = 0.15 * KNIFE_RATE
+	var dur := ln / KNIFE_RATE
+	_stab_left = t_hit / KNIFE_RATE
+	_stab_weapon = w
+	_stab_hint = target
+	_stab_hint_net = hint_from_net
+	_stab_started_ms = Time.get_ticks_msec()
+	_melee_cd = _stab_left + KNIFE_RECOVER
+	if model:
+		if key == "knife_back_st":
+			model.play_body(key, dur, false, "knife")       # Ganzkörper (Schritt an das Opfer), Hand mit Messer
+		elif c != "":
+			model.play_action(c, dur, 0.06)
+	var hid: int = int(target.get_meta("net_peer", 0)) if target else 0
+	var has_hint: float = 1.0 if target and target.has_meta("net_peer") else 0.0
+	_net("melee", Vector3(hid, has_hint, 0), Vector3(look_yaw, 0, 0), "")
 	Events.emit_noise(global_position, w.data.noise_radius, self, team, &"melee")
 	last_shot_time = Time.get_ticks_msec() / 1000.0
 	shot_fired.emit(w)
+	OrigAudio.play_weapon(w.data, "shoot", global_position + Vector3.UP, self, team)   # Kat. 2 „G/B Knife“
+	knife_log.append({"start_ms": _stab_started_ms, "hit_ms": -1, "target": "", "behind": behind, "clip": c})
+	if knife_log.size() > 16:
+		knife_log.pop_front()
+
+
+## Nur Darstellung (Netzfigur auf Clients): Stichanimation ohne Trefferwertung.
+func melee_visual() -> void:
+	var t := _knife_target()
+	var behind := _knife_behind(t)
+	var crouched := stance != Stance.STAND
+	var key := ("knife_back_kl" if crouched else "knife_back_st") if behind else ("knife_dr" if crouched else "knife_st")
+	var c := BodyAnim.upper(key) if key != "knife_back_st" else BodyAnim.full(key)
+	var dur := BodyAnim.clip_length(c) / KNIFE_RATE
+	if model and dur > 0.0:
+		if key == "knife_back_st":
+			model.play_body(key, dur, false, "knife")
+		else:
+			model.play_action(c, dur, 0.06)
+	var w: Weapon = current_weapon()
+	if w and w.data.action == WeaponData.Action.MELEE:
+		OrigAudio.play_weapon(w.data, "shoot", global_position + Vector3.UP, self, team)
+
+
+## Stichbild erreicht: Ziel jetzt bestimmen (Hinweis bevorzugt, sonst Suche) und Schaden anwenden.
+func _melee_hit() -> void:
+	var w := _stab_weapon
+	_stab_weapon = null
+	if w == null or not alive:
+		return
+	var best: Node3D = null
+	var tol := KNIFE_NET_TOLERANCE if _stab_hint_net else 0.25
+	if _knife_valid(_stab_hint):
+		var to := _stab_hint.global_position - global_position
+		if absf(to.y) <= 1.6 and Vector2(to.x, to.z).length() <= KNIFE_RANGE + tol:
+			best = _stab_hint
+	if best == null:
+		best = _knife_target(tol if _stab_hint_net else 0.0)
+	_stab_hint = null
+	if not knife_log.is_empty():
+		(knife_log[-1] as Dictionary)["hit_ms"] = Time.get_ticks_msec()
+		(knife_log[-1] as Dictionary)["target"] = String(best.name) if best else ""
 	if best == null:
 		return
+	var fwd := forward()
 	if best is Soldier:
 		var ts := best as Soldier
-		var behind := ts.forward().dot((ts.global_position - global_position).normalized()) > 0.4
+		var behind := _knife_behind(ts)
+		# Treffer: Kat. 4 „Knife CUT“ (von hinten) bzw. „Knife JAB“ (Zuordnung = Annahme)
+		OrigAudio.play_group(OrigAudio.CAT_HIT, OrigAudio.HIT_KNIFE_CUT if behind else OrigAudio.HIT_KNIFE_JAB,
+			ts.global_position + Vector3.UP * 1.2)
+		if behind:
+			ts.set_meta("death_kind", "throat")     # Opfer: „!smrtpodrez“ (Kehlschnitt)
 		ts.apply_hit(w.data.damage * (3.0 if behind else 1.0), &"torso", self, fwd)
+		if ts.alive:
+			ts.remove_meta("death_kind")
 	elif best.has_method("on_bullet_hit"):
 		best.on_bullet_hit(w.data.damage, self)
 
@@ -780,14 +1143,18 @@ func apply_selection(key: String) -> void:
 	if using_binoculars and key != "binoculars":
 		toggle_binoculars()
 	if key.begins_with("slot:"):
-		tool = ""
-		select_slot(int(key.substr(5)))
+		var slot := int(key.substr(5))
+		if tool != "" and slot != current_slot:
+			_tool_quiet = true          # select_slot zieht gleich die neue Waffe
+			tool = ""
+			_tool_quiet = false
+		if not select_slot(slot):
+			weapon_changed.emit(current_weapon())
 		return
 	tool = key
 	_tool_trigger_prev = true      # der auswählende Klick löst nicht sofort aus
 	if key == "binoculars" and not using_binoculars:
 		toggle_binoculars()
-	weapon_changed.emit(current_weapon())
 
 
 ## Hilfsmittel benutzen (Linksklick)
@@ -806,6 +1173,29 @@ func use_tool() -> void:
 			_place_charge(tool)
 
 
+## Benutzen-Animation der Original-Figur (anim.sav): Tür „!dvereST02/!dvereKL03“, Aufheben/Durchsuchen
+## „(uchprestoj4/(uchpredrep“, Sprengsatz/Entschärfen kniend „!manipulm“, Fesseln „!svazuje1“; sonst Hand ausstrecken
+## wie an der Tür (Schalter, Funkgerät, Kisten). Fahrzeuge, Leitern, Stellungen haben eigene Bewegungen.
+func play_use_anim(it: Node) -> void:
+	if model == null or not alive or net_puppet or vehicle != null:
+		return
+	if it is OrigInteractive.OrigLadder or it is OrigInteractive.OrigEmplacement or it is Vehicle.VehicleEntry:
+		return
+	var crouched := stance != Stance.STAND
+	var key := "door_kl" if crouched else "door_st"
+	var dur := 0.8
+	if it is Pickups.Item or it is Pickups.AmmoCrate or it is Pickups.Loot or it is OrigInteractive.OrigWorldItem \
+			or it is OrigInteractive.OrigCrate:
+		key = "pickup_dr" if crouched else "pickup_st"
+	elif it is OrigInteractive.OrigExplosive or it is PlacedCharge.DefuseSpot or it is ChargeSite:
+		key = "manip_kl"
+		dur = 1.6
+	elif it is EnemyBrain.CaptureAction:
+		key = "tying"
+		dur = 1.4
+	model.play_body(key, dur, true, "use")
+
+
 ## Sprengstoff (Zeitzünder 10 s) bzw. Mine (Annäherungszünder) vor dem Soldaten ablegen. An einem
 ## Original-Sprengplatz in Reichweite wird stattdessen dessen Aktion ausgeführt.
 func _place_charge(kind: String) -> void:
@@ -819,12 +1209,19 @@ func _place_charge(kind: String) -> void:
 	if have <= 0:
 		tool = ""
 		return
+	OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_BOMB, global_position, self)   # „Player01 Bomb manipulation“
 	var c := PlacedCharge.new()
 	c.kind = kind
 	c.owner_soldier = self
 	c.team = team
 	get_parent().add_child(c)
-	c.global_position = global_position + forward() * 0.7 + Vector3.UP * 0.05
+	# auf den Boden vor dem Soldaten legen (Hang: nicht in den Boden, nicht in der Luft)
+	var at := global_position + forward() * 0.7
+	var gq := PhysicsRayQueryParameters3D.create(at + Vector3.UP * 1.2, at + Vector3.DOWN * 1.5, 1, exclude_rids())
+	var gh := get_world_3d().direct_space_state.intersect_ray(gq)
+	if not gh.is_empty():
+		at = gh.position
+	c.global_position = at + Vector3.UP * 0.02
 	_net(kind, c.global_position, Vector3.ZERO, "")
 	if kind == "explosive":
 		explosives -= 1
@@ -834,9 +1231,11 @@ func _place_charge(kind: String) -> void:
 		mines -= 1
 		_consume_orig([70, 71])
 		Events.say("%s: Mine gelegt." % soldier_name, 2.0)
+	action_started.emit("tool_use", 0.8)    # 1. Person: Ablegen (FPV „shot“, z. B. FPVAntimanShot)
+	if model:
+		model.play_body("manip_kl", 1.0, true, "use")   # 3. Person: kniend ablegen (anim.sav „!manipulm“)
 	if (explosives if kind == "explosive" else mines) <= 0:
 		tool = ""
-		weapon_changed.emit(current_weapon())
 
 
 func _consume_orig(ids: Array) -> void:
@@ -851,15 +1250,33 @@ func _consume_orig(ids: Array) -> void:
 ## Taste G: Granate sofort werfen, ohne die Waffe zu wechseln
 func quick_grenade() -> bool:
 	var g: Weapon = weapons[WeaponData.Slot.GRENADE] if weapons.size() > WeaponData.Slot.GRENADE else null
-	if g == null or g.total_ammo() <= 0 or grenade_cooldown > 0.0 or vehicle != null or not alive:
+	if g == null or g.total_ammo() <= 0 or grenade_cooldown > 0.0 or vehicle != null or not alive or is_throwing():
 		return false
 	throw_grenade(g)
 	return true
 
 
+## Repetieren (items.sav +u18 -> Kat. 3 „… (Mauser)“), nach dem Schuss eines Repetierers
 func _bolt_sound() -> void:
-	if alive:
-		Effects.play(&"bolt", global_position, -12.0, 1.0, 20.0)
+	var w := current_weapon()
+	if alive and w:
+		OrigAudio.play_weapon(w.data, "bolt", global_position, self, team)
+
+
+## Hülsen: Kat. 5/0 „Pistol Bullets Hard“ nur auf hartem Untergrund (Stein, Beton, Asphalt, Holz, Metall, Eis);
+## „Pistol Bullets Soft/Liquid“ sind im Original leer (Annahme: auf weichem Boden still)
+const HARD_STEP_GROUPS := [3, 4, 5, 10, 11, 26, 31, 33, 37]
+var _shell_t := 0.0
+
+
+func _shell_sound() -> void:
+	var now := Time.get_ticks_msec() / 1000.0
+	if not alive or now - _shell_t < 0.25:
+		return
+	_shell_t = now
+	var m := OrigAudio.floor_material(global_position)
+	if HARD_STEP_GROUPS.has(int(OrigAudio.material_info(m).get("step_sound", -1))):
+		OrigAudio.play_group(OrigAudio.CAT_FALL, OrigAudio.FALL_SHELL_HARD, global_position + forward() * 0.3 + Vector3.UP * 0.1)
 
 
 ## Aktuelle Streuung (Halbwinkel in Grad) aus Waffe, Haltung, Bewegung, Ausdauer.
@@ -896,31 +1313,65 @@ func consume_recoil() -> Vector2:
 
 func reload() -> bool:
 	var w := current_weapon()
+	if is_throwing() or heal_time_left > 0.0:
+		return false
 	if w and w.start_reload():
-		Effects.play(&"bolt", global_position, -14.0, 0.7, 15.0)
+		OrigAudio.play_weapon(w.data, "reload", global_position, self, team)    # items.sav +u10 -> Kat. 3
+		# Original-Nachladeanimation (TABLES\anim.sav, Satz +0x1300, je Haltung), Dauer = Nachladezeit
+		play_weapon_action("reload", w.reload_left)
 		return true
 	return false
 
 
+## Waffenaktion animieren: 3. Person über die Oberkörperschicht der Figur (Clip aus anim.sav), 1. Person über
+## action_started (CameraRig spielt die FPV-Animation aus FpvAnims.sav). duration < 0 = Cliplänge.
+func play_weapon_action(kind: String, duration: float = -1.0) -> void:
+	var w := current_weapon()
+	if w == null:
+		return
+	var clip := OrigWeapons.action_clip(w.data, team, kind, stance)
+	if duration < 0.0:
+		duration = float(OrigWeapons.clip_info(clip).get("length", 0.0))
+	if model and clip != "":
+		model.play_action(clip, duration)
+	action_started.emit(kind, duration)
+
+
+## --- Granatwurf mit Original-Wurfanimation (anim.sav +0x1240 „hod*“; Granate verlässt die Hand zum
+## Auslösezeitpunkt des Clips = größte Handgeschwindigkeit, export_weapons.py [P]) ---
+var _throw_left := 0.0
+var _throw_data: WeaponData
+var _throw_velocity := Vector3.INF
+var _throw_weapon: Weapon
+
+
+func is_throwing() -> bool:
+	return _throw_left > 0.0
+
+
 func select_slot(slot: int) -> bool:
 	if tool != "" and slot == current_slot and slot < weapons.size() and weapons[slot] != null:
-		tool = ""                      # vom Hilfsmittel zurück zur Waffe
 		if using_binoculars:
 			toggle_binoculars()
-		weapon_changed.emit(current_weapon())
+		tool = ""                      # vom Hilfsmittel zurück zur Waffe (Setter: Ziehen)
 		return true
 	if slot < 0 or slot >= weapons.size() or weapons[slot] == null or slot == current_slot:
 		return false
-	tool = ""
-	if using_binoculars:
-		toggle_binoculars()
 	if slot == WeaponData.Slot.GRENADE and weapons[slot].total_ammo() <= 0:
 		return false
+	if using_binoculars:
+		toggle_binoculars()
+	_tool_quiet = true                 # Waffe wird unten gewechselt und gezogen
+	tool = ""
+	_tool_quiet = false
 	var w := current_weapon()
 	if w:
 		w.cancel_reload()
+	if model:
+		model.stop_action()
 	current_slot = slot
 	_on_weapon_switched()
+	play_weapon_action("draw")          # Ziehen (anim.sav +0x220 „vyt*“)
 	return true
 
 
@@ -937,20 +1388,50 @@ func _on_weapon_switched() -> void:
 		model.set_weapon(w.data if w else null)
 	if w:
 		w.cooldown = maxf(w.cooldown, 0.5)  # Waffe ziehen
+		OrigAudio.play_weapon(w.data, "armed", global_position, self, team)    # items.sav Basis+0x78 -> Kat. 3
 	weapon_changed.emit(w)
 
 
 ## override_velocity: von der KI berechnete Abwurfgeschwindigkeit (sonst Blickrichtung).
 func throw_grenade(w: Weapon, override_velocity := Vector3.INF) -> void:
+	if is_throwing():
+		return
 	if w.in_mag <= 0:
 		if w.reserve <= 0:
 			return
 		w.reserve -= 1
 		w.in_mag = 1
 	w.in_mag -= 1
-	grenade_cooldown = 1.2
+	var cw := current_weapon()
+	if cw:
+		cw.cancel_reload()
+	# Wurfclip des gehaltenen Satzes: im Stand Ganzkörperwurf, in Bewegung nur Oberkörper (…vP)
+	var src: WeaponData = cw.data if cw else w.data
+	var clip := OrigWeapons.action_clip(src, team, "throw_move" if is_moving() else "throw", stance)
+	var ci := OrigWeapons.clip_info(clip)
+	var length := float(ci.get("length", 0.0))
+	var release := float(ci.get("release", 0.0))
+	grenade_cooldown = maxf(1.2, length)
+	_throw_data = w.data
+	_throw_weapon = w
+	_throw_velocity = override_velocity
+	if model == null or clip == "" or release <= 0.0 or not model.play_action(clip, length):
+		_release_grenade()
+		return
+	_throw_left = release
+	if cw:
+		cw.cooldown = maxf(cw.cooldown, length)
+	action_started.emit("throw", length)
+
+
+## Granate verlässt die Hand (Auslösezeitpunkt der Wurfanimation).
+func _release_grenade() -> void:
+	var data := _throw_data
+	if data == null:
+		return
+	_throw_data = null
 	var g := Grenade.new()
-	g.data = w.data
+	g.data = data
 	g.thrower = self
 	g.team = team
 	get_parent().add_child(g)
@@ -958,12 +1439,16 @@ func throw_grenade(w: Weapon, override_velocity := Vector3.INF) -> void:
 	g.global_position = origin
 	var dir := aim_direction()
 	dir.y += 0.25
-	g.linear_velocity = dir.normalized() * w.data.throw_speed * (0.7 if stance == Stance.PRONE else 1.0)
-	if override_velocity.is_finite():
-		g.linear_velocity = override_velocity
+	g.linear_velocity = dir.normalized() * data.throw_speed * (0.7 if stance == Stance.PRONE else 1.0)
+	if _throw_velocity.is_finite():
+		g.linear_velocity = _throw_velocity
 	g.add_collision_exception_with(self)
-	_net("grenade", origin, g.linear_velocity, String(w.data.id))
-	if w.total_ammo() <= 0 and current_slot == WeaponData.Slot.GRENADE:
+	OrigAudio.play_weapon(data, "shoot", origin, null, team)    # Wurf: items.sav +u4 -> Kat. 2 „… Throw“
+	_net("grenade", origin, g.linear_velocity, String(data.id))
+	grenade_released.emit(g)
+	var w := _throw_weapon
+	_throw_weapon = null
+	if w and w.total_ammo() <= 0 and current_slot == WeaponData.Slot.GRENADE and weapons[current_slot] == w:
 		cycle_weapon(-1)
 
 
@@ -972,17 +1457,26 @@ func throw_grenade(w: Weapon, override_velocity := Vector3.INF) -> void:
 func apply_hit(amount: float, zone: StringName, attacker: Node, direction: Vector3) -> void:
 	if not alive:
 		return
-	if Net.is_online and not Net.is_authority():
-		return       # Mehrspieler: Schaden berechnet nur der Server (Gesundheit kommt per Net._hp)
-	# Liegend sind Beine/Arme kleinere Ziele; Helm reduziert Kopfschaden leicht.
-	if zone == &"head" and helmet_style != "cap":
-		amount *= 0.85
+	if Net.is_online:
+		if not Net.is_authority():
+			return       # Mehrspieler: Schaden berechnet nur der Server (Gesundheit kommt per Net._hp)
+		if has_meta("protect_until") and Time.get_ticks_msec() < int(get_meta("protect_until")):
+			return       # Spawnschutz (Original: einige Sekunden nach dem Erscheinen)
+		if attacker is Soldier and attacker != self and (attacker as Soldier).team == team and not Net.friendly_fire():
+			return       # Freund-Feind-Schaden aus
+		set_meta("last_zone", String(zone))
+		if attacker is Soldier and attacker != self and (attacker as Soldier).team == team and Net.team_mode():
+			Net.inverse_damage(attacker as Soldier, amount)     # Server-Regel „Umgekehrter Schaden“
+	# Zonen-/Helmfaktoren rechnet der Aufrufer (Ballistics → WeaponDB.zone_damage, hd2.exe 0x5A1C90)
 	health -= amount
 	last_attacker = attacker
 	damaged.emit(amount, zone)
 	Events.soldier_damaged.emit(self, amount, zone, attacker)
 	if health <= 0.0:
 		die(attacker, direction)
+	elif amount >= 1.0:
+		# Schmerzlaut des Sprachsatzes (speech.set Ereignis 117 „Injury/Ouch“), je Sprecher höchstens alle 1,5 s
+		OrigAudio.speak_event(self, OrigAudio.EV_HURT, 1.5)
 
 
 func heal(amount: float) -> void:
@@ -1005,7 +1499,16 @@ func die(attacker: Node = null, direction := Vector3.ZERO) -> void:
 		(hb as Hitbox).collision_layer = 0
 	remove_from_group("team_%d" % team)
 	add_to_group("corpses")
+	# Netzfigur auf Clients: Richtung aus der Lage des Schützen (Todesclip je Richtung, BodyAnim.death_clip)
+	if direction.length() < 0.01 and attacker is Node3D and is_instance_valid(attacker) and attacker != self:
+		direction = global_position - (attacker as Node3D).global_position
 	model.play_death(direction)
+	# Todesschrei (speech.set Ereignis 115 „Death“) und Körperfall (Kat. 0/44 „Uni Bodyfall“, nach 0,7 s = Annahme)
+	set_meta("_speech_until", -1.0)
+	OrigAudio.speak_event(self, OrigAudio.EV_DEATH)
+	get_tree().create_timer(0.7, false).timeout.connect(func():
+		if is_instance_valid(self):
+			OrigAudio.play_group(OrigAudio.CAT_STEP, OrigAudio.STEP_BODYFALL, global_position))
 	died.emit(self)
 	Events.soldier_died.emit(self, attacker)
 

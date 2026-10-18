@@ -26,6 +26,8 @@ var mouse_sensitivity := 0.12
 var invert_y := false
 var master_volume := 0.8      ## Original „Sound-Lautstärke“ (Gesamt)
 var music_volume := 0.7       ## Original „Musik-Lautstärke“ (Bus „Music“)
+var sfx_volume := 1.0         ## Effekte (Bus „SFX“: Waffen, Schritte, Umgebung) – Ergänzung zur Original-Seite
+var speech_volume := 1.0      ## Sprache (Bus „Voice“: Dialoge, Rufe, Befehle) – Ergänzung zur Original-Seite
 var gamma := 1.0              ## Original „Gamma-Korrektur“ (0,6 … 1,6)
 var shadows := true           ## Original „SCHATTEN“
 var morphing := true          ## Original „MORPHING“ (Gesichtsanimation; im Nachbau noch ohne Wirkung)
@@ -45,14 +47,29 @@ const DETAIL_PRESETS := [
 ## (Auflösung, VSync, Kantenglättung …) sind rechnerweit wie beim Original-setup.exe.
 const PROFILE_KEYS := {
 	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "grass", "dynamic_lights", "high_models", "quality"],
-	"audio": ["master_volume", "music_volume"],
+	"audio": ["master_volume", "music_volume", "sfx_volume", "speech_volume"],
 	"controls": ["mouse_sensitivity", "invert_y"],
-	"game": ["subtitles", "crosshair"],
+	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "kill_cam"],
+	"multiplayer": ["voice_enabled", "voice_volume", "connection_type"],
 }
+## Original „MEHRSPIELER-SPIEL-EINSTELLUNGEN“ (T2409): Voice-Chat ermöglichen (T2431, Original-Standard aus),
+## Voice-Chat-Lautstärke (T2432, Standard 50 %), Verbindungsart (T2875–2879; Standard DSL = Annahme).
+var voice_enabled := false
+var voice_volume := 0.5
+var connection_type := 3
+const CONNECTION_TEXTS := [2875, 2876, 2877, 2878, 2879]
+## Sendetakt des eigenen Zustands je Verbindungsart (Annahme: Modem 10 Hz, ISDN 15 Hz, sonst 20 Hz)
+const CONNECTION_HZ := [20.0, 10.0, 15.0, 20.0, 20.0]
 var profile_path := ""     ## <Profil>/options.cfg; leer = keine Profiloptionen (alles global)
 
 var subtitles := true         ## Original „UNTERTITEL“
 var crosshair := true         ## Original v1.12 „FADENKREUZ ZULASSEN“
+## Ergänzungen (Optionen SPIEL): FPS-Anzeige (Ecke oben links, SP+MP, Konsole „fps“), Namen über Spielern und
+## Trefferanzeige/-geräusch im Mehrspieler (src/ui/mp_feedback.gd; Server-Regeln shownames/hitindicator)
+var show_fps := false
+var show_names := true
+var hit_feedback := true
+var kill_cam := true          ## Kill-Cam nach dem eigenen Tod (src/ui/kill_cam.gd; Server-Regel killcam)
 # --- aus dem Original-Setup (setup.exe, LS3D_setup), soweit heute sinnvoll ---
 ## VSync-Modus: 0 aus, 1 an, 2 adaptiv, 3 Dreifachpuffer (Original „Triple-Buffering“)
 var vsync_mode := 1
@@ -76,11 +93,16 @@ var _cfg := ConfigFile.new()
 
 
 func _ready() -> void:
-	if AudioServer.get_bus_index("Music") < 0:
-		AudioServer.add_bus()
-		AudioServer.set_bus_name(AudioServer.bus_count - 1, "Music")
-		AudioServer.set_bus_send(AudioServer.bus_count - 1, "Master")
+	for bus in ["Music", "SFX", "Voice"]:
+		if AudioServer.get_bus_index(bus) < 0:
+			AudioServer.add_bus()
+			AudioServer.set_bus_name(AudioServer.bus_count - 1, bus)
+			AudioServer.set_bus_send(AudioServer.bus_count - 1, "Master")
 	load_settings()
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--fps"):
+			show_fps = a != "--fps=0"                  # --fps[=1] (Kommandozeile, nicht gespeichert)
+	add_child(preload("res://src/ui/fps_overlay.gd").new())
 	apply()
 
 
@@ -97,14 +119,20 @@ func load_settings() -> void:
 	invert_y = _cfg.get_value("controls", "invert_y", invert_y)
 	master_volume = _cfg.get_value("audio", "master_volume", master_volume)
 	music_volume = _cfg.get_value("audio", "music_volume", music_volume)
+	sfx_volume = _cfg.get_value("audio", "sfx_volume", sfx_volume)
+	speech_volume = _cfg.get_value("audio", "speech_volume", speech_volume)
 	gamma = _cfg.get_value("graphics", "gamma", gamma)
 	shadows = _cfg.get_value("graphics", "shadows", shadows)
 	subtitles = _cfg.get_value("game", "subtitles", subtitles)
 	crosshair = _cfg.get_value("game", "crosshair", crosshair)
+	for k in ["show_fps", "show_names", "hit_feedback", "kill_cam"]:
+		set(k, _cfg.get_value("game", k, get(k)))
 	for k in ["morphing", "decals", "blood", "grass", "dynamic_lights", "high_models"]:
 		set(k, _cfg.get_value("graphics", k, get(k)))
 	for k in ["vsync_mode", "max_fps", "aa_mode", "texture_quality", "anisotropy", "pause_unfocused"]:
 		set(k, _cfg.get_value("setup", k, get(k)))
+	for k in PROFILE_KEYS["multiplayer"]:
+		set(k, _cfg.get_value("multiplayer", k, get(k)))
 
 
 func save_settings() -> void:
@@ -128,14 +156,20 @@ func save_settings() -> void:
 	_cfg.set_value("controls", "invert_y", invert_y)
 	_cfg.set_value("audio", "master_volume", master_volume)
 	_cfg.set_value("audio", "music_volume", music_volume)
+	_cfg.set_value("audio", "sfx_volume", sfx_volume)
+	_cfg.set_value("audio", "speech_volume", speech_volume)
 	_cfg.set_value("graphics", "gamma", gamma)
 	_cfg.set_value("graphics", "shadows", shadows)
 	_cfg.set_value("game", "subtitles", subtitles)
 	_cfg.set_value("game", "crosshair", crosshair)
+	for k in ["show_fps", "show_names", "hit_feedback", "kill_cam"]:
+		_cfg.set_value("game", k, get(k))
 	for k in ["morphing", "decals", "blood", "grass", "dynamic_lights", "high_models"]:
 		_cfg.set_value("graphics", k, get(k))
 	for k in ["vsync_mode", "max_fps", "aa_mode", "texture_quality", "anisotropy", "pause_unfocused"]:
 		_cfg.set_value("setup", k, get(k))
+	for k in PROFILE_KEYS["multiplayer"]:
+		_cfg.set_value("multiplayer", k, get(k))
 	_cfg.save(PATH)
 
 
@@ -207,9 +241,10 @@ func texture_suffixes() -> Array:
 
 func _apply_audio() -> void:
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(master_volume, 0.0001)))
-	var mb := AudioServer.get_bus_index("Music")
-	if mb >= 0:
-		AudioServer.set_bus_volume_db(mb, linear_to_db(maxf(music_volume, 0.0001)))
+	for pair in [["Music", music_volume], ["SFX", sfx_volume], ["Voice", speech_volume]]:
+		var bi := AudioServer.get_bus_index(pair[0])
+		if bi >= 0:
+			AudioServer.set_bus_volume_db(bi, linear_to_db(maxf(float(pair[1]), 0.0001)))
 
 
 ## Detailstufe anwenden (Original: GRAFIK-DETAILS NIEDRIG/MITTEL/HOCH setzen die Einzelschalter)

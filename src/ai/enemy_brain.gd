@@ -59,6 +59,54 @@ var wait_stop_dist := 12.0
 var wait_resume_dist := 8.0
 var _waiting_player := false
 
+# --- Alarmarten (Original SetAlarmType(Maske, an/aus) / _GetAlarmType). Bedeutung der 10 Bits laut
+# Originalskriptkommentar (BURMA2 bu2_08.scr, CZECH6 c5_r*.scr) [B]:
+const AL_NEAR_SHOT := 1       ## nahe Schüsse
+const AL_SHOT := 2            ## Schüsse
+const AL_STEPS := 4           ## Schritte
+const AL_SOUND := 8           ## Geräusche (OnUse: Türen, Schalter)
+const AL_EXPLOSION := 16
+const AL_SEE := 32            ## Feind gesehen
+const AL_HURT := 64           ## verwundet
+const AL_DEATHCRY := 128      ## Todesschrei eines Kameraden
+const AL_FRIENDLY := 256      ## Beschuss durch die eigene Seite
+const AL_CORPSE := 512        ## Leiche gesehen
+var alarm_mask := 1023        ## SetAlarmType: welche Alarmarten OnAlarm auslösen
+var events_enabled := true    ## HUMAN_SetEvents(false): keine KI-Ereignisse an das Skript (z. B. schlafende Posten)
+var last_alarm_type := 0      ## _GetAlarmType: Art des Alarms, der zuletzt OnAlarm ausgelöst hat
+var alarm_pos := Vector3.INF  ## Ort des letzten Alarmreizes (HUMAN_MoveToAlarm)
+var _stimulus := AL_SEE
+var _script_alarm_t := 0.0
+## Skriptgesteuerte (Zombie-)Akteure: OnAlarmDone, wenn so lange kein neuer Alarmreiz kam (ANNAHME, Dauer nicht belegt)
+const SCRIPT_ALARM_HOLD := 25.0
+
+# --- Moral / Ergeben / Gefangennahme (hd2.exe, docs/re_notes_ai_surrender.md) ---
+## Moral aus actors.bin (+0xF8, Standard 80). Ab Anfangsmoral ≥ 90 gerät der Soldat nie in Panik (Flag 1),
+## ab ≥ 75 kämpft er in Panik bewaffnet weiter (Flag 2) [B 0x547A81, 0x5487DF, 0x54B955].
+var morale := 80.0
+var morale_initial := 80.0
+var surrendered := false      ## Hände hoch (0x5A6450: KI vtable +0x100, Byte +0x2C1)
+var captured := false         ## gefangen genommen (Flag 0x4000000, 0x5A6380)
+var uniform_taken := false    ## Uniform abgegeben (Byte +0x1A5)
+## Abstand, unter dem ein bedrängter Soldat sich ergibt statt zu fliehen: 15 m [B 0x80F620]
+const SURRENDER_DIST := 15.0
+var _surrender_check := 0.0
+var _surrender_delay := -1.0   ## Original: Hände hoch nach 300 ms (Zustand 0x2000002, Zähler 0x12C)
+var _captor: Soldier
+var capture_action: Node      ## EnemyBrain.CaptureAction (Interactable am Soldaten)
+var _mount_target: Node       ## Waffenstellung, die die KI besetzen will
+var _mount_check := 0.0
+var look_around := 0          ## HUMAN_LookAround(n), 0 = aus
+var _look_around_t := 0.0
+var _look_around_base := 0.0
+
+
+func set_look_around(n: int) -> void:
+	look_around = maxi(n, 0)
+	_look_around_t = 0.0
+	_look_around_base = soldier.look_yaw
+	script_look_at = Vector3.INF
+
 
 func script_move(pos: Vector3) -> void:
 	_script_target = pos
@@ -68,6 +116,42 @@ func script_move(pos: Vector3) -> void:
 
 func script_move_done() -> bool:
 	return not has_move_target() or arrived(1.2)
+
+
+## HUMAN_IllFire(Ziel, ms): ms lang auf ein Ziel (Akteur oder Frame) feuern, z. B. Zielscheiben (ALPS1), Hinrichtung
+## (ARCTIC3 Killer); blockiert das Skript für die Dauer
+var _ill_fire_t := 0.0
+var _ill_target: Node3D
+
+
+func script_ill_fire(t: Node3D, seconds: float) -> void:
+	_ill_target = t
+	_ill_fire_t = maxf(seconds, 0.1)
+	stop_moving()
+
+
+func ill_fire_done() -> bool:
+	return _ill_fire_t <= 0.0
+
+
+func _ill_fire_tick(delta: float) -> void:
+	_ill_fire_t -= delta
+	soldier.move_input = Vector3.ZERO
+	if not is_instance_valid(_ill_target) or _ill_fire_t <= 0.0:
+		_ill_fire_t = 0.0
+		cease_fire()
+		return
+	var p := _ill_target.global_position + (Vector3.UP * 1.2 if _ill_target is Soldier else Vector3.ZERO)
+	look_at_point(p, delta, 8.0)
+	soldier.aim_point = p
+	soldier.has_aim_point = true
+	soldier.aiming = true
+	var w := soldier.current_weapon()
+	if w == null:
+		return
+	if w.in_mag == 0 and not w.is_reloading():
+		soldier.reload()
+	_handle_bursts(w, facing_error(p) < 0.15, delta, distance_to(p))
 
 
 func script_attack(t: Soldier) -> void:
@@ -93,6 +177,10 @@ func _script_tick(delta: float) -> void:
 		soldier.stance_request = script_stance
 	if script_look_at.is_finite() and not has_move_target():
 		look_at_point(script_look_at + Vector3.UP * 1.5, delta, 4.0)
+	elif look_around > 0 and not has_move_target():
+		# HUMAN_LookAround(n): Umsehen um die aktuelle Blickrichtung (Weite nach n – ANNAHME, Stufen nicht belegt)
+		_look_around_t += delta
+		soldier.look_yaw = _look_around_base + sin(_look_around_t * 0.6) * minf(0.25 * look_around, 1.2)
 	soldier.move_mode = script_move_mode
 	if wait_for_player and has_move_target():
 		var nearest := INF
@@ -122,11 +210,42 @@ func setup(s: Soldier) -> void:
 	perception.corpse_seen.connect(_on_corpse)
 	Events.alarm_raised.connect(_on_alarm)
 	s.damaged.connect(_on_damaged)
+	s.died.connect(func(_x): OrigAudio.set_combat(self, false))
+	Events.soldier_died.connect(_on_any_death)
 	state = State.PATROL if patrol_points.size() > 1 else State.GUARD
+	if s.team == Soldier.TEAM_AXIS and not Net.is_online:
+		var ca := CaptureAction.new()
+		ca.name = "CaptureAction"
+		ca.brain = self
+		s.add_child(ca)
+		capture_action = ca
 
 
 func _physics_process(delta: float) -> void:
-	if not enabled or soldier == null or not soldier.alive or suspended:
+	if not enabled or soldier == null or not soldier.alive:
+		return
+	if surrendered or captured:
+		_surrender_tick(delta)
+		return
+	if suspended:
+		return
+	_surrender_check -= delta
+	if _surrender_check <= 0.0:
+		_surrender_check = 0.25
+		_check_surrender()
+		if surrendered:
+			return
+	if _script_alarm_t > 0.0:
+		_script_alarm_t -= delta
+		if _script_alarm_t <= 0.0 and _alarm_notified and script_control:
+			_alarm_notified = false
+			_notify_script("ONALARMDONE")
+	if _ill_fire_t > 0.0:
+		_ill_fire_tick(delta)
+		return
+	if soldier.mounted != null or (soldier.vehicle != null and soldier.seat_index > 0 \
+			and soldier.vehicle.has_method("seat_weapon") and soldier.vehicle.seat_weapon(soldier.seat_index) != null):
+		_mounted_tick(delta)
 		return
 	if script_control:
 		_script_tick(delta)
@@ -148,12 +267,22 @@ func set_state(s: int) -> void:
 	if s == state:
 		return
 	# Original-Skriptereignisse: OnAlarm beim Eintritt in den Kampf, OnAlarmDone bei Beruhigung
-	if s == State.COMBAT and not _alarm_notified and script_alarm_enabled:
-		_alarm_notified = true
-		_notify_script("ONALARM")
+	if s == State.COMBAT:
+		_script_alarm(_stimulus, target.global_position if is_instance_valid(target) else soldier.global_position)
 	elif (s == State.GUARD or s == State.PATROL) and _alarm_notified:
 		_alarm_notified = false
 		_notify_script("ONALARMDONE")
+	# Original-Missionsmusik: Action, solange mindestens ein Gegner im Kampf ist (hd2.exe 0x5832F0 -> 0x69E920)
+	OrigAudio.set_combat(self, s == State.COMBAT)
+	# Gegner-Rufe (speech.set Sätze „Enemy G #1–#4“, deutsche Aufnahmen 9000xxxx); Zuordnung der Ereignisse
+	# zu den KI-Zuständen nach den Satznamen (speech.txt) – Auslösezeitpunkte = Annahme
+	if soldier and soldier.alive:
+		if s == State.INVESTIGATE and state != State.COMBAT:
+			OrigAudio.speak_event(soldier, OrigAudio.EV_E_SUSPICIOUS, 4.0)
+		elif (s == State.GUARD or s == State.PATROL) and state == State.INVESTIGATE:
+			OrigAudio.speak_event(soldier, OrigAudio.EV_E_NOTHING, 4.0)
+		elif (s == State.GUARD or s == State.PATROL) and state == State.SEARCH:
+			OrigAudio.speak_event(soldier, OrigAudio.EV_E_CANCEL, 4.0)
 	state = s
 	_state_time = 0.0
 	_cover_pos = Vector3.INF
@@ -241,6 +370,17 @@ func _find_flank(tpos: Vector3, threat_eye: Vector3) -> Vector3:
 
 func _combat(delta: float) -> void:
 	perception.forget_dead()
+	if _try_autonomous_mount(delta):
+		return
+	# Panik (Moral < 20) ohne Standhaftigkeit und Feind ≥ 15 m: Flucht (Original-Zustand 0x4000002) [B]; Fluchtweg 25 m [E]
+	if morale < 20.0 and morale_initial < 90.0 and not (is_armed() and morale_initial >= 75.0) \
+			and is_instance_valid(target) and target.alive and distance_to(target.global_position) >= SURRENDER_DIST:
+		if not has_move_target() or arrived(1.5):
+			var away := soldier.global_position - target.global_position
+			away.y = 0.0
+			move_to(soldier.global_position + away.normalized() * 25.0, Soldier.MoveMode.RUN)
+		cease_fire()
+		return
 	var visible := perception.best_target()
 	if visible:
 		target = visible
@@ -253,6 +393,11 @@ func _combat(delta: float) -> void:
 		return
 	var tpos: Vector3 = perception.last_known.get(target, target.global_position)
 	var threat_eye := tpos + Vector3.UP * 1.5
+	# Kampfrufe: „Get Him! / He's Here!“ (Ereignis 119) bei Sicht, unbewaffnet „I Don't Have A Gun“ (114);
+	# Abstand 8–14 s je Sprecher = Annahme
+	if visible and _state_time > 2.0:
+		var armed := soldier.current_weapon() != null and soldier.current_weapon().data.action != WeaponData.Action.MELEE
+		OrigAudio.speak_event(soldier, OrigAudio.EV_E_ATTACK if armed else OrigAudio.EV_E_NO_WEAPON, randf_range(8.0, 14.0))
 
 	# Granate: Ziel hält sich hinter Deckung auf (Original: ATTACK_THROW_GRENADE).
 	# Vor der Deckungslogik, damit auch auf dem Weg in Deckung geworfen wird.
@@ -367,17 +512,35 @@ func _crouch_has_los(threat_eye: Vector3) -> bool:
 
 # --- Reaktionen --------------------------------------------------------------
 
+## Alarmreiz an das Originalskript: OnAlarm nur, wenn die Art per SetAlarmType erlaubt ist; _GetAlarmType
+## liefert danach diese Art, HUMAN_MoveToAlarm läuft zum Ort des Reizes.
+func _script_alarm(type: int, pos: Vector3) -> void:
+	if surrendered or captured:
+		return
+	alarm_pos = pos
+	if not script_alarm_enabled or not events_enabled or (alarm_mask & type) == 0:
+		return
+	_script_alarm_t = SCRIPT_ALARM_HOLD
+	if _alarm_notified:
+		return
+	last_alarm_type = type
+	_alarm_notified = true
+	if Game.cli.has("debug_alarm"):
+		print("ALARM %s Art %d bei %s" % [soldier.name, type, pos])
+		print_stack()
+	_notify_script("ONALARM")
+
+
 func _on_detected(t: Soldier) -> void:
-	if not soldier.alive or suspended:
+	if not soldier.alive or suspended or surrendered or captured:
 		return
 	if script_control:
 		# Zombie-Modus: das Skript entscheidet (OnAlarm), die KI greift nicht selbst ein
 		target = t
-		if not _alarm_notified and script_alarm_enabled:
-			_alarm_notified = true
-			_notify_script("ONALARM")
+		_script_alarm(AL_SEE, t.global_position)
 		return
 	target = t
+	_stimulus = AL_SEE
 	if state != State.COMBAT:
 		set_state(State.COMBAT)
 		alert_level = 1.0
@@ -394,14 +557,37 @@ func _on_suspicious(pos: Vector3) -> void:
 		set_state(State.INVESTIGATE)
 
 
+## Geräuschart -> Original-Alarmart (Zuordnung nach den Kommentar-Bezeichnungen; „alert“ = Zuruf eines
+## Kameraden mit Feindsicht -> 32 und Schüsse unter 15 m -> 1 sind ANNAHMEN)
+func _alarm_type_of(kind: StringName, pos: Vector3, source: Node) -> int:
+	match kind:
+		&"gunshot", &"impact":
+			if source is Soldier and (source as Soldier).team == soldier.team:
+				return 0
+			return AL_NEAR_SHOT if distance_to(pos) < 15.0 else AL_SHOT
+		&"explosion":
+			return AL_EXPLOSION
+		&"step", &"climb", &"engine":
+			return AL_STEPS
+		&"door", &"voice", &"melee", &"bark":
+			return AL_SOUND
+		&"alert":
+			return AL_SEE
+	return 0
+
+
 func _on_heard(pos: Vector3, kind: StringName, source: Node) -> void:
-	if not soldier.alive or state == State.COMBAT or suspended:
+	if not soldier.alive or state == State.COMBAT or suspended or surrendered or captured:
 		return
-	if script_control:
-		if (kind == &"gunshot" or kind == &"explosion" or kind == &"alert") and not _alarm_notified and script_alarm_enabled:
-			_alarm_notified = true
+	var at := _alarm_type_of(kind, pos, source)
+	if at != 0 and (at != AL_STEPS or (source is Soldier and (source as Soldier).team != soldier.team)):
+		_stimulus = at
+		if script_control:
 			investigate_pos = pos
-			_notify_script("ONALARM")
+			_script_alarm(at, pos)
+		else:
+			alarm_pos = pos
+	if script_control:
 		return
 	if kind == &"alert":
 		# Kamerad meldet Feindkontakt: dorthin, kampfbereit
@@ -417,6 +603,13 @@ func _on_heard(pos: Vector3, kind: StringName, source: Node) -> void:
 
 
 func _on_corpse(c: Soldier) -> void:
+	if surrendered or captured:
+		return
+	_stimulus = AL_CORPSE
+	if script_control:
+		_script_alarm(AL_CORPSE, c.global_position)
+		return
+	alarm_pos = c.global_position
 	if state == State.COMBAT:
 		return
 	_corpse_to_check = c
@@ -425,24 +618,38 @@ func _on_corpse(c: Soldier) -> void:
 	set_state(State.INVESTIGATE)
 
 
-func _on_damaged(_amount: float, _zone: StringName) -> void:
+func _on_damaged(amount: float, _zone: StringName) -> void:
 	if not soldier.alive:
 		return
 	var a := soldier.last_attacker as Soldier
+	# Moral sinkt mit Verwundungen (ANNAHME: −0,25 je Schadenspunkt, Originalformel nicht belegt)
+	morale = maxf(morale - amount * 0.25, 0.0)
+	if surrendered and not captured:
+		# Original: Beschuss eines Ergebenen (Ereignis 0x40000010/15) -> Flucht bzw. Gegenwehr [P 0x54B820]
+		_end_surrender(a)
+		return
+	if captured:
+		return
 	if a and is_instance_valid(a):
+		var same := a.team == soldier.team
+		_stimulus = AL_FRIENDLY if same else AL_HURT
+		if script_control:
+			_script_alarm(_stimulus, a.global_position)
+		if same:
+			return
 		perception.awareness[a] = 1.0
 		perception.last_known[a] = a.global_position
 		_on_detected(a)
 
 
 func _on_alarm(pos: Vector3, _by: Node) -> void:
-	if not soldier.alive or state == State.COMBAT:
+	if not soldier.alive or state == State.COMBAT or surrendered or captured:
 		return
 	if script_control:
-		if not _alarm_notified and script_alarm_enabled:
-			_alarm_notified = true
-			_notify_script("ONALARM")
+		_script_alarm(AL_SHOT, pos)
+		_notify_script("ONGLOBALALARM")
 		return
+	_notify_script("ONGLOBALALARM")
 	# Original: OnAlarm -> Sichtweite 300, rennen
 	alert_level = 1.0
 	perception.sight_range = maxf(_base_sight, 150.0)
@@ -455,9 +662,25 @@ func _shout(pos: Vector3) -> void:
 	if _shout_cooldown > 0.0:
 		return
 	_shout_cooldown = 6.0
+	OrigAudio.speak_event(soldier, OrigAudio.EV_E_SEE, 3.0)    # „I See Him / Enemy!“ (speech.set 121)
 	Events.emit_noise(soldier.global_position, 35.0, soldier, soldier.team, &"alert")
 	# Feindkontakt im Gefecht löst nach kurzer Zeit den Gesamtalarm aus
 	get_tree().create_timer(6.0, false).timeout.connect(_alarm_if_still_fighting)
+
+
+## Gegner hat sein Ziel getötet: Ruf „I Got Him / He's Dead“ (speech.set Ereignis 118)
+func _on_any_death(s: Node, attacker: Node) -> void:
+	if attacker == soldier and s != soldier and soldier.alive:
+		OrigAudio.speak_event(soldier, OrigAudio.EV_E_KILLED, 3.0)
+	# Todesschrei eines Kameraden in Hörweite (Alarmart 128); Moral sinkt (ANNAHME −15 je Kamerad in 30 m)
+	if s is Soldier and s != soldier and soldier.alive and (s as Soldier).team == soldier.team:
+		var d := distance_to((s as Soldier).global_position)
+		if d < 30.0:
+			morale = maxf(morale - 15.0, 0.0)
+		if d < perception.hear_range * 0.5 and not surrendered and not captured:
+			_stimulus = AL_DEATHCRY
+			if script_control:
+				_script_alarm(AL_DEATHCRY, (s as Soldier).global_position)
 
 
 func _alarm_if_still_fighting() -> void:
@@ -472,15 +695,325 @@ func _raise_alarm(_reason: String) -> void:
 
 
 func state_name() -> String:
+	if captured:
+		return "Gefangen"
+	if surrendered:
+		return "Ergeben"
 	return STATE_NAMES[state]
 
 
+# --- Ergeben / Gefangennahme ------------------------------------------------------
+# Original (hd2.exe, docs/re_notes_ai.md §1): Panik bei Moral < 20 (außer Anfangsmoral ≥ 90) oder ohne Waffe
+# [B 0x5487DF]; in Panik mit sichtbarem Feind: bewaffnet und Anfangsmoral ≥ 75 -> weiterkämpfen, sonst Feind unter 15 m
+# -> ergeben (Hände hoch nach 300 ms), sonst fliehen [B 0x54B955–0x54B9D6]. Gefangennehmen (T7038) nur bei Ergebenen,
+# „Uniform benutzen“ (T7044) nur bei lebenden Gefangenen – an Leichen ist der Eintrag grau [B 0x4BF670 Fall 3].
+# ANNAHME (Auslöser im Spiel): Wird ein ahnungsloser Soldat (nicht im Kampf) aus höchstens 15 m mit einer Schusswaffe
+# anvisiert, sinkt seine Moral schlagartig um 70 (Überraschung) – er gerät in Panik und ergibt sich.
+
+## Spieler-/Truppsoldat, der diesen Soldaten aus höchstens 15 m mit einer Schusswaffe anvisiert (Sichtlinie)
+func _threat_aiming() -> Soldier:
+	var chest := soldier.global_position + Vector3.UP * 1.1
+	for n in get_tree().get_nodes_in_group("team_%d" % Soldier.TEAM_ALLIED):
+		var t := n as Soldier
+		if t == null or not t.alive or t.vehicle != null or t.disguised:
+			continue
+		var d := t.global_position.distance_to(soldier.global_position)
+		if d > SURRENDER_DIST:
+			continue
+		var w := t.current_weapon()
+		if w == null or w.data.action in [WeaponData.Action.MELEE, WeaponData.Action.THROWN]:
+			continue
+		if not t.aiming:
+			continue
+		var to := chest - t.eye_position()
+		if t.aim_direction().angle_to(to) > deg_to_rad(maxf(10.0, rad_to_deg(atan2(0.6, maxf(d, 0.5))))):
+			continue
+		var q := PhysicsRayQueryParameters3D.create(t.eye_position(), chest, 1)
+		if not soldier.get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+			continue
+		return t
+	return null
+
+
+func is_armed() -> bool:
+	for w in soldier.weapons:
+		if w and w.data.action not in [WeaponData.Action.MELEE, WeaponData.Action.THROWN] and w.total_ammo() > 0:
+			return true
+	return false
+
+
+func _check_surrender() -> void:
+	if soldier.team != Soldier.TEAM_AXIS or soldier.vehicle != null or soldier.mounted != null or Net.is_online:
+		return
+	if _surrender_delay >= 0.0:
+		return
+	var t := _threat_aiming()
+	if t == null:
+		# Original ohne Zielen: in Panik (Moral < 20 bzw. unbewaffnet) und erkannter Feind unter 15 m -> ergeben
+		if ((morale < 20.0 and morale_initial < 90.0) or not is_armed()) and not (is_armed() and morale_initial >= 75.0):
+			var v := perception.best_target()
+			if v and v.team == Soldier.TEAM_ALLIED and distance_to(v.global_position) < SURRENDER_DIST:
+				t = v
+		if t == null:
+			return
+	var surprised := script_control or state in [State.GUARD, State.PATROL, State.INVESTIGATE]
+	var m := morale - (70.0 if surprised else 0.0)
+	var panic := (m < 20.0 and morale_initial < 90.0) or not is_armed()
+	if not panic:
+		return
+	if is_armed() and morale_initial >= 75.0 and not surprised:
+		return     # Original: bewaffnet und standhaft -> kämpft weiter (Zustand 0x8000001)
+	_captor = t
+	_surrender_delay = 0.3
+	cease_fire()
+	stop_moving()
+
+
+## Zustand „ergeben“/„gefangen“: steht mit erhobenen Händen (gefangen: kniet) und tut nichts
+func _surrender_tick(delta: float) -> void:
+	soldier.trigger = false
+	soldier.aiming = false
+	soldier.move_input = Vector3.ZERO
+	_move_target = Vector3.INF
+	soldier.stance_request = Soldier.Stance.CROUCH if captured else Soldier.Stance.STAND
+	if is_instance_valid(_captor) and not captured:
+		look_at_point(_captor.eye_position(), delta, 3.0)
+
+
+func _process(delta: float) -> void:
+	if _surrender_delay < 0.0 or soldier == null:
+		return
+	_surrender_delay -= delta
+	if _surrender_delay < 0.0 and soldier.alive and not surrendered:
+		surrender(_captor)
+
+
+## Hände hoch: kein Ziel mehr für die KI des Trupps (neutral), Skript ruht bis zum Tod
+func surrender(by: Soldier = null) -> void:
+	if surrendered or not soldier.alive:
+		return
+	surrendered = true
+	_surrender_delay = -1.0
+	_captor = by
+	cease_fire()
+	stop_moving()
+	OrigAudio.set_combat(self, false)
+	soldier.set_meta("hands_up", true)
+	if soldier.model and soldier.model.has_method("set_hands_up"):
+		soldier.model.set_hands_up(true)
+	_set_team(Soldier.TEAM_NEUTRAL)
+	var vm = runtime.vm_for(soldier) if runtime and is_instance_valid(runtime) else null
+	if vm:
+		vm.paused = true
+	# Ruf beim Ergeben: Satz „I Don't Have A Gun“ (speech.set Ereignis 114) – Zuordnung ANNAHME
+	OrigAudio.speak_event(soldier, OrigAudio.EV_E_NO_WEAPON, 3.0)
+	if by and by.is_player_controlled:
+		Events.say("%s ergibt sich." % soldier.soldier_name, 2.5)
+
+
+func _set_team(t: int) -> void:
+	soldier.remove_from_group("team_%d" % soldier.team)
+	soldier.team = t
+	soldier.add_to_group("team_%d" % t)
+
+
+## Ergebener wird beschossen: bewaffnet -> Gegenwehr, sonst Flucht (Original 0x54B820: 0x8000001 bzw. 0x4000002)
+func _end_surrender(attacker: Soldier) -> void:
+	surrendered = false
+	soldier.remove_meta("hands_up")
+	if soldier.model and soldier.model.has_method("set_hands_up"):
+		soldier.model.set_hands_up(false)
+	_set_team(Soldier.TEAM_AXIS)
+	morale_initial = minf(morale_initial, 74.0)    # kein zweites Ergeben aus Standhaftigkeit
+	var vm = runtime.vm_for(soldier) if runtime and is_instance_valid(runtime) else null
+	if vm:
+		vm.paused = false
+	script_control = false
+	if attacker and is_armed():
+		_on_detected(attacker)
+	elif attacker:
+		var away := soldier.global_position - attacker.global_position
+		away.y = 0.0
+		set_state(State.SEARCH)
+		move_to(soldier.global_position + away.normalized() * 30.0, Soldier.MoveMode.RUN)
+
+
+## Gefangennehmen (Original T7038): Waffen abgeben, niederknien; danach Durchsuchen und Uniform möglich
+func capture(by: Soldier) -> void:
+	if not surrendered or captured or not soldier.alive:
+		return
+	captured = true
+	_captor = by
+	soldier.set_meta("captured", true)
+	# abgegebene Waffen (Original: Waffe wird fallengelassen) – Munition bleibt beim Durchsuchen erhältlich
+	for i in soldier.weapons.size():
+		var w := soldier.weapons[i]
+		if w and w.data.action != WeaponData.Action.MELEE:
+			soldier.set_meta("surrendered_weapons", soldier.get_meta("surrendered_weapons", []) + [w])
+			soldier.weapons[i] = null
+	soldier._on_weapon_switched()
+	Events.say("%s ist gefangen." % soldier.soldier_name, 2.5)
+	# Gefangener zählt für Skripte als ausgeschaltet (_ACTOR_GetState 0) -> auch OnDeath (Zähler wie CZECH3
+	# „dummy_reinforcement“ brauchen sonst jeden Toten). ANNAHME: Original-Ereignis bei Gefangennahme nicht dekodiert.
+	if runtime and is_instance_valid(runtime) and not soldier.has_meta("death_notified"):
+		soldier.set_meta("death_notified", true)
+		runtime.notify(soldier, "ONDEATH")
+
+
+## Leicheninhalt/Taschen eines Gefangenen übernehmen (wie Pickups.Loot)
+func search(by: Soldier) -> String:
+	var total := 0
+	for cw in soldier.get_meta("surrendered_weapons", []):
+		var w0 := cw as Weapon
+		if w0 == null or w0.data.slot == WeaponData.Slot.GRENADE:
+			continue
+		for w in by.weapons:
+			if w and w.data.caliber == w0.data.caliber and w0.total_ammo() > 0:
+				var got := w.add_ammo(w0.total_ammo())
+				w0.reserve = maxi(w0.reserve - got, 0)
+				total += got
+	var taken: Array[String] = []
+	for oid in soldier.get_meta("orig_loot", []):
+		taken.append(OrigInteractive.give_item(by, int(oid)))
+	soldier.set_meta("orig_loot", [])
+	var parts: Array[String] = []
+	if total > 0:
+		parts.append("%d Schuss" % total)
+	parts.append_array(taken)
+	return ", ".join(parts) if not parts.is_empty() else "nichts Brauchbares"
+
+
+## Uniform eines Gefangenen anziehen (Original T7044, nur lebende Gefangene); Uniform zählt als Gegenstand
+func give_uniform(to: Soldier) -> bool:
+	if not captured or uniform_taken or not soldier.alive or to.disguised:
+		return false
+	uniform_taken = true
+	# Original-Figur der Uniform (Modell des Gefangenen, z. B. ge01a) übergeben: Soldier tauscht nur die Figur
+	var fig: Node3D = null
+	var m := Game.current_mission()
+	if soldier.has_meta("orig_model") and m and m.get("orig") != null:
+		fig = m.orig.character_instance(String(soldier.get_meta("orig_model")))
+	to.put_on_uniform(soldier.uniform_color, soldier.helmet_style, fig)
+	to.set_meta("uniform_figure", String(soldier.get_meta("orig_model", "")))
+	if soldier.has_meta("orig_uniform"):
+		var inv: Array = to.get_meta("orig_items", [])
+		inv.append(int(soldier.get_meta("orig_uniform")))
+		to.set_meta("orig_items", inv)
+	return true
+
+
+## Benutzen am Gegner: Gefangennehmen -> Durchsuchen -> Uniform benutzen
+class CaptureAction extends Interactable:
+	var brain: EnemyBrain
+	var searched := false
+
+	func _ready() -> void:
+		super._ready()
+		enabled = false
+
+	func _physics_process(_d: float) -> void:
+		var s := brain.soldier
+		if s == null:
+			return
+		global_position = s.global_position + Vector3.UP * 0.9
+		enabled = s.alive and (brain.surrendered or brain.captured)
+		if brain.captured:
+			prompt = OrigInteractive.text(7044, "Uniform benutzen") if searched else OrigInteractive.text(7043, "Suchen & Mun. sammeln")
+		else:
+			prompt = OrigInteractive.text(7038, "Gefangennehmen")
+
+	func can_interact(s: Soldier) -> bool:
+		var live := brain.soldier != null and brain.soldier.alive and (brain.surrendered or brain.captured)
+		if not live or s.team != Soldier.TEAM_ALLIED or s.vehicle != null:
+			return false
+		if brain.captured and searched:
+			return not brain.uniform_taken and not s.disguised
+		return true
+
+	func interact(s: Soldier) -> void:
+		if not can_interact(s):
+			return
+		if not brain.captured:
+			brain.capture(s)
+		elif not searched:
+			searched = true
+			Events.say("Durchsucht: %s" % brain.search(s), 2.5)
+		elif brain.give_uniform(s):
+			Events.say("%s trägt jetzt eine feindliche Uniform. Nicht schießen, Abstand halten!" % s.soldier_name, 4.0)
+		super.interact(s)
+
+
+# --- Waffenstellungen / Bordwaffen ----------------------------------------------------
+
+## Besetzte Stellung bzw. Waffensitz im Fahrzeug: nicht bewegen, sichtbare Feinde bekämpfen (Zombie-Modus: nur zielen)
+func _mounted_tick(delta: float) -> void:
+	_script_tick_stance_only()
+	perception.forget_dead()
+	var t := perception.best_target()
+	if t == null and is_instance_valid(target) and target.alive and perception.awareness.get(target, 0.0) >= 1.0 \
+			and perception.visible_now.get(target, false):
+		t = target
+	if t and not script_control:
+		if state != State.COMBAT:
+			target = t
+			_stimulus = AL_SEE
+			set_state(State.COMBAT)
+		target = t
+		engage(t, delta)
+	else:
+		cease_fire()
+		if script_look_at.is_finite():
+			look_at_point(script_look_at + Vector3.UP * 1.5, delta, 2.0)
+
+
+func _script_tick_stance_only() -> void:
+	soldier.move_input = Vector3.ZERO
+	_move_target = Vector3.INF
+
+
+## ANNAHME: Ein Gegner, dessen Ausgangsposition höchstens 3 m neben einer freien Waffenstellung liegt (vom Leveldesign
+## als Bedienung platziert), besetzt sie, sobald er kämpft. Skriptgesteuert: HUMAN_BoardVehicle(Stellung, 1, 0).
+func _try_autonomous_mount(delta: float) -> bool:
+	_mount_check -= delta
+	if _mount_check > 0.0 or soldier.mounted != null or soldier.vehicle != null or Net.is_online:
+		return false
+	_mount_check = 1.0
+	if _mount_target == null:
+		for n in get_tree().get_nodes_in_group("emplacements"):
+			if n.has_method("can_ai_mount") and n.can_ai_mount(soldier) and (n as Node3D).global_position.distance_to(home_pos) < 3.0:
+				_mount_target = n
+				break
+	if _mount_target == null or not is_instance_valid(_mount_target) or not _mount_target.can_ai_mount(soldier):
+		_mount_target = null
+		return false
+	var spot: Vector3 = _mount_target.gunner_spot()
+	if distance_to(spot) < 2.5:
+		stop_moving()
+		_mount_target.mount(soldier)
+		_mount_target = null
+		return true
+	move_to(spot, Soldier.MoveMode.RUN)
+	return true
+
+
 func serialize() -> Dictionary:
-	return {"state": state, "alert": alert_level, "patrol_index": patrol_index}
+	return {"state": state, "alert": alert_level, "patrol_index": patrol_index, "morale": morale,
+		"surrendered": surrendered, "captured": captured, "uniform_taken": uniform_taken}
 
 
 func deserialize(d: Dictionary) -> void:
 	alert_level = d.get("alert", 0.0)
+	morale = float(d.get("morale", morale))
+	uniform_taken = bool(d.get("uniform_taken", false))
+	if bool(d.get("surrendered", false)) or bool(d.get("captured", false)):
+		surrender(null)
+		if bool(d.get("captured", false)):
+			captured = true
+			soldier.set_meta("captured", true)
+			for i in soldier.weapons.size():
+				if soldier.weapons[i] and soldier.weapons[i].data.action != WeaponData.Action.MELEE:
+					soldier.weapons[i] = null
+		return
 	patrol_index = int(d.get("patrol_index", 0)) % maxi(patrol_points.size(), 1)
 	var s := int(d.get("state", state))
 	# Kampf-/Suchzustände werden nach dem Laden als Suche fortgesetzt

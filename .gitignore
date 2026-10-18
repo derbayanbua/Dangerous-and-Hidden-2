@@ -6,3 +6,24 @@ test_output/
 orig_cache/
 re_work/
 *.log
+
+# Persönliche Assets (Fotos, Heldendaten) – nur lokal, nie ins Repository
+user_assets/
+
+# Porträtfotos nie veröffentlichen
+*photo*.jpg
+*photo*.jpeg
+*photo*.png
+*.jpg.import
+
+# Python-Zwischendateien
+__pycache__/
+*.pyc
+
+# Lokale Zusatzinhalte (Vorgabe Auftraggeber: nur lokal, nie ins Repository)
+# Erweiterungsstelle res://local/ (local_content.gd, Gesichtstexturen, local_tests.ps1) und lokale Projektnotizen
+local/
+CLAUDE.local.md
+docs/lokal/
+# eigene lokale Karte (alle Pfade mit diesem Namensteil, auch künftige)
+# Heldenfiguren

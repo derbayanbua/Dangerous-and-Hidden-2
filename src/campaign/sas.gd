@@ -41,6 +41,8 @@ static func _load() -> void:
 	_rules = i if typeof(i) == TYPE_DICTIONARY else {}
 	for it in _rules.get("items", []):
 		_items[int(it["item"])] = it
+	for k in WeaponDB.EXTRA_ITEMS:          # eigene Gegenstände (Panzerfaust-Rakete, Vorgabe Auftraggeber)
+		_items[int(k)] = WeaponDB.EXTRA_ITEMS[k]
 	for p in _rules.get("presets_def", {}).get("presets", []):
 		_presets[int(p["index"])] = p
 	var w = LsRuntime._read_json(OrigLevel.cache_root() + "/items.json")
@@ -184,6 +186,99 @@ static func item_name(id: int) -> String:
 	return String(item(id).get("name", "#%d" % id))
 
 
+## Anzeigename aus den deutschen Originaltexten (items.sav Text-ID, z. B. 1229 „Kamera“), sonst interner Name
+static func item_label(id: int) -> String:
+	_load()
+	var d: Dictionary = _item_data().get(id, {})
+	var tid := int(d.get("text_id", 1000 + id))
+	var t := text(tid, "")
+	return t if t != "" else item_name(id)
+
+
+## Symbol des Gegenstands (items.sav-Feld „icon“, 64×32) aus orig_cache/ui/menu/items (tools/_menu_export.py)
+static func item_icon_path(id: int) -> String:
+	var ic := String(_item_data().get(id, {}).get("icon", "")).to_lower()
+	if ic == "":
+		return ""
+	var p := OrigLevel.cache_root() + "/ui/menu/items/%s.png" % ic
+	return p if FileAccess.file_exists(p) else ""
+
+
+## Lager-Klassifizierung des Inventarbildschirms (Texte 2719–2725, Gruppen GR_SmallWeapons … GR_Other in
+## hd2.exe 0x67C270). Zuordnung über die Item-Gruppe (items.sav u70) = Annahme [P]:
+## 0 leichte Waffen (Pistolen/Gewehre), 1 mittlere (MP/MG), 2 schwere (Raketenwerfer/Stellungen),
+## 3 Sprengstoffe (Granaten, Ladungen, Minen), 4 Uniformen (Kopf/Uniform), 5 zusätzliche Ausrüstung.
+## Magazine erscheinen bei ihrer Waffe (Zeile Waffe + Magazin wie im Original, item08/item09).
+const CATEGORY_TEXT := [2719, 2720, 2721, 2723, 2724, 2725]
+
+
+static func item_category(id: int) -> int:
+	var d: Dictionary = _item_data().get(id, {})
+	var g := int(d.get("u70", 9))
+	var k := item_kind(id)
+	if k == "weapon":
+		if g in [5, 6]:
+			return 0
+		if g == 7:
+			return 1
+		if g in [0, 8]:
+			return 2
+		if g == 12 or (g == 9 and not item_name(id).to_lower().contains("knife")):
+			return 3
+		return 5
+	if k != "ammo" and slot_for(id) in ["head", "uniform"]:
+		return 4
+	return 5
+
+
+static var _item_full: Dictionary = {}
+
+
+static func _item_data() -> Dictionary:
+	if _item_full.is_empty():
+		var w = LsRuntime._read_json(OrigLevel.cache_root() + "/items.json")
+		if typeof(w) == TYPE_DICTIONARY:
+			for it in w.get("items", []):
+				_item_full[int(it["id"])] = it
+		for k in WeaponDB.EXTRA_ITEMS:
+			_item_full[int(k)] = WeaponDB.EXTRA_ITEMS[k]
+	return _item_full
+
+
+## Waffe, zu der ein Magazin gehört (-1 = keine)
+static func weapon_of_ammo(ammo_item: int) -> int:
+	_load()
+	for k in WeaponDB.LAUNCHER_AMMO:        # Raketen der Werfer (Bazooka 206, Panzerschreck 205, Panzerfaust-Rakete)
+		if int(WeaponDB.LAUNCHER_AMMO[k]) == ammo_item:
+			return int(k)
+	for k in _weapons:
+		if int(_weapons[k].get("ammo_item", -1)) == ammo_item:
+			return int(k)
+	return -1
+
+
+## Soldatentyp-Vorlagen des Inventarbildschirms (presets.def, Flags 0x04 Liste + 0x20 Alliierte, Sätze 32–40);
+## Namen = Originaltexte 6508–6516 (Zuordnung über die Vorlagennamen = Annahme [P])
+const PRESET_TEXT := {32: 6510, 33: 6511, 34: 6508, 35: 6509, 36: 6514, 37: 6515, 38: 6512, 39: 6513, 40: 6516}
+
+
+static func soldier_type_presets() -> Array:
+	_load()
+	var out: Array = []
+	for k in _presets:
+		var f := int(_presets[k].get("flags", 0))
+		if f & 0x04 and f & 0x20:
+			out.append(int(k))
+	out.sort()
+	return out
+
+
+static func preset_label(index: int) -> String:
+	if PRESET_TEXT.has(index):
+		return text(PRESET_TEXT[index], preset_name(index))
+	return preset_name(index)
+
+
 static func item_kind(id: int) -> String:
 	return String(item(id).get("kind", "equipment"))
 
@@ -214,6 +309,8 @@ static func is_backpack(id: int) -> bool:
 
 static func ammo_of(weapon_item: int) -> int:
 	_load()
+	if WeaponDB.LAUNCHER_AMMO.has(weapon_item):
+		return int(WeaponDB.LAUNCHER_AMMO[weapon_item])
 	return int(_weapons.get(weapon_item, {}).get("ammo_item", -1))
 
 
@@ -400,6 +497,10 @@ static func mission_storage(info: Dictionary, current: Array) -> Array:
 				found = true
 		if not found:
 			out.append([id, int(r.get("count", 1))])
+	# Panzerfaust-Raketen (Vorgabe Auftraggeber, kein Originalgegenstand): je Panzerfaust im Lager zwei Raketen
+	var pf := count_of({"items": out}, 38)
+	if pf > 0 and count_of({"items": out}, WeaponDB.PANZERFAUST_AMMO) == 0:
+		out.append([WeaponDB.PANZERFAUST_AMMO, pf * 2])
 	return out if not out.is_empty() else current
 
 
@@ -426,9 +527,75 @@ static func training_gain(counters: Dictionary) -> Dictionary:
 	}
 
 
-## Erfahrung einer Mission (ANNAHME: Originalformel nicht belegt – Abschüsse, Überleben, Erfolg)
-static func experience_gain(counters: Dictionary, survived: bool, success: bool) -> int:
-	return int(float(counters.get("kills", 0.0)) * 1000.0 + (3000 if survived else 0) + (3000 if success else 0))
+## Erfahrung einer Mission (Original 0x5A9640, re_notes_roster_inventory §3): Feind getötet +300, wenn er
+## ahnungslos war, sonst +100; Ziel erfüllt: jeder Lebende +1000 je erfülltem Ziel (die +1500-Variante mit
+## Ziel-Flag +0x14 ist nicht zugeordnet [P]). survived/success bleiben für die Aufrufer erhalten.
+static func experience_gain(counters: Dictionary, survived: bool, _success: bool, objectives_done := 0) -> int:
+	var kills := float(counters.get("kills", 0.0))
+	var unseen := minf(float(counters.get("unseen_kills", 0.0)), kills)
+	# Wehrlose getötet (0x5A0BE0): Gefangener −1000, Ergebener −500
+	var penalty := 1000.0 * float(counters.get("prisoner_kills", 0.0)) + 500.0 * float(counters.get("defenseless_kills", 0.0))
+	return int(100.0 * (kills - unseen) + 300.0 * unseen + (1000.0 * objectives_done if survived else 0.0) - penalty)
+
+
+# --- Orden (12 Orden, Texte 10100+2·id; Vergabe hd2.exe 0x68C900, re_work/roster/d10.c) ---------------
+## Kampagnen-Index wie FUN_006b8f90 (0 Tutorial … 7 Tschechien)
+const CAMPAIGN_INDEX := {"tutorial": 0, "arctic": 1, "africa": 2, "norway": 3, "burma": 4, "alps": 5, "normandy": 6, "czech": 7}
+const MEDAL_DEFENCE := 6
+
+
+static func medal_name(id: int) -> String:
+	return text(10100 + 2 * id, "Orden %d" % id)
+
+
+static func medal_text(id: int) -> String:
+	return text(10101 + 2 * id, "")
+
+
+## Neuer Orden nach einer Mission (höchstens einer je Mission, Feld Team-Mitglied +0x38) wie 0x68C900:
+## st = Kaderstand nach dem Hochzählen der Missionszähler, xp = Erfahrung dieser Mission, camp = Kampagnen-Index.
+## Lebende: Germany-France Star (Alpen/Normandie), Burma Star, Africa Star bzw. Africa GSM (Afrika, nach Rang und
+## Einsätzen); dann für alle VC ab 15000 XP; nur Lebende: MC ab 12000, MM ab 11000, DSO ab 10000, DCM ab 9000,
+## War Medal und GSM nach Einsätzen und Rang. Zähler +0x3C/+0x40 = beide „missions“ (je Mission +1) [P].
+static func award_medal(st: Dictionary, xp: int, camp: int) -> int:
+	var has := func(m: int) -> bool: return (st.get("medals", []) as Array).has(m)
+	var dead := bool(st.get("dead", false))
+	var rank := int(st.get("rank", 0))
+	var n := int(st.get("missions", 0))
+	var out := -1
+	if not dead:
+		if camp in [5, 6] and not has.call(9):
+			return 9
+		if camp == 4 and not has.call(11):
+			return 11
+		if camp == 2:
+			if not has.call(10):
+				return 10
+			if not has.call(3):
+				var need := {2: 3, 3: 2, 4: 1, 5: 0}
+				if need.has(n) and rank >= int(need[n]):
+					return 3
+	if xp >= 15000 and not has.call(8):
+		out = 8
+	if dead:
+		return out
+	if xp >= 12000 and not has.call(7):
+		return 7
+	if xp >= 11000 and not has.call(2):
+		return 2
+	if xp >= 10000 and not has.call(0):
+		return 0
+	if xp >= 9000 and not has.call(1):
+		return 1
+	if not has.call(5):
+		var need5 := {1: 3, 2: 2, 3: 1, 4: 0}
+		if need5.has(n) and rank >= int(need5[n]):
+			out = 5
+	if camp != 2 and not has.call(4):
+		var need4 := {5: 3, 6: 2, 7: 1, 8: 0}
+		if need4.has(n) and rank >= int(need4[n]):
+			out = 4
+	return out
 
 
 ## Nach der Mission (Original): Team erhält eigenen Zuwachs (Werte max. 100); alle übrigen lebenden Soldaten

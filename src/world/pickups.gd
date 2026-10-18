@@ -96,10 +96,10 @@ class Loot extends Interactable:
 		super._ready()
 		prompt = "Durchsuchen"
 
-	## Nach dem Durchsuchen: Uniform eines gefallenen Gegners anziehen (Tarnung)
-	func _uniform_available(s: Soldier) -> bool:
-		return looted and not uniform_taken and is_instance_valid(corpse) and not corpse.alive \
-			and corpse.team != s.team and not s.disguised and s.vehicle == null
+	## Uniform nur von lebenden Gefangenen (Vorgabe Auftraggeber; Original: „Uniform benutzen“ T7044 ist an Leichen
+	## ausgegraut, hd2.exe 0x4BF670 Fall 3) – siehe EnemyBrain.CaptureAction. Leichen: nur Durchsuchen/Munition.
+	func _uniform_available(_s: Soldier) -> bool:
+		return false
 
 	func can_interact(s: Soldier) -> bool:
 		if not is_instance_valid(corpse) or corpse.alive:
@@ -122,8 +122,6 @@ class Loot extends Interactable:
 		if not enabled or looted or not is_instance_valid(corpse):
 			return
 		looted = true
-		if corpse.team != s.team:
-			prompt = "Uniform anziehen"
 		var total := 0
 		for cw in corpse.weapons:
 			if cw == null or cw.total_ammo() <= 0 or cw.data.slot == WeaponData.Slot.GRENADE:

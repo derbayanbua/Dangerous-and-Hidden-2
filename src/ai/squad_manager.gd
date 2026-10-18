@@ -108,6 +108,32 @@ func slot_watch_offset(s: Soldier) -> float:
 	return [0.0, 0.6, -0.6, PI][idx % 4]
 
 
+## Befehlsmenü „Formation“ (Original 7250–7254): Formation setzen, enger/weiter (Abstände = Annahme).
+const SPACING_MIN := 1.5
+const SPACING_MAX := 6.0
+const SPACING_STEP := 1.0
+
+
+func set_formation(f: int) -> void:
+	formation = f
+	orders_changed.emit()
+
+
+func change_spacing(d: float) -> bool:
+	var ns := clampf(spacing + d, SPACING_MIN, SPACING_MAX)
+	if is_equal_approx(ns, spacing):
+		return false
+	spacing = ns
+	orders_changed.emit()
+	return true
+
+
+## Hat der Soldat einen Taktik-Plan (Bewegungsbefehl aus der taktischen Karte)?
+func has_plan(s: Soldier) -> bool:
+	var b := brain_of(s)
+	return b != null and s.alive and b.plan and b.order == SquadBrain.Order.MOVE
+
+
 func cycle_formation() -> String:
 	formation = (formation + 1) % FORMATION_NAMES.size()
 	orders_changed.emit()
@@ -137,6 +163,7 @@ func order_one(s: Soldier, o: int, pos := Vector3.ZERO) -> void:
 	var b := brain_of(s)
 	if b and s.alive and s != leader():
 		b.set_order(o, pos)
+		b.plan = o == SquadBrain.Order.MOVE     # Kartenbefehl = Taktik-Plan (Befehlsmenü „Taktik-Modus“)
 		orders_changed.emit()
 
 

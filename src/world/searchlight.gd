@@ -96,7 +96,7 @@ func on_bullet_hit(_damage: float, shooter: Node) -> void:
 	destroyed = true
 	_light.visible = false
 	Effects.impact(_light.global_position, Vector3.UP)
-	Effects.play(&"click", global_position, 6.0, 0.5, 80.0)
+	OrigAudio.play_group(OrigAudio.CAT_HIT, OrigAudio.HIT_GLASS, _light.global_position)   # „Glass (penetrate) or Bulb“
 	var team := (shooter as Soldier).team if shooter is Soldier else 0
 	Events.emit_noise(global_position, 30.0, shooter, team, &"impact")
 	Events.say("Suchscheinwerfer ausgeschaltet.", 2.5)

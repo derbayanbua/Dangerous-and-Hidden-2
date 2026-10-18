@@ -4,10 +4,10 @@ extends Node
 ##   Lichter (scene2 0x4040)   -> OmniLight3D/SpotLight3D; Punktlichter zählen für die Sichtbarkeit
 ##   Klangquellen (sounds.bin) -> AudioStreamPlayer3D, per FRM_SetOn schaltbar
 ##   Spuren (tracks.dat)       -> FRM_WatchTrack (Kamerafahrten, Flugzeug im Intro)
-##   Musik (IngameSounds.def)  -> Normal-/Action-Musik der Mission, PlayMusic/PlayCutsceneMusic
-## Annahmen (nicht am Original verifiziert, siehe docs/re_notes_lights_tracks_sounds.md):
+##   Musik (IngameSounds.def)  -> OrigAudio: Normal-/Action-Musik der Mission (scene2.bin 0xB840/0xB880,
+##                                Action solange ein Gegner im Kampf ist, hd2.exe 0x69E920), PlayMusic
+## Annahmen (nicht am Original verifiziert, siehe docs/re_notes_lights_tracks_sounds.md, re_notes_audio.md):
 ##   - Klangquellen ohne Loop werden in zufälligen Abständen erneut abgespielt.
-##   - Action-Musik läuft nach einem Alarm; das Original-Auswahlverfahren ist unbekannt.
 ##   - Spurpunkte werden linear interpoliert.
 
 const POINT_ENERGY := 1.6
@@ -17,9 +17,8 @@ var runtime: LsRuntime
 var tracks := {}               ## Name (groß) -> Array der Schlüssel
 var music_table := {}          ## Index -> Dateiname
 var mission_music := {}        ## "normal"/"action" -> Dateiname
+var music_index := {"normal": -1, "action": -1}   ## Gruppen der Musiktabelle (scene2.bin-Kopf)
 var stats := {"lights": 0, "spots": 0, "sounds": 0, "tracks": 0}
-var music: AudioStreamPlayer
-var _music_override := false
 var _random_sounds: Array[AudioStreamPlayer3D] = []
 var _lights: Array[Light3D] = []
 var _rand_t := 0.0
@@ -44,14 +43,11 @@ func setup(m: Mission, rt: LsRuntime, mission_dir: String) -> void:
 	var audio = LsRuntime._read_json(mission_dir + "/audio.json")
 	if typeof(audio) == TYPE_DICTIONARY:
 		mission_music = audio.get("mission_music", {})
+		var mi: Dictionary = audio.get("music_index", {})
+		music_index = {"normal": int(mi.get("normal", -1)), "action": int(mi.get("action", -1))}
 	Settings.changed.connect(_apply_settings)
 	_apply_settings()
-	music = AudioStreamPlayer.new()
-	music.volume_db = -8.0
-	music.bus = &"Music"
-	add_child(music)
-	Events.alarm_raised.connect(func(_p, _b): _play_mission_music("action"))
-	_play_mission_music("normal")
+	OrigAudio.start_mission_music(int(music_index["normal"]), int(music_index["action"]))
 
 
 static func _script_text(dir: String) -> String:
@@ -165,45 +161,18 @@ func _process(delta: float) -> void:
 
 # --- Musik ------------------------------------------------------------------------
 
-func _load_music(file: String) -> AudioStream:
-	var path := OrigLevel.cache_root() + "/music/" + file
-	if not FileAccess.file_exists(path):
-		return null
-	var st := AudioStreamOggVorbis.load_from_file(path)
-	return st
-
-
-func _play_mission_music(kind: String) -> void:
-	if _music_override or not mission_music.has(kind) or music == null:
-		return
-	var st := _load_music(mission_music[kind])
-	if st == null:
-		return
-	if st is AudioStreamOggVorbis:
-		(st as AudioStreamOggVorbis).loop = true
-	music.stream = st
-	music.play()
-
-
-## PlayMusic(n) / PlayCutsceneMusic(n): Eintrag n der Musiktabelle; -1 beendet die Einlage.
+## PlayMusic(n): Überblendung (4 s) auf Eintrag n der Musiktabelle, −1 = zurück zur Missionsmusik
+## (hd2.exe Skriptbefehl 0x43 -> Klangverwaltung +0x6C bzw. 0x69E970)
 func play_table(index: int) -> void:
+	OrigAudio.script_play_music(index)
+
+
+## PlayCutsceneMusic(n): Einlage ohne Schleife über der gedämpften Missionsmusik; −1 beendet sie (0x436F60)
+func play_cutscene(index: int) -> void:
 	if index < 0:
-		_music_override = false
-		_play_mission_music("action" if mission.alarm_raised else "normal")
-		return
-	var st := _load_music(music_table.get(index, ""))
-	if st == null:
-		return
-	_music_override = true
-	music.stream = st
-	music.play()
-	if not music.finished.is_connected(_on_music_done):
-		music.finished.connect(_on_music_done)
-
-
-func _on_music_done() -> void:
-	if _music_override:
-		play_table(-1)
+		OrigAudio.stop_cutscene_music()
+	else:
+		OrigAudio.play_cutscene_music(index)
 
 
 # --- Spuren -----------------------------------------------------------------------

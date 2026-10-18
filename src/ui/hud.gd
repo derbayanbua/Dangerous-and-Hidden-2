@@ -89,15 +89,26 @@ func setup(m: Mission) -> void:
 	_center_label.size = Vector2(800, 60)
 	_center_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_root.add_child(_center_label)
+	# Optik-Overlays des Originals (gameinterface.4ds: Zielfernrohr „sniper“ + Absehen cross1–4 je Gewehr,
+	# Fernglas „scope“; orig_cache/weapons/overlays). 4:3 mittig, außen schwarz. Ohne Cache: eigene Fernglasmaske.
+	_optic = Control.new()
+	_optic.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_optic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_optic.visible = false
+	for side in 2:
+		var bar := ColorRect.new()
+		bar.color = Color.BLACK
+		bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_optic.add_child(bar)
+		_optic_bars.append(bar)
 	_binoc_mask = TextureRect.new()
 	_binoc_mask.texture = _make_binocular_mask()
 	_binoc_mask.stretch_mode = TextureRect.STRETCH_SCALE
 	_binoc_mask.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_binoc_mask.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_binoc_mask.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_binoc_mask.visible = false
-	_root.add_child(_binoc_mask)
-	_root.move_child(_binoc_mask, 0)
+	_optic.add_child(_binoc_mask)
+	_root.add_child(_optic)
+	_root.move_child(_optic, 0)
 	# Original-HUD (gameinterface.4ds) ersetzt Trupp-, Waffen-, Status-Panel und Textkompass
 	if OrigHud.available():
 		orig_hud = OrigHud.new()
@@ -297,6 +308,9 @@ func _draw_crosshair() -> void:
 	px = clampf(px, 3.0, 200.0)
 	var col := Color(1, 1, 1, 0.8)
 	var l := 8.0
+	# Hinweiszeile unter dem Fadenkreuz halten (große MG-Streuung: untere Marke lag sonst im Text, „MG 42:¦verlassen“)
+	_prompt.offset_top = maxf(60.0, px + l + 10.0)      # Versatz zum Bildmittelpunkt (Anker Mitte)
+	_prompt.offset_bottom = _prompt.offset_top + 30.0
 	for d in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
 		_crosshair.draw_line(d * px, d * (px + l), col, 2.0)
 	_crosshair.draw_circle(Vector2.ZERO, 1.5, col)
@@ -352,11 +366,45 @@ func _process(_delta: float) -> void:
 	_prompt.text = "[%s] %s" % [InputSetup.binding_text("interact"), it.prompt] if it else ""
 	if s.heal_time_left > 0.0:
 		_prompt.text = "Verband wird angelegt … %.1f s" % s.heal_time_left
+	elif s.work_left > 0.0 and s.work_total > 0.0:
+		# Fortschritt einer Arbeit (Entschärfen): Balken aus 10 Feldern + Restzeit
+		var k := clampi(int((1.0 - s.work_left / s.work_total) * 10.0), 0, 10)
+		_prompt.text = "%s  [%s%s]  %.1f s" % [s.work_label, "|".repeat(k), ".".repeat(10 - k), s.work_left]
 	elif s.vehicle != null:
 		_prompt.text = "[%s] Aussteigen" % InputSetup.binding_text("interact")
-	_binoc_mask.visible = s.using_binoculars
-	_crosshair.visible = not s.using_binoculars and (Settings.crosshair or s.aiming)
+	var optic: int = mission.rig.optic_overlay() if mission.rig else (4 if s.using_binoculars else -1)
+	_update_optic(optic)
+	# Zoom über Kimme/Korn bzw. Optik: kein Fadenkreuz (die Visierlinie liegt auf der Bildmitte)
+	var zoomed: bool = mission.rig != null and mission.rig.zoomed()
+	_crosshair.visible = optic < 0 and not zoomed and (Settings.crosshair or s.aiming)
 	_crosshair.queue_redraw()
+
+
+var _optic: Control
+var _optic_bars: Array = []
+var _optic_type := -2
+
+
+## Overlay 0–3 Zielfernrohr, 4 Fernglas, -1 aus. Bild 4:3 mittig, Ränder schwarz.
+func _update_optic(t: int) -> void:
+	_optic.visible = t >= 0
+	if t < 0:
+		return
+	if t != _optic_type:
+		_optic_type = t
+		var tex := OrigWeapons.overlay(t)
+		_binoc_mask.texture = tex if tex else _make_binocular_mask()
+	var vp := get_viewport().get_visible_rect().size
+	var w := minf(vp.x, vp.y * 4.0 / 3.0)
+	var h := w * 0.75
+	var x0 := (vp.x - w) * 0.5
+	var y0 := (vp.y - h) * 0.5
+	_binoc_mask.position = Vector2(x0, y0)
+	_binoc_mask.size = Vector2(w, h)
+	(_optic_bars[0] as ColorRect).position = Vector2.ZERO
+	(_optic_bars[0] as ColorRect).size = Vector2(maxf(x0, 0.0) + 1.0, vp.y) if x0 > 0.5 else Vector2(vp.x, maxf(y0, 0.0) + 1.0)
+	(_optic_bars[1] as ColorRect).position = Vector2(x0 + w - 1.0, 0.0) if x0 > 0.5 else Vector2(0.0, y0 + h - 1.0)
+	(_optic_bars[1] as ColorRect).size = Vector2(maxf(x0, 0.0) + 1.0, vp.y) if x0 > 0.5 else Vector2(vp.x, maxf(y0, 0.0) + 1.0)
 
 
 func _update_team() -> void:

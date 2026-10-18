@@ -171,9 +171,23 @@ class OrigDoor extends Interactable:
 	var _pick_left := 0.0
 	var _picker: Soldier
 	var _pick_from := Vector3.ZERO
+	var _move_snd: AudioStreamPlayer3D
 	var is_open: bool:
 		get:
 			return state == 1 or state == 2
+
+	## Türklang (Original-Akteur Chunk 0x65, IngameSounds Kat. 1): open = Öffnen-Start, closed = Zu-Ende,
+	## moving = Bewegung (Schleife), lock/unlock/wrong_key/lockpick/locked_rattle (hd2.exe 0x601F90)
+	func _snd(slot: String, loop := false) -> AudioStreamPlayer3D:
+		var id := int((p.get("sound_slots", {}) as Dictionary).get(slot, -1))
+		if id < 0:
+			return null
+		return OrigAudio.play_group(OrigAudio.CAT_OBJECT, id, global_position, self, 1.0, loop)
+
+	func _stop_move_snd() -> void:
+		if is_instance_valid(_move_snd):
+			_move_snd.queue_free()
+		_move_snd = null
 
 	func init(h: OrigInteractive, f: Node3D, e: Dictionary, barrier: bool) -> void:
 		host = h
@@ -225,6 +239,7 @@ class OrigDoor extends Interactable:
 		if locked:
 			if key_item >= 0 and OrigInteractive.has_item(s, key_item):
 				locked = false
+				_snd("unlock")
 				Events.say("%s aufgeschlossen." % label, 2.0)
 			elif lockpickable:
 				# Dauer aus der Fertigkeit Schlösser (Original: Getter 8, Text 7073)
@@ -232,8 +247,13 @@ class OrigDoor extends Interactable:
 				_pick_from = s.global_position
 				_pick_left = lerpf(8.0, 2.0, clampf(float(s.get_meta("lockpick", 50.0)) / 100.0, 0.0, 1.0))
 				Events.say(OrigInteractive.text(7073, "Knackt Schloss") + " …", _pick_left)
+				# Schlossknacken: Türklang „lockpick“, sonst Kat. 11 „Lockpicking“ (l_dhook.wav)
+				if _snd("lockpick") == null:
+					OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_LOCKPICK, global_position, self)
 			else:
 				Events.say("%s ist verschlossen." % label, 2.0)
+				if _snd("locked_rattle") == null:
+					_snd("wrong_key")
 				Events.emit_noise(global_position, 6.0, s, s.team, &"door")
 			_update_prompt()
 			return
@@ -251,6 +271,11 @@ class OrigDoor extends Interactable:
 	func set_open(o: bool) -> void:
 		if o and locked:
 			return
+		if is_inside_tree() and not is_equal_approx(amount, open_amount if o else 0.0):
+			if o:
+				_snd("open")
+			_stop_move_snd()
+			_move_snd = _snd("moving", true)
 		target = open_amount if o else 0.0
 		state = 2 if o else 3
 		frame.set_meta("actor_state", state)
@@ -268,6 +293,8 @@ class OrigDoor extends Interactable:
 	func set_locked(b: bool) -> void:
 		if b and state != 0:
 			return          # Original: Abschließen nur im geschlossenen Zustand
+		if b != locked and is_inside_tree():
+			_snd("lock" if b else "unlock")
 		locked = b
 		_update_prompt()
 
@@ -300,6 +327,9 @@ class OrigDoor extends Interactable:
 				state = 1 if target > 0.0 else 0
 				frame.set_meta("actor_state", state)
 				_update_prompt()
+				_stop_move_snd()
+				if state == 0:
+					_snd("closed")
 
 	func _apply() -> void:
 		if slide:
@@ -342,6 +372,7 @@ func _ladder(e: Dictionary) -> void:
 		l.top = top
 		l.bottom = bottom
 		l.at_top = at_top
+		l.climb_sound = int(p.get("climb_sound", -1))
 		l.prompt = "%s: %s" % [label, text(TXT_USE, "Benutzen")]
 		mission.dynamic_root.add_child(l)
 		l.global_position = top if at_top else bottom
@@ -352,6 +383,17 @@ class OrigLadder extends Interactable:
 	var top: Vector3
 	var bottom: Vector3
 	var at_top := false
+	var climb_sound := -1        ## Akteur Typ 8 +0x174: Kat. 0 „Ladder Metal/Wooden/Stone“
+
+	## Sprossenklang während des Kletterns (je 0,45 s = Annahme)
+	func _rung_sounds(s: Soldier, dur: float) -> void:
+		if climb_sound < 0:
+			return
+		var n := maxi(int(dur / 0.45), 1)
+		for i in n:
+			get_tree().create_timer(i * 0.45, false).timeout.connect(func():
+				if is_instance_valid(s):
+					OrigAudio.play_group(OrigAudio.CAT_STEP, climb_sound, s.global_position))
 
 	func _ready() -> void:
 		super._ready()
@@ -372,7 +414,9 @@ class OrigLadder extends Interactable:
 			var away := Vector3(top.x - from.x, 0, top.z - from.z)
 			away = away.normalized() if away.length() > 0.05 else s.forward()
 			s.start_path_climb(from, Vector3(top.x, top.y + 0.1, top.z), top + away * 0.7 + Vector3.UP * 0.05, h / 1.2 + 0.5)
+			_rung_sounds(s, h / 1.2)
 		else:
+			_rung_sounds(s, h / 1.6)
 			var away2 := Vector3(bottom.x - from.x, 0, bottom.z - from.z)
 			away2 = away2.normalized() if away2.length() > 0.05 else -s.forward()
 			s.start_path_climb(from, Vector3(bottom.x, bottom.y + 0.1, bottom.z) + away2 * 0.2, bottom + away2 * 0.6 + Vector3.UP * 0.05,
@@ -400,12 +444,14 @@ class OrigSwitch extends Interactable:
 	var state := 1
 	var required_item := -1
 	var radio := false
+	var sound := -1          ## Kat. 1: Schalter +0xD8 „sound“, Funkgerät „active_sound“ (z. B. 50 „Radio active“)
 
 	func init(h: OrigInteractive, f: Node3D, e: Dictionary, is_radio: bool) -> void:
 		host = h
 		frame = f
 		radio = is_radio
 		var p: Dictionary = e.get("params", {})
+		sound = int(p.get("active_sound" if radio else "sound", -1))
 		persistent_id = "oswitch_" + String(e["name"])
 		state = clampi(int(p.get("initial_state", 1)), 1, 3) if not radio else int(p.get("state", 1))
 		required_item = int(p.get("required_item", -1))
@@ -425,6 +471,8 @@ class OrigSwitch extends Interactable:
 			state = 2       # Original: benutztes Funkgerät -> Zustand 2 (Skripte prüfen _ACTOR_GetState == 2)
 			frame.set_meta("actor_state", state)
 			Events.say("Funkspruch abgesetzt.", 2.5)
+		if sound >= 0:
+			OrigAudio.play_group(OrigAudio.CAT_OBJECT, sound, global_position, self)
 		Events.emit_noise(global_position, 5.0, s, s.team, &"door")
 		host.runtime.notify(frame, "ONUSE")
 		super.interact(s)
@@ -484,12 +532,15 @@ class OrigExplosive extends Interactable:
 	var _work := 0.0
 	var _worker: Soldier
 	var _work_kind := ""
+	var explosion_sound := 16     ## Akteur Typ 22 +0xA8 (Kat. 6); Standard „Explosion Naloz Ext“
 
 	func init(h: OrigInteractive, f: Node3D, e: Dictionary) -> void:
 		host = h
 		frame = f
 		var p: Dictionary = e.get("params", {})
 		persistent_id = "oexpl_" + String(e["name"])
+		if int(p.get("explosion_sound", -1)) >= 0:
+			explosion_sound = int(p["explosion_sound"])
 		required_item = int(p.get("required_item", 68))
 		has_timer = bool(p.get("has_timer", true))
 		timer = float(p.get("timer_ms", 15000)) / 1000.0
@@ -512,6 +563,7 @@ class OrigExplosive extends Interactable:
 		_work_kind = "plant" if state == 0 else "defuse"
 		_work = 3.0 if state == 0 else 4.0
 		Events.say(OrigInteractive.text(7072 if state == 0 else 7075, "Bringt Sprengstoff an" if state == 0 else "Entschärft") + " …", _work)
+		OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_BOMB, global_position, self)   # „Player01 Bomb manipulation“
 		super.interact(s)
 
 	func _physics_process(delta: float) -> void:
@@ -542,7 +594,7 @@ class OrigExplosive extends Interactable:
 		countdown = -1.0
 		var pos := global_position
 		var dmg := clampf(strength / 50.0, 150.0, 1200.0)
-		host.runtime._explosion(pos, radius, dmg)
+		host.runtime._explosion(pos, radius, dmg, [OrigAudio.CAT_EXPLOSION, explosion_sound])
 		_show()
 
 	## Original-Marker: „explosive_on“ (Ladung) / „explosive_off“ (frei) im Modell
@@ -588,6 +640,7 @@ class OrigDestructible extends Node3D:
 	var destroyed := false
 	var persistent_id := ""
 	var label := ""
+	var destroy_sound := 0        ## Akteur Typ 25 +0xA8 (Kat. 6, z. B. 2 „Explosion Dirt“, 23/24 „Cisterna“)
 
 	func init(h: OrigInteractive, f: Node3D, e: Dictionary) -> void:
 		host = h
@@ -596,6 +649,7 @@ class OrigDestructible extends Node3D:
 		add_to_group("persistent")
 		persistent_id = "odestr_" + String(e["name"])
 		var p: Dictionary = e.get("params", {})
+		destroy_sound = int(p.get("destroy_sound", 0))
 		health = float(p.get("health", 1000.0))
 		label = OrigInteractive.text(int(p.get("label_text", -1)), "")
 		global_position = OrigInteractive.world_aabb(frame).get_center()
@@ -607,9 +661,11 @@ class OrigDestructible extends Node3D:
 	## Schaden in Originaleinheiten (Spielschaden ×10, vgl. weapon_db: Originalschaden/10).
 	## Gewehrkugeln wirken nur zu 25 % (ANNAHME – Original-Trefferarten nicht belegt), Explosionen voll.
 	func on_bullet_hit(d: float, by: Node) -> void:
+		host.runtime.notify(frame, "ONHIT")      # Originalskript-Ereignis OnHit (z. B. CZECH1 Lampen)
 		_add(d * 10.0 * 0.25, by)
 
 	func on_explosion(d: float, by: Node) -> void:
+		host.runtime.notify(frame, "ONHIT")
 		_add(d * 10.0, by)
 
 	func _add(v: float, _by: Node) -> void:
@@ -625,7 +681,8 @@ class OrigDestructible extends Node3D:
 
 	func destroy() -> void:
 		destroyed = true
-		Effects.explosion(global_position, 4.0)
+		var snd: Array = [OrigAudio.CAT_EXPLOSION, destroy_sound] if destroy_sound >= 0 else []
+		Effects.explosion(global_position, 4.0, snd)
 		frame.set_meta("actor_state", 0)
 		# Original: Zerstörungsanimation (.i3d, nicht dekodiert) – Ersatz: Original-Frame ausblenden
 		frame.visible = false
@@ -670,6 +727,7 @@ class OrigCrate extends Interactable:
 
 	## Original: Kisten-Skripte reagieren auf OnDeath (BURMA1 bu1_ondeath*.scr) – durch Explosionen zerstörbar
 	func on_bullet_hit(d: float, by: Node) -> void:
+		host.runtime.notify(frame, "ONHIT")
 		if _is_target():
 			on_explosion(maxf(d, 20.0), by)
 
@@ -685,6 +743,7 @@ class OrigCrate extends Interactable:
 		enabled = false
 		frame.visible = false
 		frame.set_meta("actor_state", 0)
+		OrigAudio.play_group(OrigAudio.CAT_OBJECT, 12, global_position)    # Kat. 1 „Crate Damaged“
 		host.runtime.notify(frame, "ONDEATH")
 
 	func init(h: OrigInteractive, f: Node3D, e: Dictionary) -> void:
@@ -708,6 +767,7 @@ class OrigCrate extends Interactable:
 	## bis take_limit); Ausrüstungskiste: Gegenstände der Liste ins Originalinventar
 	func interact(s: Soldier) -> void:
 		taken[s.persistent_id] = int(taken.get(s.persistent_id, 0)) + 1
+		OrigAudio.play_group(OrigAudio.CAT_OBJECT, OrigAudio.OBJ_CRATE_OPEN, global_position, self)   # „Crate Opened“
 		if equipment and not items.is_empty():
 			var inv: Array = s.get_meta("orig_items", [])
 			for it in items:
@@ -774,6 +834,8 @@ class OrigPlace extends Interactable:
 	func interact(s: Soldier) -> void:
 		if consume:
 			OrigInteractive.take_item(s, item)
+		else:
+			OrigAudio.play_group(OrigAudio.CAT_OBJECT, OrigAudio.OBJ_FOTO, global_position, self)   # Kat. 1 „Foto“
 		state = 1
 		frame.set_meta("actor_state", 1)
 		host.runtime.notify(frame, "ONUSE")
@@ -798,6 +860,51 @@ const EMPLACEMENT_WEAPONS := [["w_mg42lie", 33, 2], ["w_mg42", 33, 1], ["w_97cro
 	["la_flak4x38", "flak38", 0], ["la_flak", "flak38", 0], ["la_boatgun", 37, 0], ["la_pancer_vez", 48, 0]]
 
 
+## Waffe, die eine Munitionsart verschießt (items.sav: Waffe +ammo_item), z. B. 216 -> MG 42, 218 -> Browning 1919
+## DUO (Bootsgeschütz), 219 -> Bunker-MG, 220 -> 17-mm-Kanone, 209 -> Flak 38, 213 -> KwK 40 (Tiger) [O]
+static func weapon_for_ammo(ammo: int) -> int:
+	item_info(0)
+	var best := -1
+	for id in _items:
+		var it: Dictionary = _items[id]
+		if String(it.get("kind", "")) == "weapon" and int(it.get("ammo_item", -1)) == ammo:
+			# „TMP“-Einträge (Flak TMP) sind Entwickler-Varianten; die reguläre Waffe bevorzugen
+			if best < 0 or String(_items[best].get("name", "")).contains("TMP"):
+				best = int(id)
+	return best
+
+
+## Bordwaffen und Geschütze aus items.sav: Schusswaffen über WeaponDB.from_orig(…, mounted); Werfer (Flak, Kanonen,
+## Pak) als Geschoss mit Aufschlagzünder: Feuerintervall interval_ms, Nachladen reload_ms, Geschwindigkeit velocity,
+## Magazin = Schuss je Munitionsgegenstand [O]; Splitterradius f15 (mind. 3 m) [O, Deutung P]; Schaden damage_f3/10,
+## bei Kanonen (Platzhalterwert 99/300) 300 [E – Kanonenschaden im Original nicht dekodiert]
+static func heavy_weapon(item: int) -> WeaponData:
+	if item < 0:
+		return null
+	var wd := WeaponDB.from_orig(item, true)
+	if wd:
+		return wd
+	var gid := StringName("o_%d" % item)
+	if gid in WeaponDB.all_ids():
+		return WeaponDB.get_weapon(gid)
+	var info := item_info(item)
+	var bs: Array = info.get("behaviours", [])
+	if bs.is_empty() or String((bs[0] as Dictionary).get("type", "")) != "projectile_launcher":
+		return null
+	var b: Dictionary = bs[0]
+	var interval := maxf(float(b.get("interval_ms", 1000.0)) / 1000.0, 0.1)
+	var cannon := interval >= 1.0
+	var rounds := int(item_info(int(info.get("ammo_item", -1))).get("rounds", 1.0))
+	var dmg := float(b.get("damage_f3", 99.0))
+	return WeaponDB._make({id = gid, display_name = String(info.get("name", gid)), slot = WeaponData.Slot.PRIMARY,
+		action = WeaponData.Action.ROCKET, magazine_size = maxi(rounds, 1), start_magazines = 6,
+		rpm = 60.0 / interval, reload_time = float(b.get("reload_ms", 3000.0)) / 1000.0,
+		muzzle_velocity = clampf(float(b.get("velocity", 250.0)), 40.0, 1000.0),
+		damage = 300.0 if cannon or dmg <= 99.0 else dmg / 10.0, blast_radius = maxf(float(b.get("f15", 0.0)), 3.0 if not cannon else 4.0),
+		spread_hip = 0.6, spread_aim = 0.3, recoil_pitch = 2.0 if cannon else 0.8, recoil_yaw = 0.3, spread_per_shot = 0.1,
+		noise_radius = 400.0 if cannon else 250.0, weight = float(info.get("weight_kg", 500.0)), model_length = 2.0, aim_fov = 30.0})
+
+
 func _emplacement(e: Dictionary) -> void:
 	var f := _frame(e)
 	if f == null:
@@ -810,17 +917,76 @@ func _emplacement(e: Dictionary) -> void:
 			wid = row[1]
 			stance = row[2]
 			break
-	if wid == null:
-		return
-	var wd: WeaponData = WeaponDB.from_orig(int(wid), true) if wid is int else WeaponDB.get_weapon(StringName(wid))
+	# Waffe über die Munition im items.dat-Inventar der Stellung (Original: Stellung verschießt ihre Munition)
+	var wd: WeaponData = null
+	for it in e.get("inventory", []):
+		var ammo := int(it.get("item", -1)) if it is Dictionary else int(it)
+		var wi := weapon_for_ammo(ammo)
+		if wi < 0 and item_info(ammo).get("kind", "") == "weapon":
+			wi = ammo
+		wd = heavy_weapon(wi)
+		if wd:
+			break
+	# Originalmodell: Rohr-Frame BARREL00_00 trägt „itemid<n>,up,down,left,right“ (4DS-Frameparameter) [B Daten]
+	var rig: Dictionary = rig_params(orig.mission_dir + "/models/" + model + ".glb") if orig else {}
+	if int(rig.get("itemid", -1)) >= 0:
+		var bw := heavy_weapon(int(rig["itemid"]))
+		if bw:
+			wd = bw
+	if wd == null and wid != null:
+		wd = WeaponDB.from_orig(int(wid), true) if wid is int else WeaponDB.get_weapon(StringName(wid))
 	if wd == null:
 		return
+	if wid == null:
+		stance = 1 if model.contains("crouch") else (2 if model.contains("lie") else 0)
 	var x := OrigEmplacement.new()
 	x.name = "Emplacement_" + String(e["name"]).validate_node_name()
 	mission.dynamic_root.add_child(x)
 	x.init(self, f, e, wd, stance)
+	x.model_path = orig.mission_dir + "/models/" + model + ".glb" if orig else ""
+	x.setup_rig(rig)
 	_register(e, f, x)
 	stats.emplacements += 1
+
+
+static var _rig_cache := {}
+
+
+## Parameter des Rohr-Frames einer Stellung aus dem glTF-Export (extras.params des 4DS-Frames BARRELnn_xx):
+## itemid (Waffe, items.sav), up/down/left/right (Schwenkgrenzen in Grad) [B Daten, Bedeutung der Grenzen P]
+static func rig_params(path: String) -> Dictionary:
+	if _rig_cache.has(path):
+		return _rig_cache[path]
+	var out := {}
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f and f.get_length() > 20 and f.get_32() == 0x46546C67:
+		f.get_32()
+		f.get_32()
+		var ln := f.get_32()
+		f.get_32()
+		var j = JSON.parse_string(f.get_buffer(ln).get_string_from_utf8())
+		if typeof(j) == TYPE_DICTIONARY:
+			for n in j.get("nodes", []):
+				var nm := String(n.get("name", "")).to_upper()
+				var ex = n.get("extras", {})
+				if typeof(ex) != TYPE_DICTIONARY:
+					continue
+				# Sitz-Frame „SEAT<Ziffern>“: erste Ziffer = Haltung des Bedieners (1 sitzend, 2 stehend, 3 hockend,
+				# 6 liegend; Daten aller Stellungsmodelle, Bit 8 = Geschütz, re_notes_ju88 §2.5) [B Daten, P Deutung]
+				if nm.begins_with("SEAT") and not out.has("seat"):
+					var sp := String(ex.get("params", "")).to_upper()
+					if sp.begins_with("SEAT") and sp.length() > 4 and sp.substr(4, 1).is_valid_int():
+						out["seat"] = int(sp.substr(4, 1))
+					continue
+				if not nm.begins_with("BARREL") or out.has("itemid"):
+					continue
+				for tok in String(ex.get("params", "")).to_lower().replace("matid", ",matid").split(",", false):
+					var t := String(tok).strip_edges()
+					for key in ["itemid", "up", "down", "left", "right"]:
+						if t.begins_with(key) and t.substr(key.length()).is_valid_int():
+							out[key] = int(t.substr(key.length()))
+	_rig_cache[path] = out
+	return out
 
 
 class OrigEmplacement extends Interactable:
@@ -829,6 +995,335 @@ class OrigEmplacement extends Interactable:
 	var data: WeaponData
 	var stance := 1
 	var ammo_mags := 0
+	## Originalmodell der Stellung: Seitenrichtung HORT00, Höhenrichtung VERT00 (Kind von HORT), Rohr BARREL00_00,
+	## Mündung SHDUM00, Sitz SEAT00 (Konvention wie Fahrzeugtürme, vehicle.gd); Grenzen aus rig_params
+	var hort: Node3D
+	var vert: Node3D
+	var muzzle: Node3D
+	var seat: Node3D
+	var base_h := Transform3D()
+	var base_v := Transform3D()
+	var lim := {"up": 30.0, "down": 30.0, "left": 60.0, "right": 60.0}
+	var aim_yaw := 0.0              ## aktuelle Rohrdrehung relativ zur Stellung (rad, + = links)
+	var aim_pitch := 0.0            ## + = hoch
+
+	## Drehachsen des Originalmodells suchen (nur bei Stellungen aus interactive.json; eigene Kartenwaffen
+	## wie Flak-Unterklassen eigener Karten steuern ihr Modell selbst)
+	func setup_rig(rig: Dictionary) -> void:
+		for k in ["up", "down", "left", "right"]:
+			if rig.has(k):
+				lim[k] = float(rig[k])
+		for n in frame.find_children("*", "Node3D", true, false):
+			var nm := String(n.name).to_upper()
+			if hort == null and nm.begins_with("HORT"):
+				hort = n
+			elif vert == null and nm.begins_with("VERT"):
+				vert = n
+			elif muzzle == null and nm.begins_with("SHDUM"):
+				muzzle = n
+			elif seat == null and nm.begins_with("SEAT"):
+				seat = n
+		if hort:
+			base_h = hort.transform
+		if vert:
+			base_v = vert.transform
+		if seat:
+			global_position = seat.global_position + Vector3.UP * 0.5
+
+	## Mündung des Originalmodells (Schussursprung, Soldier._fire_shot)
+	func shot_origin() -> Vector3:
+		if is_instance_valid(muzzle):
+			return muzzle.global_position
+		return gunner.eye_position() + gunner.aim_direction() * 1.0 if is_instance_valid(gunner) else frame.global_position
+
+	## Eigene Kollision der Stellung nicht treffen
+	func shot_exclusions() -> Array[RID]:
+		var out: Array[RID] = []
+		for b in frame.find_children("*", "CollisionObject3D", true, false):
+			out.append((b as CollisionObject3D).get_rid())
+		return out
+
+	## Rohr folgt dem Blick des Schützen innerhalb der Originalgrenzen; der Blick wird auf die Grenzen gesetzt,
+	## damit Schuss und Rohr übereinstimmen (Spieler, KI, Netzfiguren)
+	func _aim_rig() -> void:
+		if hort == null and vert == null:
+			return
+		var base_yaw := frame.global_basis.get_euler().y
+		var rel := wrapf(gunner.look_yaw - base_yaw, -PI, PI)
+		rel = clampf(rel, -deg_to_rad(lim["right"]), deg_to_rad(lim["left"]))
+		var pit := clampf(gunner.look_pitch, -deg_to_rad(lim["down"]), deg_to_rad(lim["up"]))
+		gunner.look_yaw = base_yaw + rel
+		gunner.look_pitch = pit
+		aim_yaw = rel
+		aim_pitch = pit
+		if hort:
+			hort.transform = Transform3D(Basis(Vector3.UP, rel) * base_h.basis, base_h.origin)
+		if vert:
+			var b := base_v.basis * Basis(Vector3.RIGHT, pit)
+			if hort == null:
+				b = Basis(Vector3.UP, rel) * b
+			# Rückstoß: Rohr fährt beim Schuss bis 3 cm zurück (lokal +Z), Hände folgen den Griffen [E]
+			vert.transform = Transform3D(b, base_v.origin + b * Vector3(0, 0, 0.03 * _kick))
+
+	## Rohrrichtung in Weltkoordinaten (Modelle: Lauf entlang −Z)
+	func barrel_dir() -> Vector3:
+		var p: Node3D = vert if vert else hort
+		return -(p.global_basis.z.normalized()) if p else -frame.global_basis.z
+
+	# --- Bedienhaltung des Schützen (docs/re_notes_weapons.md §11) ------------------------------------------
+	## Original: Figur am Sitz-Frame SEAT00, Ganzkörper-Clip aus TABLES\anim.sav (Tabelle 0x1B36C) je Haltungsziffer
+	## des SEAT-Parameters (1 sitzend (flaksed, 2 stehend (mg42_stand/(w97_stand, 3 hockend (mg42crouch/(w97_crouch,
+	## 6 liegend (mg42lie) [B Daten]. Die 5–6 Schlüsselbilder dieser Clips sind ein Seitenschwenk (Bild 0 Figur
+	## 0,6 m rechts … Bild 5 0,5 m links) → Bild nach Seitenrichtung des Rohrs [P]. Hände per IK an RWS/LWS.
+	const EmplacementIK := preload("res://src/actors/emplacement_ik.gd")
+	var model_path := ""            ## glb des Stellungsmodells (Haltungsziffer aus rig_params), sonst Meta „source“
+	var pose_seat: Node3D           ## SEAT00 (Figurenursprung)
+	var grip_r: Node3D              ## RWS
+	var grip_l: Node3D              ## LWS
+	var pose_hort: Node3D           ## Seitenrichtungs-Frame (Unterklassen eigener Karten drehen ihn selbst)
+	var pose_hort_rest := Basis()
+	var pose_ik: SkeletonModifier3D
+	var _pose_clip := ""
+	var _kick := 0.0                ## Rückstoß 0..1 (Rohr fährt kurz zurück, Hände folgen den Griffen)
+	var _trans_t := 1.0             ## Auf-/Absteigen: Überblendung Figur Laufposition ↔ Sitz (0..1)
+	var _trans_from := Transform3D()   ## Weltlage der Figur vor dem Besetzen
+	var _fig_rest := Transform3D()     ## Ruhelage der Figur im SoldierModel (nach dem Verlassen wiederhergestellt)
+
+	func _pose_nodes() -> void:
+		for n in frame.find_children("*", "Node3D", true, false):
+			var nm := String(n.name).to_upper()
+			if pose_seat == null and nm.begins_with("SEAT"):
+				pose_seat = n
+			elif grip_r == null and nm == "RWS":
+				grip_r = n
+			elif grip_l == null and nm == "LWS":
+				grip_l = n
+			elif pose_hort == null and nm.begins_with("HORT"):
+				pose_hort = n
+		if pose_hort:
+			pose_hort_rest = pose_hort.transform.basis
+
+	## Haltungsclip der Figur (export_characters.py „emp_*“): Haltungsziffer des SEAT-Frames, Modellname als Rückfall
+	func pose_clip() -> String:
+		if _pose_clip != "":
+			return _pose_clip
+		var path := model_path if model_path != "" else String(frame.get_meta("source", ""))
+		var nm := path.get_file().to_lower()
+		var digit: int = int(OrigInteractive.rig_params(path).get("seat", -1)) if path != "" else -1
+		if digit < 0:
+			digit = 1 if nm.contains("flak") else (6 if nm.contains("lie") else (3 if nm.contains("crouch") else 2))
+		var w97 := nm.begins_with("w_97")
+		match digit:
+			1:
+				_pose_clip = "emp_flaksed"
+			3:
+				_pose_clip = "emp_w97_crouch" if w97 else "emp_mg42crouch"
+			6:
+				_pose_clip = "emp_mg42lie"
+			_:
+				_pose_clip = "emp_w97_stand" if w97 else "emp_mg42_stand"
+		return _pose_clip
+
+	## Seitenschwenk des Rohrs gegenüber der Ruhelage (rad, + = links)
+	func pose_yaw() -> float:
+		if pose_hort == null:
+			return aim_yaw
+		var f0 := -(pose_hort_rest.z)
+		var f1 := -(pose_hort.transform.basis.z)
+		return atan2(f0.cross(f1).y, f0.dot(f1))
+
+	## Clipzeit nach Seitenrichtung: Mittelbild 3 von 5 (0,12 s) bei geradeaus, Bild 5 = ganz links, 0 = ganz rechts
+	func pose_seek(length: float) -> float:
+		if length <= 0.15:
+			return 0.0          # (flaksed: Sitz dreht mit der Lafette, ein Standbild
+		var c := length * 0.6
+		var y := pose_yaw()
+		# Schwenkbereich des Clips = Grenzen des Original-Rohrframes (auch wenn eine Karte enger begrenzt)
+		var path := model_path if model_path != "" else String(frame.get_meta("source", ""))
+		var rp: Dictionary = OrigInteractive.rig_params(path) if path.ends_with(".glb") else {}
+		var l: float = float(rp.get("left", lim["left"]))
+		var r: float = float(rp.get("right", lim["right"]))
+		if y >= 0.0:
+			return c + clampf(y / deg_to_rad(maxf(l, 1.0)), 0.0, 1.0) * (length - c)
+		return c - clampf(-y / deg_to_rad(maxf(r, 1.0)), 0.0, 1.0) * c
+
+	func _pose_begin(s: Soldier) -> void:
+		if pose_seat == null and grip_r == null:
+			_pose_nodes()
+		var m := s.model
+		if m == null or not is_instance_valid(m.orig_figure):
+			return
+		_fig_rest = m.orig_figure.transform
+		_fig_rest.basis = Basis.from_euler(Vector3(0, 0, 0)).scaled(_fig_rest.basis.get_scale())   # ohne Anschlagdrehung
+		var ap := m.orig_figure.find_child("AnimationPlayer", true, false) as AnimationPlayer
+		if ap and ap.has_animation(pose_clip()):
+			ap.get_animation(pose_clip()).loop_mode = Animation.LOOP_LINEAR   # Standbild per seek, nie „beendet“
+		m.play_full(pose_clip())
+		var sk_list := m.orig_figure.find_children("*", "Skeleton3D", true, false)
+		if sk_list.is_empty():
+			return
+		var sk := sk_list[0] as Skeleton3D
+		pose_ik = EmplacementIK.new()
+		pose_ik.name = "EmplacementIK"
+		sk.add_child(pose_ik)
+		pose_ik.call("setup", sk, m.orig_figure.find_child("hw1", true, false), m.orig_figure.find_child("hw2", true, false), grip_r, grip_l)
+		if not s.shot_fired.is_connected(_on_gunner_shot):
+			s.shot_fired.connect(_on_gunner_shot)
+
+	func _pose_end(s: Soldier) -> void:
+		if is_instance_valid(pose_ik):
+			pose_ik.queue_free()
+		pose_ik = null
+		if is_instance_valid(s):
+			if s.shot_fired.is_connected(_on_gunner_shot):
+				s.shot_fired.disconnect(_on_gunner_shot)
+			var m := s.model
+			if m and is_instance_valid(m.orig_figure):
+				m.play_full("")
+				m.set("full_seek", -1.0)
+				var ap := m.orig_figure.find_child("AnimationPlayer", true, false) as AnimationPlayer
+				if ap:
+					ap.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_IDLE   # Standbild-Modus aus (auch beim Tod)
+				# Absteigen: Figur gleitet in 0,35 s vom Sitz zurück an den Soldaten (Clip blendet 0,2 s über)
+				var fig := m.orig_figure
+				var from := fig.global_position
+				fig.transform = _fig_rest
+				var to := fig.position
+				fig.global_position = from
+				fig.create_tween().tween_property(fig, "position", to, 0.35).set_trans(Tween.TRANS_SINE)
+
+	func _on_gunner_shot(_w) -> void:
+		_kick = 1.0
+
+	var _cam_fpv: Node3D
+	## 1. Person: Dummy CAMERAFPV am Rohr des Stellungsmodells (folgt Schwenk/Neigung), ohne Dummy (Flak) am Kopf der
+	## Figur; 3. Person: Drehpunkt über dem Kopf der Figur am Sitz (Kopf + 0,45 m ≈ camera3RD stehend 2,085 m) [P]
+	func camera_point(fpv: bool) -> Vector3:
+		if fpv:
+			if _cam_fpv == null:
+				for n in frame.find_children("*", "Node3D", true, false):
+					if String(n.name).to_upper() == "CAMERAFPV":
+						_cam_fpv = n
+						break
+			if is_instance_valid(_cam_fpv):
+				return _cam_fpv.global_position
+		var head := _figure_bone("f")
+		if not head.is_finite():
+			return Vector3.INF
+		var up: float = 0.1 if fpv else 0.45
+		# Unter Decken/Dächern (Holzhaus-MG) bleibt der Drehpunkt im Raum, sonst läge die 3.-Person-Kamera
+		# über bzw. in der Decke und zeigte nur Holz
+		var q := PhysicsRayQueryParameters3D.create(head, head + Vector3.UP * (up + 0.2), 1)
+		q.exclude = shot_exclusions()
+		var hit := get_world_3d().direct_space_state.intersect_ray(q)
+		if not hit.is_empty():
+			up = minf(up, maxf(head.distance_to(hit["position"]) - 0.2, 0.0))
+		return head + Vector3.UP * up
+
+	## Clipzeit, deren Handmitte (hw1/hw2) der Mitte der Griffe RWS/LWS am nächsten liegt (Skelettraum der Figur am
+	## Sitz): das Schwenkbild ergibt sich so aus der tatsächlichen Kolbenlage, auch bei kartenspezifischen Grenzen.
+	## −1 = keine Griffe/Hände (dann pose_seek nach Winkel)
+	static var _hand_tables := {}
+	func _fit_seek(fig: Node3D, anim: Animation, clip: String) -> float:
+		if not is_instance_valid(grip_r) or not is_instance_valid(grip_l) or not is_instance_valid(pose_ik):
+			return -1.0
+		var sk := pose_ik.get_parent() as Skeleton3D
+		var hr := fig.find_child("hw1", true, false) as Node3D
+		var hl := fig.find_child("hw2", true, false) as Node3D
+		if sk == null or hr == null or hl == null:
+			return -1.0
+		var key := "%s|%s" % [clip, String(fig.get_meta("figure_model", fig.name))]
+		if not _hand_tables.has(key):
+			_hand_tables[key] = _hand_table(sk, anim, hr.transform.origin, hl.transform.origin)
+		var target := sk.global_transform.affine_inverse() * ((grip_r.global_position + grip_l.global_position) * 0.5)
+		var best := -1.0
+		var best_d := INF
+		for e in _hand_tables[key]:
+			var d := (e[1] as Vector3).distance_squared_to(target)
+			if d < best_d - 0.000001:
+				best_d = d
+				best = float(e[0])
+		return best
+
+	## Handmitte je Clipzeit (41 Stützstellen) per Vorwärtskinematik aus den Spuren des Clips
+	static func _hand_table(sk: Skeleton3D, anim: Animation, off_r: Vector3, off_l: Vector3) -> Array:
+		var pos_tr := {}
+		var rot_tr := {}
+		for i in anim.get_track_count():
+			var b := sk.find_bone(String(anim.track_get_path(i).get_concatenated_subnames()))
+			if b < 0:
+				continue
+			if anim.track_get_type(i) == Animation.TYPE_POSITION_3D:
+				pos_tr[b] = i
+			elif anim.track_get_type(i) == Animation.TYPE_ROTATION_3D:
+				rot_tr[b] = i
+		var jr := sk.find_bone("j")
+		var jl := sk.find_bone("n")
+		var out := []
+		if jr < 0 or jl < 0:
+			return out
+		for k in 41:
+			var t := anim.length * float(k) / 40.0
+			var cache := {}
+			var mid := (_bone_at(sk, anim, jr, t, pos_tr, rot_tr, cache) * off_r + _bone_at(sk, anim, jl, t, pos_tr, rot_tr, cache) * off_l) * 0.5
+			out.append([t, mid])
+		return out
+
+	static func _bone_at(sk: Skeleton3D, anim: Animation, b: int, t: float, pos_tr: Dictionary, rot_tr: Dictionary, cache: Dictionary) -> Transform3D:
+		if cache.has(b):
+			return cache[b]
+		var rest := sk.get_bone_rest(b)
+		var p := rest.origin
+		var q := rest.basis.get_rotation_quaternion()
+		if pos_tr.has(b):
+			p = anim.position_track_interpolate(pos_tr[b], t)
+		if rot_tr.has(b):
+			q = anim.rotation_track_interpolate(rot_tr[b], t)
+		var x := Transform3D(Basis(q).scaled(rest.basis.get_scale()), p)
+		var par := sk.get_bone_parent(b)
+		if par >= 0:
+			x = _bone_at(sk, anim, par, t, pos_tr, rot_tr, cache) * x
+		cache[b] = x
+		return x
+
+	## Weltlage eines Figurknochens des Schützen (INF ohne Originalfigur)
+	func _figure_bone(bone: String) -> Vector3:
+		if not is_instance_valid(gunner) or gunner.model == null or not is_instance_valid(gunner.model.orig_figure):
+			return Vector3.INF
+		var sks := gunner.model.orig_figure.find_children("*", "Skeleton3D", true, false)
+		if sks.is_empty():
+			return Vector3.INF
+		var sk := sks[0] as Skeleton3D
+		var i := sk.find_bone(bone)
+		return (sk.global_transform * sk.get_bone_global_pose(i)).origin if i >= 0 else Vector3.INF
+
+	## Figur am Sitz (Überblendung beim Auf-/Absteigen), Clipzeit nach Schwenk, Oberkörper nach Höhenrichtung
+	func _pose_update(delta: float) -> void:
+		if not is_instance_valid(gunner) or gunner.model == null or not is_instance_valid(gunner.model.orig_figure):
+			return
+		var m := gunner.model
+		var fig := m.orig_figure
+		_trans_t = move_toward(_trans_t, 1.0, delta / 0.35)
+		var seat_x := Transform3D(m.global_basis, gunner.global_position)
+		if is_instance_valid(pose_seat):
+			seat_x = Transform3D(pose_seat.global_basis.orthonormalized(), pose_seat.global_position)
+		elif is_instance_valid(frame):
+			seat_x = Transform3D(Basis(Vector3.UP, frame.global_basis.get_euler().y), gunner.global_position)
+		var k := smoothstep(0.0, 1.0, _trans_t)
+		# Aufsteigen: Figur gleitet in 0,35 s vom Standort vor dem Besetzen in die Bedienhaltung (statt Teleport)
+		var sc := fig.global_basis.get_scale()
+		var tx := _trans_from.interpolate_with(seat_x, k)
+		fig.global_transform = Transform3D(tx.basis.orthonormalized().scaled_local(sc), tx.origin)
+		var clip := pose_clip()
+		var ap := fig.find_child("AnimationPlayer", true, false) as AnimationPlayer
+		if ap and ap.has_animation(clip):
+			var anim := ap.get_animation(clip)
+			var ln := anim.length
+			var t := _fit_seek(fig, anim, clip)
+			m.set("full_seek", clampf(t if t >= 0.0 else pose_seek(ln), 0.0, ln * 0.999))
+		if is_instance_valid(pose_ik):
+			pose_ik.set("weight", k)
+			pose_ik.set("pitch", clampf(gunner.look_pitch, -0.7, 0.7))
 	var gunner: Soldier
 	var _saved: Array = []
 	var _saved_slot := 0
@@ -844,9 +1339,22 @@ class OrigEmplacement extends Interactable:
 		global_position = frame.global_position + Vector3.UP * 0.5
 		frame.set_meta("actor_state", 3)
 		prompt = "%s: %s" % [data.display_name, OrigInteractive.text(TXT_USE, "Benutzen")]
+		add_to_group("emplacements")
+		_pose_nodes()        # Ruhelage der Seitenrichtung vor dem ersten Schwenk merken
 
 	func can_interact(s: Soldier) -> bool:
 		return enabled and not destroyed and (gunner == null or gunner == s) and s.vehicle == null
+
+	## KI (EnemyBrain / HUMAN_BoardVehicle): frei, nicht zerstört
+	func can_ai_mount(s: Soldier) -> bool:
+		return not destroyed and (gunner == null or not is_instance_valid(gunner) or not gunner.alive or gunner == s) \
+			and s.alive and s.vehicle == null
+
+	## Platz des Schützen: Sitz-Frame SEAT00 des Originalmodells, sonst hinter der Waffe (Modelle blicken nach −Z)
+	func gunner_spot() -> Vector3:
+		if is_instance_valid(seat):
+			return seat.global_position
+		return frame.global_position + frame.global_basis.z.normalized() * 0.9
 
 	func interact(s: Soldier) -> void:
 		if gunner == s:
@@ -857,6 +1365,10 @@ class OrigEmplacement extends Interactable:
 
 	## Besetzen: Schütze hinter der Waffe (Modelle blicken nach −Z), Waffe der Stellung in der Hand
 	func mount(s: Soldier) -> void:
+		if gunner == s:
+			return
+		if gunner and is_instance_valid(gunner) and gunner.mounted == self:
+			dismount()
 		gunner = s
 		s.mounted = self
 		_saved = s.weapons.duplicate()
@@ -867,10 +1379,14 @@ class OrigEmplacement extends Interactable:
 		var arr: Array[Weapon] = [w, null, null]
 		s.weapons = arr
 		s.current_slot = 0
-		s.global_position = frame.global_position + frame.global_basis.z.normalized() * 0.9 + Vector3.UP * 0.1
+		_trans_from = s.model.orig_figure.global_transform if s.model and is_instance_valid(s.model.orig_figure) \
+			else Transform3D(Basis(), s.global_position)
+		_trans_t = 0.0
+		s.global_position = gunner_spot() + Vector3.UP * 0.1
 		s.look_yaw = frame.global_basis.get_euler().y
 		s.stance_request = stance
 		s._on_weapon_switched()
+		_pose_begin(s)
 		prompt = "%s: verlassen" % data.display_name
 
 	func dismount() -> void:
@@ -884,16 +1400,24 @@ class OrigEmplacement extends Interactable:
 			arr.append(x)
 		s.weapons = arr
 		s.current_slot = _saved_slot
+		_pose_end(s)
 		s.mounted = null
 		s._on_weapon_switched()
 		gunner = null
 		prompt = "%s: %s" % [data.display_name, OrigInteractive.text(TXT_USE, "Benutzen")]
 
-	func _physics_process(_delta: float) -> void:
+	func _physics_process(delta: float) -> void:
+		_kick = move_toward(_kick, 0.0, delta * 12.0)
 		if gunner and (not is_instance_valid(gunner) or not gunner.alive):
 			if is_instance_valid(gunner):
 				dismount()
 			gunner = null
+		elif gunner and gunner.mounted == self:
+			_aim_rig()
+
+	func _process(delta: float) -> void:
+		if gunner and is_instance_valid(gunner) and gunner.mounted == self:
+			_pose_update(delta)
 
 	## Original: SetActorState(w, 2) = zerstört (Bediener erhalten Schaden)
 	func set_actor_state(n: int) -> void:
@@ -965,7 +1489,8 @@ static func give_item(s: Soldier, id: int) -> String:
 	inv.append(id)
 	s.set_meta("orig_items", inv)
 	var info := item_info(id)
-	var nm := SAS.item_name(id) if SAS.item(id).size() > 0 else String(info.get("name", "#%d" % id))
+	# Meldung mit dem Original-Gegenstandsnamen (deutsche Originaltexte, items.sav Text-ID)
+	var nm := SAS.item_label(id) if SAS.item(id).size() > 0 or info.has("text_id") else String(info.get("name", "#%d" % id))
 	if id in SAS.MEDKITS:
 		s.medkits += 1
 	var kind := String(info.get("kind", SAS.item_kind(id)))
@@ -997,6 +1522,8 @@ class OrigWorldItem extends Interactable:
 		var info := OrigInteractive.item_info(item)
 		var model := String(info.get("model", ""))
 		var vis: Node3D = host.orig.model_instance(model) if model != "" else null
+		if vis == null:
+			vis = OrigWeapons.world_model(model)   # Waffen: gemeinsamer Cache (tools/export_weapons.py)
 		if vis == null:
 			var mi := MeshInstance3D.new()
 			var bm := BoxMesh.new()

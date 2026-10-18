@@ -179,7 +179,14 @@ func _run() -> void:
 	await frames(10)
 	check(m.controller.interact_target is Pickups.Loot, "Leiche als Interaktionsziel")
 	await tap("interact")
-	check(kow.weapons[0].reserve > 10, "9-mm-Munition von MP-40-Schütze übernommen", str(kow.weapons[0].reserve))
+	# Original: Durchsuchen öffnet das Inventar mit zweitem Inventar (Gegenstände per Maus nehmen, test_inventory)
+	var invui: IngameInventory = m.controller.inventory
+	check(invui.is_open() and invui.other == dead, "Leiche durchsuchen öffnet das Inventar (zwei Inventare)")
+	var mp40mag: int = SAS.ammo_of(OrigHud.weapon_item(dead.weapons[0], dead.team)) if dead.weapons[0] else -1
+	if mp40mag >= 0:
+		invui.move_item("other", "items", mp40mag, "own", "items")
+	check(mp40mag >= 0 and SAS.count_of(FieldInventory.view(kow), mp40mag) > 0, "MP-40-Magazine aus der Leiche übernommen")
+	invui.close()
 
 	# --- Lehnen ---
 	var eye0 := kow.eye_position()

@@ -27,7 +27,9 @@ var ACTIONS := {
 	"weapon_3": ["Waffe 3 (Raketenwerfer)", KEY_3],
 	"grenade": ["Granate werfen", KEY_G],
 	"binoculars": ["Fernglas", KEY_4],
-	"medkit": ["Verbandskasten benutzen", KEY_5],
+	# Erste Hilfe: Schnelltaste H (Vorgabe Auftraggeber; das Original hat keine Taste, nur das Inventar –
+	# Options.bin „profile“: H unbelegt). „Folgen“ (eigene Direkttaste, kein Original) deshalb auf U.
+	"medkit": ["Erste Hilfe (Verbandskasten)", KEY_H],
 	"weapon_next": ["Auswahl weiter (Waffen / Sitzplatz)", "mouse:5"],
 	"weapon_prev": ["Auswahl zurück (Waffen / Sitzplatz)", "mouse:4"],
 	"fire_mode": ["Feuermodus", KEY_B],
@@ -39,17 +41,33 @@ var ACTIONS := {
 	"soldier_4": ["Soldat 4", KEY_F4],
 	"soldier_next": ["Nächster Soldat", KEY_TAB],
 	"order_move": ["Befehl: Dorthin bewegen", KEY_X],
-	"order_follow": ["Befehl: Folgen", KEY_H],
+	"order_follow": ["Befehl: Folgen", KEY_U],
 	"order_hold": ["Befehl: Position halten", KEY_J],
 	"order_roe": ["Befehl: Feuer frei / Feuer halten", KEY_K],
 	"order_formation": ["Befehl: Formation wechseln", KEY_L],
 	"order_stance": ["Befehl: Haltung wie Anführer", KEY_N],
 	"order_grenade": ["Befehl: Granate dorthin werfen", KEY_T],
+	# Original-Befehlsmenü (Kategorie BEFEHLE, Texte 2866–2872, Standardbelegung Ziffernblock 0–6)
+	"command_all": ["Befehl an alle", KEY_KP_0],
+	"command_1": ["Befehl an 1", KEY_KP_1],
+	"command_2": ["Befehl an 2", KEY_KP_2],
+	"command_3": ["Befehl an 3", KEY_KP_3],
+	"command_4": ["Befehl an 4", KEY_KP_4],
+	"command_5": ["Befehl an 5", KEY_KP_5],
+	"command_6": ["Befehl an 6", KEY_KP_6],
 	"objectives": ["Missionsziele", KEY_O],
+	# Original-Standardbelegung (Options.bin „profile“): INVENTAR T2847 = I, GEGENST. FALLENL. T2827 = Rücktaste
+	"inventory": ["Inventar", KEY_I],
+	"drop_item": ["Gegenstand fallenlassen", KEY_BACKSPACE],
 	"tactical_map": ["Taktische Karte (Pause)", KEY_M],
 	"quicksave": ["Schnellspeichern", KEY_F5],
 	"quickload": ["Schnellladen", KEY_F9],
 	"pause": ["Pause / Menü", KEY_ESCAPE],
+	# Mehrspieler (Original-Standardbelegung aus Options.bin: KONSOLE ^, ALLE INFORMIEREN T, TEAM INFORMIEREN Y)
+	"console": ["Konsole", KEY_QUOTELEFT],
+	"chat_all": ["Alle informieren (Chat)", KEY_T],
+	"chat_team": ["Team informieren (Chat)", KEY_Y],
+	"voice_talk": ["Voice-Chat sprechen (halten)", KEY_CAPSLOCK],
 }
 
 
@@ -158,6 +176,7 @@ func save_bindings() -> void:
 		var evs := InputMap.action_get_events(action)
 		if evs.size() > 0:
 			cfg.set_value("keys", action, spec_from_event(evs[0]))
+	cfg.set_value("meta", "keys_version", KEYS_VERSION)
 	cfg.save(bindings_path())
 
 
@@ -169,10 +188,19 @@ func load_bindings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(bindings_path()) != OK or not cfg.has_section("keys"):
 		return
+	# Belegungsstand 2 (14.10.2026): Erste Hilfe 5 -> H, Folgen H -> U; gespeicherte alte Standards umstellen
+	var migrate := int(cfg.get_value("meta", "keys_version", 1)) < KEYS_VERSION
 	for action: String in cfg.get_section_keys("keys"):
 		if not ACTIONS.has(action):
 			continue
-		var ev := _event_from_spec(cfg.get_value("keys", action))
+		var spec = cfg.get_value("keys", action)
+		if migrate and OLD_DEFAULTS.has(action) and spec is int and int(spec) == int(OLD_DEFAULTS[action]):
+			continue
+		var ev := _event_from_spec(spec)
 		if ev:
 			InputMap.action_erase_events(action)
 			InputMap.action_add_event(action, ev)
+
+
+const KEYS_VERSION := 2
+const OLD_DEFAULTS := {"medkit": KEY_5, "order_follow": KEY_H}

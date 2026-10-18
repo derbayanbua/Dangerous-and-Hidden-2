@@ -84,16 +84,54 @@ func _run() -> void:
 	check(Game.last_result.get("mission", "") == "a1_blizzard" and Game.last_result.get("success", false),
 		"Arctic 1A erfolgreich (alle Pflichtziele)", str(Game.last_result.get("reason", "")) + " | " +
 		str(m.objectives.map(func(o): return "%s:%d%s" % [o.id, o.state, "o" if o.optional else ""])) + " " + str(m.orig_objectives))
-	check(Game.is_unlocked("a2_erkundung"), "Teil 1B freigeschaltet")
-	check(Game.is_fallen(second_pid), "Gefallener im Kader vermerkt")
 	check(Game.last_result.get("fallen", []).has(second_name), "Nachbesprechung nennt Gefallenen")
-	check(Game.orig_game_values().get(30) == 99, "SaveGameValue-Werte für den nächsten Teil gesichert")
+	# Original 0x68C300: Übernahme erst mit SPEICHERN UND FORTSETZEN
+	check(not Game.is_unlocked("a2_erkundung") and not Game.is_fallen(second_pid) and Game.has_pending_debrief(),
+		"Vor SPEICHERN UND FORTSETZEN: Kampagnenstand unverändert (vorbereitet)")
 
 	for i in 400:
 		await get_tree().process_frame
 		if get_tree().current_scene and get_tree().current_scene.name == "Debrief":
 			break
-	check(get_tree().current_scene != null and get_tree().current_scene.name == "Debrief", "Nachbesprechung angezeigt")
+	var deb := get_tree().current_scene
+	check(deb != null and deb.name == "Debrief", "Nachbesprechung angezeigt")
+	await frames(3)
+	var members: Array = Game.last_result.get("sas", {}).get("members", [])
+	check(members.size() == 4 and members.filter(func(x): return bool(x["dead"])).size() == 1,
+		"Nachbesprechung: 4 Soldatenpanels, einer gefallen", str(members.map(func(x): return x["name"])))
+	check(deb.find_child("SoldierName", true, false) != null and deb.find_child("RankBadge", true, false) != null
+		and deb.find_child("Value_shooting", true, false) != null, "Soldatenpanel: Name, Rangabzeichen, Werteleisten")
+	# Tagebuch (ADDDIARYTEXT): Eintrag des Einsatzes erscheint auf der Tagebuchseite
+	Game.add_diary_text(4501)
+	(deb.find_child("Diary", true, false) as Button).pressed.emit()
+	await frames(3)
+	var dl := deb.find_child("DiaryLeft", true, false) as Label
+	var dr := deb.find_child("DiaryRight", true, false) as Label
+	var dtxt: String = (dl.text if dl else "") + "\n" + (dr.text if dr else "")
+	check(dtxt.contains(SAS.text(4501, "?")), "TAGEBUCH zeigt den Eintrag (ADDDIARYTEXT)", dtxt.substr(0, 80))
+	(deb.find_child("DiaryBack", true, false) as Button).pressed.emit()
+	await frames(3)
+	var sc := deb.find_child("SaveContinue", true, false) as Button
+	check(sc != null and not sc.disabled, "SPEICHERN UND FORTSETZEN aktiv (Erfolg)")
+	if sc:
+		sc.pressed.emit()
+	await frames(2)
+	var yes := deb.find_child("Dialog0", true, false) as Button
+	check(yes != null, "Rückfrage „%s“" % SAS.text(9523, "Wollen Sie das Spiel speichern?"))
+	if yes:
+		yes.pressed.emit()
+	for i in 200:
+		await get_tree().process_frame
+		if get_tree().current_scene and get_tree().current_scene.name != "Debrief" and get_tree().current_scene.has_method("show_menu"):
+			break
+	await frames(5)
+	check(Game.is_unlocked("a2_erkundung"), "Teil 1B freigeschaltet")
+	check(Game.is_fallen(second_pid), "Gefallener im Kader vermerkt")
+	check(Game.orig_game_values().get(30) == 99, "SaveGameValue-Werte für den nächsten Teil gesichert")
+	check(Game.diary_entries().has(4501), "Tagebuch in den Kampagnenstand übernommen")
+	var menu2 := get_tree().current_scene
+	check(menu2 != null and menu2.get("current_menu") == "campaign" and menu2.get("selected_mission") == "a2_erkundung",
+		"Danach Missionsliste mit dem nächsten Teil gewählt", str(menu2.get("selected_mission")) if menu2 else "-")
 	# Teil 1C: vier Kommandos laut Original -> Ersatzmann rückt nach; Skriptwerte kommen an
 	Game.start_mission("a3_rendezvous")
 	var m3 := await wait_mission() as OrigMission

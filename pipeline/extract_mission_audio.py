@@ -5,20 +5,61 @@ Voraussetzung: orig_cache/<mission>/extra.json (fmt_mission_extra.py) und script
 
   - alle Dateien der Klangquellen (extra.json "sounds")      -> orig_cache/sounds/<datei>
   - Musik: Einträge der Musiktabelle, die die Skripte per PlayMusic/PlayCutsceneMusic
-    nutzen, plus die Normal-/Action-Musik der Mission (Tabellenname "<Gebiet><n> Normal/Action")
+    nutzen, plus die Normal-/Action-Musik der Mission (scene2.bin-Kopf 0xB840/0xB880)
                                                              -> orig_cache/music/<datei>
+  - Fahrzeugklänge je Fahrzeugakteur (Dateinamen im actors.bin-Parameterblock) -> audio.json "vehicles"
 Die Daten bleiben lokal (orig_cache ist gitignored und vom Export ausgeschlossen).
 """
 import glob
 import json
 import os
 import re
+import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # -I: Skriptordner nicht im Pfad
 from convert_mission import read_file, CACHE
 
 ARCHIVES = ["Sounds.dta", "others.dta"]
+
+
+def _chunks(b, off, end):
+    p = off
+    while p + 6 <= end:
+        cid, size = struct.unpack_from("<HI", b, p)
+        if size < 6 or p + size > end:
+            return
+        yield cid, p + 6, p + size
+        p += size
+
+
+def vehicle_sounds(mdir):
+    """Fahrzeugklaenge je Akteur (actors.bin Typ 4): Dateinamen im Parameterblock (z. B. kubel_on/_of/_0.._4/_R,
+    tr_gear*, carcrx*). Nur Dateien, die es in Sounds.dta gibt; Reihenfolge wie im Block."""
+    sj = os.path.join(mdir, "scene.json")
+    if not os.path.exists(sj):
+        return {}
+    from convert_mission import archive
+    have = set()
+    for a in ("Sounds.dta", "patch.dta"):
+        have.update(k.split("\\")[-1] for k in archive(a).index if k.startswith("sounds\\"))
+    out = {}
+    for a in json.load(open(sj, encoding="utf-8")).get("actors", []):
+        if a.get("actor_type") != 4:
+            continue
+        b = bytes(a.get("params", []))
+        files = []
+        for m in re.finditer(rb"[A-Za-z0-9_]+\.wav", b):
+            f = m.group().decode("latin-1").lower()
+            # Namen stehen in festen Feldern; davor kann ein Laengen-/Restbyte stehen ("2kubel_x.wav")
+            for k in range(3):
+                if f[k:] in have:
+                    if f[k:] not in files:
+                        files.append(f[k:])
+                    break
+        if files:
+            out[a["name"]] = {"model": a.get("model", ""), "files": files}
+    return out
 
 
 def find_audio(name, kind):
@@ -60,28 +101,25 @@ def main(mission):
     for p in glob.glob(os.path.join(mdir, "scripts", "**", "*.scr"), recursive=True):
         for m in re.finditer(r"(?i)Play(?:Cutscene)?Music\(\s*(\d+)", open(p, encoding="latin-1").read()):
             used.add(int(m.group(1)))
-    # Normal-/Action-Musik der Mission: Gebiet laut Missionsordner -> Name in der Musiktabelle
-    # (IngameSounds.def schreibt z. B. "Arctic1 Normal", "Arctic 2  Normal", "Afrika 6 Normal", "Afrika Action").
-    # Bevorzugt Gebiet+Nummer, sonst das Gebiet allein.
-    regions = {"ARCTIC": "arctic", "AFRICA": "afrika", "NORWAY": "norway", "BURMA": "burma", "ALPS": "alps",
-               "NORMANDY": "normandy", "CZECH": "czech"}
-    m_area = re.match(r"([A-Za-z]+?)(\d*)$", mission)
-    key = regions.get(m_area.group(1).upper(), "") if m_area else ""
-    num = m_area.group(2) if m_area else ""
+    # Normal-/Action-Musik der Mission [B]: scene2.bin-Kopf, Chunk 0xB840 = Index "normal", 0xB880 = Index "action"
+    # (hd2.exe Missionslader 0x6CD603: 0xB840 -> Mission+0xC8, 0xB880 -> Mission+0xCC; Umschaltung 0x69E970).
     table = extra.get("music_table", [])
     mission_music = {}
-    for exact in (True, False):
+    music_index = {"normal": -1, "action": -1}
+    s2 = read_file("missions/%s/scene2.bin" % mission.upper(), ["Missions.dta"])
+    if s2:
+        for t, s, e in _chunks(s2, 0, len(s2)):
+            if t == 0x4C53:
+                for t2, s2_, e2 in _chunks(s2, s, e):
+                    if t2 == 0x4000:
+                        break
+                    if t2 in (0xB840, 0xB880) and e2 - s2_ >= 4:
+                        music_index["normal" if t2 == 0xB840 else "action"] = struct.unpack_from("<i", s2, s2_)[0]
+    for kind, idx in music_index.items():
         for e in table:
-            nm = e["name"].lower().replace(" ", "")
-            if not key or "cut" in nm:
-                continue
-            ok = nm.startswith(key + num) if exact and num else (nm.startswith(key) and not nm[len(key):len(key) + 1].isdigit())
-            if not ok:
-                continue
-            for kind in ("action", "normal"):
-                if kind in nm and kind not in mission_music:
-                    mission_music[kind] = e["files"][0].lower()
-                    used.add(e["index"])
+            if e["index"] == idx and e["files"]:
+                mission_music[kind] = e["files"][0].lower()
+                used.add(idx)
     mus_ok = []
     for e in table:
         if e["index"] not in used:
@@ -97,9 +135,12 @@ def main(mission):
                 continue
             open(dst, "wb").write(d)
             mus_ok.append(f)
-    json.dump({"music_indices": sorted(used), "mission_music": mission_music},
+    vehicles = vehicle_sounds(mdir)
+    json.dump({"music_indices": sorted(used), "mission_music": mission_music, "music_index": music_index,
+               "vehicles": vehicles},
               open(os.path.join(mdir, "audio.json"), "w"), indent=1)
-    print("Klänge: %d, Musik: %s, Missionsmusik: %s, fehlend: %s" % (ok, mus_ok, mission_music, missing[:10]))
+    print("Klänge: %d, Musik: %s, Missionsmusik: %s (Index %s), Fahrzeuge: %d, fehlend: %s" % (
+        ok, mus_ok, mission_music, music_index, len(vehicles), missing[:10]))
 
 
 if __name__ == "__main__":

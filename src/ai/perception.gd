@@ -49,12 +49,25 @@ func enemy_team() -> int:
 	return Soldier.TEAM_AXIS if soldier.team == Soldier.TEAM_ALLIED else Soldier.TEAM_ALLIED
 
 
+## Mögliche Gegner: Einzelspieler die andere Seite; Mehrspieler-KI (Deathmatch: jeder für sich) alle
+## Soldaten anderer Teams außer Neutralen. Erkannt werden sie trotzdem nur über Sicht/Gehör (kein „Aimbot“).
+func enemy_candidates() -> Array:
+	if Net.is_online:
+		var out: Array = []
+		for n in get_tree().get_nodes_in_group("soldiers"):
+			var t := n as Soldier
+			if t and t != soldier and t.team != soldier.team and t.team != Soldier.TEAM_NEUTRAL:
+				out.append(t)
+		return out
+	return get_tree().get_nodes_in_group("team_%d" % enemy_team())
+
+
 func _update_sight(dt: float) -> void:
 	var eye := soldier.eye_position()
 	var fwd := soldier.aim_direction()
 	var space := soldier.get_world_3d().direct_space_state
 	var half_fov := deg_to_rad(fov_deg * 0.5)
-	for node in get_tree().get_nodes_in_group("team_%d" % enemy_team()):
+	for node in enemy_candidates():
 		var t := node as Soldier
 		if t == null or not t.alive:
 			continue
@@ -126,7 +139,11 @@ func _line_of_sight(space: PhysicsDirectSpaceState3D, from: Vector3, to: Vector3
 	var q := PhysicsRayQueryParameters3D.create(from, to, 1)
 	q.exclude = [soldier.get_rid()]
 	var hit := space.intersect_ray(q)
-	return hit.is_empty()
+	if not hit.is_empty():
+		return false
+	# Optionale Kartenvegetation verdeckt Sicht, ohne Ballistik auf Welt-Layer 1 zu blockieren.
+	var mission := Game.current_mission()
+	return not (mission != null and mission.has_method("foliage_blocks_sight") and mission.foliage_blocks_sight(from,to))
 
 
 func _on_noise(pos: Vector3, radius: float, source: Node, team: int, kind: StringName) -> void:
