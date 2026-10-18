@@ -29,6 +29,9 @@ func _configure_environment(e: Environment, s: DirectionalLight3D) -> void:
 
 func _build_world() -> void:
 	light_factor = 1.0
+	# Übungseinsatz (eigener Entwurf): Original-Wüstenwind (AFRICA4 a_a3wi), Untergrund Sand (Zeile 41 „Písek“)
+	ambience_sound = "a_a3wi.wav"
+	ground_material = 41
 	enemy_uniform = Color(0.62, 0.55, 0.38)        # Khaki (Afrikakorps)
 	alarm_bell_pos = Vector3(-2, 4.0, -12)
 	lb.color_ground = Color(0.84, 0.72, 0.5)

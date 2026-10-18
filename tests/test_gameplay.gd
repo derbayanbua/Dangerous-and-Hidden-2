@@ -41,11 +41,13 @@ func tap(action: String) -> void:
 	ev.action = action
 	ev.pressed = true
 	Input.parse_input_event(ev)
+	Input.flush_buffered_events()     # sofort verteilen (unter Last laufen mehrere Physikschritte je Frame)
 	await frames(2)
 	var up := InputEventAction.new()
 	up.action = action
 	up.pressed = false
 	Input.parse_input_event(up)
+	Input.flush_buffered_events()
 	await frames(2)
 
 

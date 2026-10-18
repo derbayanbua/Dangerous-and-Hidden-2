@@ -52,17 +52,149 @@ func build() -> bool:
 		return false
 	root.add_child(scene)
 	_index(scene)
-	_add_collision(scene)
+	var klz := _load_collision_info()
+	if not klz:
+		_add_collision(scene)
 	var f := FileAccess.open(mission_dir + "/scene.json", FileAccess.READ)
 	if f:
 		var data = JSON.parse_string(f.get_as_text())
 		objects = data.get("objects", [])
 		actors = data.get("actors", [])
-		_place_objects()
+		_place_objects(not klz)
+	if klz:
+		_build_orig_collision()
 	return true
 
 
+# --- Kollision wie im Original (tree.klz + scene2.bin, tools/fmt_klz.py → collision.json) -------------------
+## Original [B, docs/re_notes_collision.md]: Begehbar ist nur, was tree.klz als Flächenkollision verlinkt. Die
+## Leveldesigner ersetzen Treppen, Podeste usw. durch unsichtbare Ersatzkörper (scene2.bin Chunk 0x4033 = versteckt,
+## z. B. Rampen x_schody*/xx_schod_col_*, VOLUM_*); die sichtbaren Stufen selbst haben keine Flächenkollision.
+## Nachbau: versteckte Frames unsichtbar (Kollision nur mit Klz-Link), sichtbare Frames ohne eigene Klz-Flächen,
+## die vollständig in einem versteckten begehbaren Ersatzkörper liegen, ohne Kollision; alles Übrige wie bisher
+## (Trimesh des sichtbaren Meshes als Näherung der Klz-Flächen/-Kisten).
+var _klz_faces := {}      ## Name bzw. „Objekt.Frame“ -> true (Bit 0: Flächen)
+var _klz_vols := {}       ## nur Kistenvolumen (Bit 1)
+var _hidden := {}         ## scene2.bin 0x4033
+var _klz_boxes := {}      ## Kisten (XTOBB/AABB) – solche Frames behalten ihre Kollision
+
+
+func _load_collision_info() -> bool:
+	var f := FileAccess.open(mission_dir + "/collision.json", FileAccess.READ)
+	if f == null:
+		return false
+	var d = JSON.parse_string(f.get_as_text())
+	if typeof(d) != TYPE_DICTIONARY:
+		return false
+	for pair in [["faces", _klz_faces], ["volumes", _klz_vols], ["hidden", _hidden], ["boxes", _klz_boxes]]:
+		for n in d.get(pair[0], []):
+			pair[1][_klz_key(String(n))] = true
+	return true
+
+
+## Knotennamen sind in Godot bereinigt (validate_node_name); „Objekt.Frame“ teilweise bereinigen
+static func _klz_key(n: String) -> String:
+	var i := n.find(".")
+	if i > 0:
+		return n.substr(0, i).validate_node_name() + "." + n.substr(i + 1).validate_node_name()
+	return n.validate_node_name()
+
+
+func _build_orig_collision() -> void:
+	var meshes: Array = []          # [MeshInstance3D, versteckt, Flächen, Volumen, Kiste]
+	_klz_walk(root, "", false, meshes)
+	var proxies: Array[AABB] = []
+	var proxy_names: Array[String] = []
+	var proxy_strict: Array[bool] = []     ## sichtbare Rampe: nur Stufenkörper (≥ 20 % ihres Volumens) ersetzen
+	for e in meshes:
+		var mi: MeshInstance3D = e[0]
+		if not e[2] or mi.mesh == null:
+			continue
+		var sh := _slope_shares(mi)
+		# versteckter Ersatzkörper – oder eine sichtbar gebliebene Designer-Rampe (ARCTIC3 x_schody02: wenige
+		# Dreiecke, überwiegend 10–50° geneigt)
+		var wb := mi.global_transform * mi.get_aabb()
+		var ramp: bool = not e[1] and mi.mesh.get_faces().size() <= 48 and sh.y >= 0.5 and wb.size.y >= 0.4 \
+			and wb.size.y <= 6.0 and maxf(wb.size.x, wb.size.z) <= 15.0      # keine Dachflächen/Hänge
+		if (e[1] and sh.x >= 0.2) or ramp:
+			proxies.append((mi.global_transform * mi.get_aabb()).grow(0.3))
+			proxy_names.append(String(mi.name))
+			proxy_strict.append(ramp and not e[1])
+			mi.set_meta("klz_proxy", true)
+	stats["proxies"] = proxies.size()
+	stats["proxied"] = 0
+	var dbg := Game.cli.has("klz_debug")
+	for e in meshes:
+		var mi: MeshInstance3D = e[0]
+		var collide: bool = e[2] or e[3]            # versteckt: nur mit Klz-Link
+		if not e[1] and not e[2] and not e[4]:      # sichtbar, ohne Klz-Flächen und ohne Kiste (nur OBB/kein Link)
+			collide = true
+			var box := mi.global_transform * mi.get_aabb()
+			for k in proxies.size():
+				if proxies[k].encloses(box) and (not proxy_strict[k] or _vol(box) >= 0.2 * _vol(proxies[k].grow(-0.3))):
+					collide = false                 # Original: nur der versteckte Ersatzkörper kollidiert
+					stats.proxied += 1
+					if dbg:
+						print("KLZ: %s (%s) -> Ersatz %s" % [mi.name, mi.get_parent().name, proxy_names[k]])
+					break
+		# Klz-Ebenen wirken beidseitig: Ersatzkörper/Treppenuntersichten (ARCTIC2 T2_strop_03) zeigen teils nach unten
+		_mesh_collider(mi, collide, e[1] or mi.has_meta("klz_proxy"))
+
+
+func _klz_walk(n: Node, obj: String, hidden: bool, out: Array) -> void:
+	var key := ""
+	if n.has_meta("klz_obj"):
+		obj = String(n.get_meta("klz_obj"))       # Objektinstanz aus scene2.bin: Links „Objekt.Frame“
+		key = obj
+	elif n != root:
+		key = String(n.name) if obj == "" else obj + "." + String(n.name)
+	# nur Geometrie verstecken (Frames, Modellobjekte); Dummies/Lichter/Klänge behalten ihre Sichtbarkeit
+	if key != "" and _hidden.has(key) and n is Node3D and int(n.get_meta("orig_type", OBJ_MODEL)) == OBJ_MODEL:
+		hidden = true
+		(n as Node3D).visible = false
+		stats["hidden"] = int(stats.get("hidden", 0)) + 1
+	if n is MeshInstance3D:
+		out.append([n, hidden, _klz_faces.has(key), _klz_vols.has(key), _klz_boxes.has(key)])
+	for c in n.get_children():
+		if not (c is CollisionObject3D):
+			_klz_walk(c, obj, hidden, out)
+
+
+static func _vol(b: AABB) -> float:
+	return maxf(b.size.x, 0.1) * maxf(b.size.y, 0.1) * maxf(b.size.z, 0.1)
+
+
+## Flächenanteile: x = begehbar (|n.y| > 0,5; Rampen/Podeste ja, reine Wände/Kartenrand nein),
+## y = Rampe (10–50° geneigt)
+static func _slope_shares(mi: MeshInstance3D) -> Vector2:
+	var f := mi.mesh.get_faces()
+	var b := mi.global_transform.basis
+	var total := 0.0
+	var walk := 0.0
+	var ramp := 0.0
+	for i in range(0, f.size() - 2, 3):
+		var n := (b * (f[i + 1] - f[i])).cross(b * (f[i + 2] - f[i]))
+		var a := n.length()
+		total += a
+		if a > 0.0 and absf(n.y) > 0.5 * a:
+			walk += a
+		if a > 0.0 and absf(n.y) > 0.643 * a and absf(n.y) < 0.985 * a:
+			ramp += a
+	return Vector2(walk, ramp) / total if total > 0.0 else Vector2.ZERO
+
+
 func _load_glb(path: String) -> Node3D:
+	# Vorlage aus dem Hintergrundladen/Zwischenspeicher (MissionLoader): Kopie statt erneutem glTF-Parsen
+	var pre := MissionLoader.take(path)
+	if pre:
+		return pre
+	var n := parse_glb(path)
+	MissionLoader.remember(path, n)
+	return n
+
+
+## glTF laden (auch aus Arbeits-Threads des MissionLoader; Knoten außerhalb des Baums)
+static func parse_glb(path: String) -> Node3D:
 	if not FileAccess.file_exists(path):
 		return null
 	var doc := GLTFDocument.new()
@@ -78,8 +210,9 @@ func _load_glb(path: String) -> Node3D:
 ## Texturqualität (Original-Setup „Text.-Qual.“): Bilddaten der referenzierten Original-PNG gegen die
 ## KI-Fassung aus textures_hd/textures_4k tauschen (gleicher Dateiname); glTF-Dateien bleiben unverändert.
 static var _hq_cache := {}
+static var _hq_mutex := Mutex.new()      ## Hintergrundladen in mehreren Threads
 
-func _swap_textures(state: GLTFState) -> void:
+static func _swap_textures(state: GLTFState) -> void:
 	var sfx: Array = Settings.texture_suffixes()
 	if sfx == [""]:
 		return
@@ -92,7 +225,9 @@ func _swap_textures(state: GLTFState) -> void:
 			continue
 		var file := uri.get_file()
 		var key := "%s|%s" % [sfx[0], file]
+		_hq_mutex.lock()
 		var hq: Image = _hq_cache.get(key)
+		_hq_mutex.unlock()
 		if hq == null:
 			for s in sfx:
 				if s == "":
@@ -102,7 +237,9 @@ func _swap_textures(state: GLTFState) -> void:
 					hq = Image.load_from_file(p)
 					if hq:
 						hq.generate_mipmaps()
+						_hq_mutex.lock()
 						_hq_cache[key] = hq
+						_hq_mutex.unlock()
 					break
 		if hq:
 			(imgs[i] as ImageTexture).set_image(hq)
@@ -121,24 +258,39 @@ func _index(n: Node) -> void:
 ## (Alpha-Materialien) bekommt keine Kollision.
 func _add_collision(n: Node) -> void:
 	if n is MeshInstance3D:
-		var mi := n as MeshInstance3D
-		var foliage := mi.mesh != null and _is_foliage(mi)
-		if foliage and mi.get_aabb().size.y < 1.5:
-			grass_nodes.append(mi)
-		if mi.mesh and not foliage and _is_water(mi):
-			# Wasserfläche (QuadPatch/„more“, Material VODA*/MORE*): keine Kollision, als Wasserbereich merken
-			var box: AABB = mi.global_transform * mi.get_aabb() if mi.is_inside_tree() else mi.get_aabb()
-			water.append(box)
-		elif mi.mesh and not foliage:
-			var body := StaticBody3D.new()
-			body.collision_layer = 1
-			var cs := CollisionShape3D.new()
-			cs.shape = mi.mesh.create_trimesh_shape()
-			body.add_child(cs)
-			mi.add_child(body)
-			stats.colliders += 1
+		_mesh_collider(n as MeshInstance3D, true)
 	for c in n.get_children():
 		_add_collision(c)
+
+
+## Gras/Wasser erfassen und (collide) Trimesh-Kollision anlegen
+func _mesh_collider(mi: MeshInstance3D, collide: bool, two_sided := false) -> void:
+	var foliage := mi.mesh != null and _is_foliage(mi)
+	if foliage and mi.get_aabb().size.y < 1.5:
+		grass_nodes.append(mi)
+	if mi.mesh and not foliage and _is_water(mi):
+		# Wasserfläche (QuadPatch/„more“, Material VODA*/MORE*): keine Kollision, als Wasserbereich merken
+		var box: AABB = mi.global_transform * mi.get_aabb() if mi.is_inside_tree() else mi.get_aabb()
+		water.append(box)
+	elif collide and mi.mesh and not foliage and _has_area(mi.mesh):    # entartete Meshes (Linien, Flächen ohne Inhalt) ohne Kollision
+		var body := StaticBody3D.new()
+		body.collision_layer = 1
+		var cs := CollisionShape3D.new()
+		cs.shape = mi.mesh.create_trimesh_shape()
+		if two_sided:
+			# Klz-Ebenen wirken beidseitig; versteckte Ersatzkörper sind teils nach unten orientiert (ARCTIC2 T1_strop_19)
+			(cs.shape as ConcavePolygonShape3D).backface_collision = true
+		body.add_child(cs)
+		mi.add_child(body)
+		stats.colliders += 1
+
+
+static func _has_area(mesh: Mesh) -> bool:
+	var f := mesh.get_faces()
+	for i in range(0, f.size() - 2, 3):
+		if (f[i + 1] - f[i]).cross(f[i + 2] - f[i]).length_squared() > 1e-10:
+			return true
+	return false
 
 
 ## Wasserflächen (Welt-AABB, Oberkante = Wasserspiegel): Schwimmen/Tauchen (Soldier, Mission.water_level_at)
@@ -199,7 +351,7 @@ func _model(name: String) -> Node3D:
 	return src.duplicate() as Node3D if src else null
 
 
-func _place_objects() -> void:
+func _place_objects(collide := true) -> void:
 	# erst alle Objekte erzeugen, dann Eltern zuordnen (Reihenfolge in der Datei beliebig)
 	var created: Array = []
 	for o in objects:
@@ -220,6 +372,7 @@ func _place_objects() -> void:
 		n.transform = Transform3D(Basis(Quaternion(r[0], r[1], r[2], r[3]).normalized()).scaled(Vector3(s[0], s[1], s[2])),
 			Vector3(p[0], p[1], p[2]))
 		n.set_meta("orig_type", t)
+		n.set_meta("klz_obj", String(n.name))
 		created.append([n, o])
 		if not nodes.has(String(o.get("name", ""))):
 			nodes[String(o.get("name", ""))] = n
@@ -233,7 +386,7 @@ func _place_objects() -> void:
 			root.add_child(n)
 		else:
 			parent.add_child(n)
-		if int(pair[1].get("type", -1)) == OBJ_MODEL:
+		if collide and int(pair[1].get("type", -1)) == OBJ_MODEL:
 			_add_collision(n)
 
 

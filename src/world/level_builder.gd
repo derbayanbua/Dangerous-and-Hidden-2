@@ -249,7 +249,7 @@ func ground(x: float, z: float, y_off := 0.0) -> Vector3:
 ## "n","s","e","w" (Versatz entlang der Wand, 0 = Mitte). Erzeugt Türen.
 ## Gibt das Wurzel-Node zurück (Kindknoten in lokalen Koordinaten).
 func building(center: Vector3, w: float, d: float, h: float, wall_mat: String, roof_mat: String,
-		doors: Array, windows := true, yaw := 0.0, open_doorways: Array = [], flat_roof := false) -> Node3D:
+		doors: Array, windows := true, yaw := 0.0, open_doorways: Array = [], flat_roof := false, minimum_windows := 0, window_clearance := 1.6) -> Node3D:
 	var root := Node3D.new()
 	root.name = "Building"
 	static_root.add_child(root)
@@ -276,12 +276,12 @@ func building(center: Vector3, w: float, d: float, h: float, wall_mat: String, r
 				gaps.append([float(od[1]), float(od[2]), 0.0, minf(h - 0.3, 3.2), false])
 		if windows:
 			var length: float = info[1]
-			var count := int(length / 4.0)
+			var count := maxi(int(length / 4.0), minimum_windows)
 			for k in count:
 				var off := -length * 0.5 + (k + 0.5) * length / count
 				var clash := false
 				for gp in gaps:
-					if absf(gp[0] - off) < 1.6:
+					if absf(gp[0] - off) < window_clearance:
 						clash = true
 				if not clash:
 					gaps.append([off, 1.0, 1.0, 1.9, false])

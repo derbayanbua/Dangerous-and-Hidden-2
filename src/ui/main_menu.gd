@@ -75,13 +75,56 @@ func _ready() -> void:
 	texts = t if typeof(t) == TYPE_DICTIONARY else {}
 	_setup_audio()
 	_fit.call_deferred()
-	show_menu("main_menu")
+	var req: Dictionary = Game.menu_request
+	Game.menu_request = {}
+	if req.has("menu"):
+		if req.has("mode"):
+			Game.set_game_mode(int(req["mode"]), bool(req.get("single", false)))
+		show_menu(String(req["menu"]))
+		var sel := String(req.get("select", ""))
+		if sel != "" and current_menu in ["campaign", "single_mission"]:
+			_select_mission(sel)
+		var vids: Array = req.get("videos", [])
+		if not vids.is_empty():
+			_play_videos(vids, Callable())
+	else:
+		show_menu("main_menu")
+		# Startsequenz wie im Original (0x6C2551): Logo1–3, dann Intro – einmal je Programmstart
+		if not _startup_done and not Game.cli.has("autoplay"):
+			_startup_done = true
+			_play_videos(["Logo1", "Logo2", "Logo3", "Intro"], Callable())
+
+
+static var _startup_done := false
+
+
+## Filme abspielen (Menümusik pausiert), danach cb
+func _play_videos(names: Array, cb: Callable) -> void:
+	if not MoviePlayerScript.any_available(names):
+		if cb.is_valid():
+			cb.call()
+		return
+	_music.stop()
+	MoviePlayerScript.play_list(self, names, _after_videos.bind(cb))
+
+
+func _after_videos(cb: Callable) -> void:
+	if not _music.playing:
+		_play_menu_music()
+	if cb.is_valid():
+		cb.call()
+
+
+const MoviePlayerScript := preload("res://src/ui/movie_player.gd")
 
 
 func _fit() -> void:
 	var k := minf(size.x / REF.x, size.y / REF.y)
 	stage.scale = Vector2(k, k)
 	stage.position = (size - REF * k) * 0.5
+	if is_instance_valid(_credits_view):
+		_credits_view.scale = stage.scale
+		_credits_view.position = stage.position
 
 
 func text(id: int) -> String:
@@ -119,11 +162,12 @@ var lan_menu: LanMenu
 
 
 ## Mehrspieler im LAN (Godot-ENet statt DirectPlay)
-func open_lan() -> void:
+func open_lan(internet := false) -> void:
 	Net.local_name = Game.profile_name if Game.has_profile() else "Spieler"
 	stage.visible = false
 	lan_menu = LanMenu.new()
 	lan_menu.name = "LanMenu"
+	lan_menu.internet = internet
 	add_child(lan_menu)
 	lan_menu.back_requested.connect(func():
 		lan_menu.queue_free()
@@ -200,7 +244,8 @@ func _clear() -> void:
 	_side_image = null
 
 
-func _background(menu: String) -> void:
+## title: abweichender Titel statt des Modelltitels (Missionsliste je Spielart)
+func _background(menu: String, title := "") -> void:
 	var file: String = spec.get("menus", {}).get(menu, {}).get("background", "")
 	var tx := _tex(file) if file != "" else null
 	_wide_bg.texture = tx
@@ -218,10 +263,18 @@ func _background(menu: String) -> void:
 		stage.add_child(cr)
 	# Titel (Frame text_screen) und Versionszeile (text_h&dversion)
 	var title_id := int(spec.get("menus", {}).get(menu, {}).get("title_text_id", 0))
-	if title_id:
+	if title != "":
+		_label(Rect2(584.7, 44.0, 354.5, 43.0), title, 24, TEXT_COLOR, HORIZONTAL_ALIGNMENT_RIGHT).name = "ListTitle"
+	elif title_id:
 		_label(Rect2(584.7, 44.0, 354.5, 43.0), text(title_id), 24, TEXT_COLOR, HORIZONTAL_ALIGNMENT_RIGHT)
-	_label(Rect2(71.2, 61.6, 414.1, 23.1), "%s · v%s" % [GAME_TITLE, ProjectSettings.get_setting("application/config/version")],
-		14, TEXT_COLOR, HORIZONTAL_ALIGNMENT_LEFT)
+	var ver := "v%s" % ProjectSettings.get_setting("application/config/version")
+	if menu == "main_menu":
+		# Hauptmenü: die Kordel der Erkennungsmarke (Zettelbild) verdeckt die Kopfzeile ab x ≈ 340 → Titel allein,
+		# Version unten rechts auf der rechten Seite (unter ENDE, frei)
+		_label(Rect2(71.2, 61.6, 268.0, 23.1), GAME_TITLE, 14, TEXT_COLOR, HORIZONTAL_ALIGNMENT_LEFT)
+		_label(Rect2(525.4, 710.0, 414.0, 20.0), ver, 13, TEXT_COLOR, HORIZONTAL_ALIGNMENT_RIGHT).name = "Version"
+	else:
+		_label(Rect2(71.2, 61.6, 414.1, 23.1), "%s · %s" % [GAME_TITLE, ver], 14, TEXT_COLOR, HORIZONTAL_ALIGNMENT_LEFT)
 	if menu == "main_menu":
 		# neuer Titel an der Stelle der entfernten Handschrift (leicht schräg, Tintenfarbe)
 		var t := _label(Rect2(88.0, 372.0, 330.0, 40.0), "Dangerous and Hidden 2", 26, Color(0.08, 0.09, 0.16))
@@ -341,6 +394,8 @@ func show_menu(menu: String) -> void:
 			_options_menu()
 		"change_profile":
 			_profile_menu()
+		"cinematics":
+			_cinematics()
 
 
 func _main_menu() -> void:
@@ -359,15 +414,15 @@ func _main_menu() -> void:
 		_label(_rect_of(it, Rect2(541.3, y, 394.7, 18.0)), pair[1], 15 if bold else 13, TEXT_COLOR)
 		y += 30.0
 	var prof := Game.has_profile()
-	var has_save := prof and Game.has_save("quick")
+	var has_save := prof and Game.last_save() != ""
 	# Original (Show-Handler 0x627520): ohne Profil heißt Knopf 2 "PROFIL ERSTELLEN", die übrigen sind gesperrt
 	var entries := [
-		["bresume game", 2105, func(): Game.load_game("quick"), has_save],
+		["bresume game", 2105, _resume_last, has_save],
 		["bchange profile", 2106 if prof else 2117, _open_profiles, true],
 		["bsingleplayer", 2107, func(): show_menu("singleplayer"), prof],
 		["bmultiplayerlan", 2115, open_lan, prof],
-		["bmultiplayernet", 2116, func(): pass, false],
-		["bcinematics", 2109, func(): pass, false],
+		["bmultiplayernet", 2116, func(): open_lan(true), prof],    # Internet: UPnP + IP/Favoriten statt GameSpy
+		["bcinematics", 2109, func(): show_menu("cinematics"), prof],
 		["boptions", 2110, func(): show_menu("options"), prof],
 		["bcredits", 2111, _show_credits, prof],
 		["bexit", 2112, func(): get_tree().quit(), true],
@@ -377,12 +432,24 @@ func _main_menu() -> void:
 		_button("main_menu", e[0], text(e[1]), _std_rect(i), e[2], e[3])
 
 
+## WEITER SPIELEN: letzter Spielstand des Profils (Original LASTSAVE, profile.sav 0x1EEA)
+func _resume_last() -> void:
+	var s := Game.last_save()
+	if s != "":
+		Game.load_game(s)
+
+
+## Original LASTSAVETEXT „Modus$Missionstitel$Datum“
 func _last_save_text() -> String:
-	if not Game.has_save("quick"):
+	var s := Game.last_save()
+	if s == "":
 		return text(2021)
-	var path := ProjectSettings.globalize_path(Game.save_path("quick"))
+	var lt := String(Game.profile.get("last_save_text", ""))
+	if lt != "" and String(Game.profile.get("last_save", "")) == s:
+		return lt.replace("$", " – ")
+	var path := ProjectSettings.globalize_path(Game.save_path(s))
 	var mt := FileAccess.get_modified_time(path)
-	return Time.get_datetime_string_from_unix_time(mt, true) if mt > 0 else "Schnellspeicherstand"
+	return Time.get_datetime_string_from_unix_time(mt, true) if mt > 0 else s
 
 
 func _singleplayer() -> void:
@@ -399,21 +466,35 @@ func _singleplayer() -> void:
 	_desc_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	_label(_rect_of(_item("singleplayer", "text_HD2original"), Rect2(525.4, 96.4, 414.0, 39.0)), text(20400) if texts.has("20400") else "H&D2 Original",
 		18, TEXT_COLOR)
-	var any_campaign := Game.alive_roster().size() > 0
-	# Unveränderte Original-Belegung (ohne Sabre-Squadron-Datadisk): 5 Spielarten + Zurück
-	_button("singleplayer", "bcampaign", text(2202), _std_rect(0, 139.0, 43.8), func(): show_menu("campaign"), any_campaign, 2211, "x_si_cmp.png")
-	_button("singleplayer", "blone wolf", text(2203), _std_rect(1, 139.0, 43.8), func(): pass, false, 2212, "x_si_lnw.png")
-	_button("singleplayer", "carnage", text(2204), _std_rect(2, 139.0, 43.8), func(): pass, false, 2213, "x_si_crn.png")
-	_button("singleplayer", "bsingle mission", text(2205), Rect2(BTN_X, 478.2, BTN_W, BTN_H), func(): show_menu("single_mission"), true, 2214, "x_si_sim.png")
-	_button("singleplayer", "bsingle mission- carnage", text(2206), Rect2(BTN_X, 522.0, BTN_W, BTN_H), func(): pass, false, 2215, "x_si_sic.png")
+	Game.end_single_mission()
+	# Unveränderte Original-Belegung (ohne Sabre-Squadron-Datadisk): 5 Spielarten + Zurück; Einzelgänger/Blutbad mit
+	# eigenem Kampagnenstand, Einzelmission(-Blutbad) aus den in der Kampagne freigeschalteten Teilen
+	_button("singleplayer", "bcampaign", text(2202), _std_rect(0, 139.0, 43.8), _open_mode.bind(Game.MODE_CAMPAIGN, false), true, 2211, "x_si_cmp.png")
+	_button("singleplayer", "blone wolf", text(2203), _std_rect(1, 139.0, 43.8), _open_mode.bind(Game.MODE_LONE_WOLF, false), true, 2212, "x_si_lnw.png")
+	_button("singleplayer", "carnage", text(2204), _std_rect(2, 139.0, 43.8), _open_mode.bind(Game.MODE_CARNAGE, false), true, 2213, "x_si_crn.png")
+	_button("singleplayer", "bsingle mission", text(2205), Rect2(BTN_X, 478.2, BTN_W, BTN_H), _open_mode.bind(Game.MODE_CAMPAIGN, true), true, 2214, "x_si_sim.png")
+	_button("singleplayer", "bsingle mission- carnage", text(2206), Rect2(BTN_X, 522.0, BTN_W, BTN_H), _open_mode.bind(Game.MODE_CARNAGE, true), true, 2215, "x_si_sic.png")
 	_button("singleplayer", "bback", text(2208), Rect2(BTN_X, 669.0, BTN_W, BTN_H), func(): show_menu("main_menu"))
 	_on_hover(2211, "x_si_cmp.png")
 
 
-## Kampagne (Originalteile) bzw. Einzelmission (freigeschaltete Teile + eigene Übungseinsätze).
+## Spielart wählen (Game.set_game_mode) und die Missionsliste dazu zeigen
+func _open_mode(m: int, single: bool) -> void:
+	Game.set_game_mode(m, single)
+	show_menu("single_mission" if single else "campaign")
+
+
+func _select_mission(id: String) -> void:
+	for c in stage.get_children():
+		if c is Button and c.has_meta("mission") and String(c.get_meta("mission")) == id and not (c as Button).disabled:
+			(c as Button).button_pressed = true
+			(c as Button).pressed.emit()
+
+
+## Kampagne (Originalteile; Modus Kampagne/Einzelgänger/Blutbad) bzw. Einzelmission (freigeschaltete Teile + eigene
+## Übungseinsätze; Einzelmission-Blutbad nur Originalteile).
 func _mission_list(kind: String) -> void:
-	_background("single_mission")
-	_label(Rect2(584.7, 44.0, 354.5, 43.0), text(2202) if kind == "campaign" else text(2251), 24, TEXT_COLOR, HORIZONTAL_ALIGNMENT_RIGHT)
+	_background("single_mission", Game.mode_title() if kind == "campaign" or Game.single_mission else text(2251))
 	_label(_rect_of(_item("single_mission", "text_list of profiles"), Rect2(70.1, 102.5, 414.0, 23.2)), text(2258), 15, TEXT_COLOR)
 	var desc := _label(_rect_of(_item("single_mission", "text00"), Rect2(525.4, 370.3, 414.0, 240.6)), "", 13, TEXT_COLOR)
 	desc.vertical_alignment = VERTICAL_ALIGNMENT_TOP
@@ -424,7 +505,8 @@ func _mission_list(kind: String) -> void:
 		for id in Game.CAMPAIGN_ORDER:
 			if Game.is_unlocked(id):
 				ids.append(id)
-		ids.append_array(Game.PRACTICE_MISSIONS)
+		if not Game.is_carnage():
+			ids.append_array(Game.PRACTICE_MISSIONS)
 	selected_mission = ""
 	_start_btn = null
 	var y := 132.0
@@ -438,11 +520,12 @@ func _mission_list(kind: String) -> void:
 		var label := "%d. %s%s" % [n, title, "  ✓" if done else ""] if unlocked else "%d. — gesperrt —" % n
 		var b := Button.new()
 		b.text = label
+		b.set_meta("mission", id)
 		b.position = Vector2(72, y)
 		b.size = Vector2(410, 30)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		b.toggle_mode = true
-		b.disabled = not unlocked or Game.alive_roster().is_empty()
+		b.disabled = not unlocked or Game.roster_exhausted()
 		b.add_theme_font_size_override("font_size", 15)
 		b.add_theme_color_override("font_color", TEXT_COLOR)
 		b.add_theme_color_override("font_pressed_color", TEXT_HOVER)
@@ -472,13 +555,69 @@ func _mission_list(kind: String) -> void:
 		_start_selected, true)
 	_start_btn.disabled = true
 	_button("single_mission", "bload lastsave", text(2105), Rect2(737.7, 629.6, 201.7, 35.8),
-		func(): Game.load_game("quick"), Game.has_save("quick"))
+		_resume_last, Game.last_save() != "")
 	_button("single_mission", "bexit", text(2256), Rect2(BTN_X, 669.0, BTN_W, BTN_H), func(): show_menu("singleplayer"))
-	if Game.alive_roster().is_empty():
+	if Game.roster_exhausted():
 		desc.text = "Der gesamte Kader ist gefallen. Kampagne beendet."
 		_button("single_mission", "bexit01", "NEUE KAMPAGNE", Rect2(BTN_X, 580.0, BTN_W, BTN_H), func():
 			Game.new_campaign()
 			show_menu("campaign"))
+
+
+## FILME (Original: Modell single mission 2, Titel 2109, Liste „Filme:“ 159, SPIELEN 2264, ZURÜCK 2256): gesehene
+## Filme der Profil-Filmliste (Texte 160–169) erneut abspielen; ungesehene sind gesperrt. Ohne konvertierte Datei
+## (orig_cache/movies, tools/convert_movies.ps1) bleibt SPIELEN gesperrt.
+var selected_film := ""
+
+
+func _cinematics() -> void:
+	_background("cinematics")
+	_label(_rect_of(_item("cinematics", "text_list of profiles"), Rect2(70.1, 102.5, 414.0, 23.2)), text(159), 15, TEXT_COLOR)
+	var info := _label(_rect_of(_item("cinematics", "video"), Rect2(525.4, 127.8, 414.0, 240.6)), "", 13, TEXT_COLOR)
+	info.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	info.name = "FilmInfo"
+	selected_film = ""
+	var play := _button("cinematics", "bexit01", text(2264) if texts.has("2264") else "SPIELEN", Rect2(525.4, 629.6, 414.0, 35.8),
+		func(): _play_videos([selected_film], Callable()), true)
+	play.disabled = true
+	play.name = "PlayFilm"
+	var y := 132.0
+	for f in Game.FILMS:
+		var film: String = f[1]
+		var seen := Game.film_seen(film)
+		var b := Button.new()
+		b.name = ("film_" + film).validate_node_name()
+		b.text = text(int(f[0])) if seen else "— %s —" % text(int(f[0]))
+		b.position = Vector2(72, y)
+		b.size = Vector2(410, 30)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.toggle_mode = true
+		b.disabled = not seen
+		b.add_theme_font_size_override("font_size", 15)
+		b.add_theme_color_override("font_color", TEXT_COLOR)
+		b.add_theme_color_override("font_pressed_color", TEXT_HOVER)
+		b.add_theme_color_override("font_hover_color", TEXT_HOVER)
+		b.add_theme_color_override("font_disabled_color", TEXT_DISABLED)
+		for st in ["normal", "hover", "pressed", "disabled", "focus"]:
+			var sb := StyleBoxFlat.new()
+			sb.bg_color = Color(0.55, 0.47, 0.33, 0.35) if st == "pressed" else Color(0, 0, 0, 0)
+			b.add_theme_stylebox_override(st, sb)
+		b.pressed.connect(_pick_film.bind(film, b, info, play))
+		stage.add_child(b)
+		y += 34.0
+	_button("cinematics", "bexit", text(2256), Rect2(BTN_X, 669.0, BTN_W, BTN_H), func(): show_menu("main_menu"))
+
+
+func _pick_film(film: String, b: Button, info: Label, play: Button) -> void:
+	_click.play()
+	selected_film = film
+	for c in stage.get_children():
+		if c is Button and c.toggle_mode and c != b:
+			(c as Button).button_pressed = false
+	var have := Game.movie_path(film) != ""
+	info.text = "%s\n\nGamemovie\\%s.bik%s" % [b.text, film, "" if have else
+		"\n\nNoch nicht konvertiert (tools\\convert_movies.ps1, benötigt ffmpeg)."]
+	play.disabled = not have
 
 
 func _start_selected() -> void:
@@ -512,7 +651,7 @@ func _options_menu() -> void:
 	_button("options", "bsound setup", text(2406), _std_rect(1, 199.5, 43.8), _opt_page.bind("sound"))
 	_button("options", "bcontrols", text(2407), _std_rect(2, 199.5, 43.8), _opt_page.bind("controls"))
 	_button("options", "bgame setup", text(2408), _std_rect(3, 199.5, 43.8), _opt_page.bind("game"))
-	_button("options", "bmultiplayer setup", text(2409), _std_rect(4, 199.5, 43.8), func(): pass, false)
+	_button("options", "bmultiplayer setup", text(2409), _std_rect(4, 199.5, 43.8), _opt_page.bind("network"))
 	_button("options", "bback", text(2410), Rect2(BTN_X, 669.0, BTN_W, BTN_H), func():
 		Settings.save_settings()
 		show_menu("main_menu"))
@@ -529,6 +668,23 @@ func _options_menu() -> void:
 			_page_display()
 		"game":
 			_page_game()
+		"network":
+			_page_network()
+
+
+## Original options.4ds „network settings“ (Builder 0x61cf80 ff.): Netzwerk-Einstellungen (T2473) mit
+## Verbindungsgeschwindigkeit (T2875–2879), Voice-Chat-Einstellungen (T2433): ermöglichen (T2431), Lautstärke (T2432)
+func _page_network() -> void:
+	_label(Rect2(67, 149, 383, 18), text(2473) if texts.has("2473") else "Netzwerk-Einstellungen:", 16, TEXT_COLOR)
+	var ct := clampi(Settings.connection_type, 0, 4)
+	var con := _cycle(Rect2(105, 190, 336, 33), text(Settings.CONNECTION_TEXTS[ct]), func():
+		Settings.connection_type = (Settings.connection_type + 1) % Settings.CONNECTION_TEXTS.size())
+	con.name = "bconnection"
+	_label(Rect2(67, 250, 383, 18), text(2433), 14, TEXT_COLOR)
+	_yesno(276, text(2431), Settings.voice_enabled, func(v: bool): Settings.voice_enabled = v)
+	_label(Rect2(67, 330, 337, 18), text(2432), 14, TEXT_COLOR)
+	_slider(352, Settings.voice_volume, 0.0, 1.0, func(v: float): Settings.voice_volume = v).name = "svoice"
+	_label(Rect2(67, 430, 412, 40), "Sprechen: %s halten (Push-to-talk)" % InputSetup.binding_text("voice_talk"), 13, TEXT_COLOR)
 
 
 func _opt_page(page: String) -> void:
@@ -704,6 +860,11 @@ func _page_sound() -> void:
 	_slider(201, Settings.master_volume, 0.0, 1.0, func(v: float): Settings.master_volume = v)
 	_label(Rect2(67, 267, 337, 18), text(2428), 14, TEXT_COLOR)
 	_slider(288, Settings.music_volume, 0.0, 1.0, func(v: float): Settings.music_volume = v)
+	# Ergänzung (nicht im Original): getrennte Regler für Effekte (Bus SFX) und Sprache (Bus Voice)
+	_label(Rect2(67, 355, 337, 18), "Effekt-Lautstärke:", 14, TEXT_COLOR)
+	_slider(376, Settings.sfx_volume, 0.0, 1.0, func(v: float): Settings.sfx_volume = v)
+	_label(Rect2(67, 443, 337, 18), "Sprach-Lautstärke:", 14, TEXT_COLOR)
+	_slider(464, Settings.speech_volume, 0.0, 1.0, func(v: float): Settings.speech_volume = v)
 
 
 func _page_controls() -> void:
@@ -724,10 +885,14 @@ func _page_controls() -> void:
 const KEY_CATEGORIES := [
 	[2452, ["move_forward", "move_back", "move_left", "move_right", "run", "stance_stand", "stance_crouch",
 		"stance_prone", "lean_left", "lean_right"]],
-	[2453, ["fire", "aim", "reload", "fire_mode", "weapon_1", "weapon_2", "weapon_3", "grenade", "weapon_next", "weapon_prev"]],
-	[2454, ["interact", "binoculars", "medkit", "camera_toggle", "objectives", "quicksave", "quickload", "pause"]],
-	[2455, ["order_move", "order_follow", "order_hold", "order_roe", "order_formation", "order_stance", "order_grenade"]],
-	[2456, ["tactical_map", "soldier_1", "soldier_2", "soldier_3", "soldier_4", "soldier_next"]],
+	[2453, ["fire", "aim", "reload", "fire_mode", "weapon_1", "weapon_2", "weapon_3", "grenade", "weapon_next", "weapon_prev",
+		"drop_item"]],
+	[2454, ["interact", "binoculars", "medkit", "camera_toggle", "objectives", "quicksave", "quickload", "pause",
+		"console", "chat_all", "chat_team", "voice_talk"]],
+	[2455, ["command_all", "command_1", "command_2", "command_3", "command_4", "command_5", "command_6",
+		"order_move", "order_follow", "order_hold", "order_roe", "order_formation"]],
+	[2456, ["tactical_map", "inventory", "soldier_1", "soldier_2", "soldier_3", "soldier_4", "soldier_next", "order_stance",
+		"order_grenade"]],
 ]
 
 
@@ -788,6 +953,11 @@ func _page_game() -> void:
 	# v1.12: der frühere Punkt "Kindersicherung" heißt "FADENKREUZ ZULASSEN" (Text 20212)
 	_yesno(289, text(20212) if texts.has("20212") else "FADENKREUZ ZULASSEN", Settings.crosshair,
 		func(v: bool): Settings.crosshair = v)
+	# Ergänzungen (kein Original-Punkt): FPS-Anzeige (SP+MP), Namen/Trefferanzeige im Mehrspieler
+	_yesno(377, "FPS ANZEIGEN", Settings.show_fps, func(v: bool): Settings.show_fps = v)
+	_yesno(421, "NAMEN ÜBER SPIELERN (MP)", Settings.show_names, func(v: bool): Settings.show_names = v)
+	_yesno(465, "TREFFERANZEIGE (MP)", Settings.hit_feedback, func(v: bool): Settings.hit_feedback = v)
+	_yesno(509, "KILL-CAM (MP)", Settings.kill_cam, func(v: bool): Settings.kill_cam = v)
 
 
 # --- Profile (Original change_profile.4ds) ---------------------------------------
@@ -969,50 +1139,162 @@ func _dialog_button(dlg: Panel, label: String, pos: Vector2, cb: Callable) -> vo
 	dlg.add_child(b)
 
 
-# --- Mitwirkende (Original: Text\german\Subtitles\credits.txt + credits.ogg) ----
+# --- Mitwirkende ----------------------------------------------------------------------------------------------
+# Original: Rolltext aus Text\<Sprache>\Subtitles\credits.txt (hier zur Laufzeit aus orig_cache/ui/menu/credits.txt,
+# vom Menü-Export tools/_menu_export.py aus der Originalinstallation erzeugt – der Originaltext liegt NICHT im
+# Repository) mit Musik credits.ogg (IngameSounds Gruppe 37 „Credits“) auf schwarzem Grund; credits.bik ist im Code
+# genannt, aber nicht installiert. Parser hd2.exe 0x689340 [B]: Zeile = <Nummer> "<TAG>Text"; Tags TI, NA, SM, TICZ,
+# NACZ, SMCZ, EL (Leerzeile), ES (kleine Leerzeile), SPEED (Tempo); SM/SMCZ mit <C_1>a<C_2>b<C_3>c = drei Spalten.
+# Stiltabelle 0x8412C0 (14 × 0x34 Byte -> Laufzeitstile 0x8AE534 ff.) [B]: Farbe weiß, Zeilenhöhe als Anteil der
+# Bildbreite (px @1024), x-Mitte 0.5 bzw. Spalten 0.25/0.5/0.75. TI/TICZ Schrift 2 (fett) bzw. 5, sonst 3 bzw. 6
+# (CZ = Schrift mit tschechischen Zeichen; hier dieselbe Schrift). Tempo: SPEED / 1024 / 1000 je ms (0x68992A)
+# = SPEED px/s @1024. Schriftgröße innerhalb der Zeilenhöhe [P].
+# Davor ein eigener Abschnitt zum inoffiziellen Nachbau (keine Personennamen).
+
+const CREDIT_STYLES := {
+	"TI": {"h": 0.06, "bold": true}, "TICZ": {"h": 0.06, "bold": true},
+	"NA": {"h": 0.04, "bold": false}, "NACZ": {"h": 0.04, "bold": false},
+	"SM": {"h": 0.022, "bold": false}, "SMCZ": {"h": 0.022, "bold": false},
+	"EL": {"h": 0.04, "bold": false}, "ES": {"h": 0.025, "bold": false},
+}
+const CREDIT_COLUMNS := [0.25, 0.5, 0.75]
+const CREDITS_SPEED := 70.0         ## Standard, falls <SPEED> fehlt (Originaldatei: 70)
+const CREDITS_FONT_K := 0.72        ## Schriftgröße / Zeilenhöhe [P]
+
+var _credits_view: Control
+var credits_content: Control        ## Rolltext (Tests/Kontrollbilder)
+var credits_height := 0.0
+
+
+## credits.txt -> {"speed", "lines": [{style, text[, cols]}]}
+static func parse_credits(src: String) -> Dictionary:
+	var out: Array = []
+	var speed := CREDITS_SPEED
+	for raw in src.split("\n"):
+		var l := raw.strip_edges()
+		if l == "" or l.begins_with(";"):
+			continue
+		var q0 := l.find("\"")
+		var q1 := l.rfind("\"")
+		if q0 < 0 or q1 <= q0:
+			continue
+		var body := l.substr(q0 + 1, q1 - q0 - 1)
+		var a := body.find("<")
+		var b: int = body.find(">", a + 1) if a >= 0 else -1
+		if a < 0 or b < 0:
+			continue
+		var tag := body.substr(a + 1, b - a - 1)
+		var rest := body.substr(b + 1).strip_edges()
+		if tag == "SPEED":
+			speed = maxf(float(rest.to_int()), 1.0)
+			continue
+		if not CREDIT_STYLES.has(tag):
+			continue
+		var e := {"style": tag, "text": "" if tag in ["EL", "ES"] else rest}
+		var c1 := rest.find("<C_1>")
+		var c2 := rest.find("<C_2>")
+		var c3 := rest.find("<C_3>")
+		if tag.begins_with("SM") and c1 >= 0 and c2 > c1 and c3 > c2:
+			e["cols"] = [rest.substr(c1 + 5, c2 - c1 - 5).strip_edges(), rest.substr(c2 + 5, c3 - c2 - 5).strip_edges(),
+				rest.substr(c3 + 5).strip_edges()]
+			e["text"] = ""
+		out.append(e)
+	return {"speed": speed, "lines": out}
+
+
+## Eigener Abschnitt vor den Original-Mitwirkenden: inoffizieller Fan-Nachbau (keine Personennamen)
+static func rebuild_credits() -> Array:
+	var el := {"style": "EL", "text": ""}
+	var es := {"style": "ES", "text": ""}
+	return [
+		{"style": "SM", "text": "NACHBAU"}, es,
+		{"style": "TI", "text": "Dangerous and Hidden 2 (unofficial)"},
+		{"style": "NA", "text": "neu erstellt mit Claude Opus"}, el,
+		{"style": "SM", "text": "Inoffizieller Fan-Nachbau mit der Godot Engine %s" % String(Engine.get_version_info()["string"])},
+		{"style": "SM", "text": "Nicht verbunden mit den Entwicklern, dem Publisher oder den Rechteinhabern des Originalspiels."},
+		{"style": "SM", "text": "Originaltexte, -grafiken, -klänge und -musik werden nur aus einer vorhandenen Originalinstallation geladen."},
+		el, el, el,
+		{"style": "SM", "text": "ORIGINALSPIEL"}, es,
+		{"style": "TI", "text": "HIDDEN & DANGEROUS 2"}, el, el, el,
+	]
+
 
 func _show_credits() -> void:
+	_close_credits_view()
 	_credits_root = Control.new()
+	_credits_root.name = "Credits"
 	_credits_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(_credits_root)
 	var bg := ColorRect.new()
-	bg.color = Color(0, 0, 0, 0.92)
+	bg.color = Color.BLACK
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_credits_root.add_child(bg)
-	var lbl := Label.new()
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
-	lbl.add_theme_font_size_override("font_size", 18)
+	_credits_view = Control.new()
+	_credits_view.name = "CreditsView"
+	_credits_view.size = REF
+	_credits_view.clip_contents = true
+	_credits_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_credits_root.add_child(_credits_view)
+	_fit()
+	var src := ""
 	var f := FileAccess.open(_menu_dir + "/credits.txt", FileAccess.READ)
-	var lines: PackedStringArray = []
-	lines.append("DANGEROUS HIDDEN 2 – Nachbau mit Godot " + Engine.get_version_info()["string"])
-	lines.append("")
-	lines.append("Originalspiel: Hidden & Dangerous 2")
-	lines.append("")
 	if f:
-		for raw in f.get_as_text().split("\n"):
-			var l := raw.strip_edges()
-			if l.begins_with(";") or l.begins_with("<SPEED>"):
-				continue
-			for code in ["<TI>", "<NACZ>", "<SM>", "<ES>"]:
-				l = l.replace(code, "")
-			lines.append("" if l.begins_with("<EL>") else l)
-	lbl.text = "\n".join(lines)
-	_credits_root.add_child(lbl)
-	lbl.position.y = size.y
-	var dur := maxf(lines.size() * 0.45, 20.0)
-	var tw := create_tween()
-	tw.tween_property(lbl, "position:y", -lines.size() * 26.0, dur)
+		src = f.get_as_text()
+	var parsed := parse_credits(src)
+	var lines: Array = rebuild_credits() + (parsed["lines"] as Array)
+	credits_content = Control.new()
+	credits_content.name = "CreditsText"
+	credits_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_credits_view.add_child(credits_content)
+	var bold := FontVariation.new()
+	bold.base_font = get_theme_font("font", "Label")
+	bold.variation_embolden = 0.9
+	var y := 0.0
+	for e in lines:
+		var st: Dictionary = CREDIT_STYLES[String(e["style"])]
+		var h: float = float(st["h"]) * REF.x
+		if e.has("cols"):
+			for i in 3:
+				_credit_label(String(e["cols"][i]), float(CREDIT_COLUMNS[i]) * REF.x, REF.x * 0.25, y, h, null)
+		elif String(e["text"]) != "":
+			_credit_label(String(e["text"]), REF.x * 0.5, REF.x, y, h, bold if bool(st["bold"]) else null)
+		y += h
+	credits_height = y
+	credits_content.position = Vector2(0, REF.y)
+	var tw := credits_content.create_tween()
+	tw.tween_property(credits_content, "position:y", -y, (REF.y + y) / float(parsed["speed"]))
 	tw.finished.connect(_close_credits)
-	var st := _load_ogg("credits.ogg")
-	if st:
-		_music.stream = st
+	var music := _load_ogg("credits.ogg")
+	if music:
+		_music.stream = music
 		_music.play()
 
 
-func _close_credits() -> void:
+func _credit_label(txt: String, cx: float, w: float, y: float, h: float, font: Font) -> void:
+	var l := Label.new()
+	l.text = txt
+	l.position = Vector2(cx - w * 0.5, y)
+	l.size = Vector2(w, h)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	l.clip_text = true
+	l.add_theme_font_size_override("font_size", maxi(roundi(h * CREDITS_FONT_K), 8))
+	l.add_theme_color_override("font_color", Color.WHITE)
+	if font:
+		l.add_theme_font_override("font", font)
+	credits_content.add_child(l)
+
+
+func _close_credits_view() -> void:
 	if is_instance_valid(_credits_root):
 		_credits_root.queue_free()
+	_credits_root = null
+	_credits_view = null
+	credits_content = null
+
+
+func _close_credits() -> void:
+	_close_credits_view()
 	_play_menu_music()
 
 
@@ -1057,7 +1339,14 @@ func _play_menu_music() -> void:
 
 # --- Einsatzbesprechung + Ausrüstung (eigene Ergänzung, Original: Ausrüstungsbildschirm) ---
 
-func _show_briefing(id: String) -> void:
+## Original-Ablauf (Gamedata00.gdt): Videoknoten vor der Mission – Kampagnen-Intro (Kampagnenbeginn) und
+## Briefing-Video (Brief*.bik) –, danach Briefing/Team/Ausrüstung. Fehlen die konvertierten Filme: direkt weiter.
+func _show_briefing(id: String, videos_done := false) -> void:
+	if not videos_done:
+		var vids := Game.mission_videos(id)
+		if MoviePlayerScript.any_available(vids):
+			_play_videos(vids, _show_briefing.bind(id, true))
+			return
 	stage.visible = false
 	_brief_root = Control.new()
 	_brief_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)

@@ -47,6 +47,19 @@ func _on_first_contact(_body: Node) -> void:
 		return
 	linear_damp = 3.5
 	angular_damp = 10.0
+	# Aufprall: Original Kat. 5/12 „Grenade default“ (Dateien fehlen in der Installation), im Wasser 5/1
+	if _in_water(global_position):
+		OrigAudio.play_group(OrigAudio.CAT_FALL, OrigAudio.FALL_GRENADE_WATER, global_position)
+	else:
+		OrigAudio.play_group(OrigAudio.CAT_FALL, 12, global_position)
+
+
+func _in_water(p: Vector3) -> bool:
+	var m := Game.current_mission()
+	if m == null or not m.has_method("water_level_at"):
+		return false
+	var lvl: float = m.water_level_at(p)
+	return not is_nan(lvl) and p.y < lvl + 0.3
 
 
 func _physics_process(delta: float) -> void:
@@ -68,9 +81,11 @@ func explode() -> void:
 	_exploded = true
 	var pos := global_position
 	var radius := data.blast_radius
-	Effects.explosion(pos, radius)
+	# Original Kat. 6/0 „Explosion Grenade“, im Wasser 6/1 „Explosion Water“ (Raketen: ebenfalls 6/0 = Annahme)
+	Effects.explosion(pos, radius, [OrigAudio.CAT_EXPLOSION, OrigAudio.EXP_WATER if _in_water(pos) else OrigAudio.EXP_GRENADE])
 	Events.emit_noise(pos, data.noise_radius, thrower if is_instance_valid(thrower) else null, team, &"explosion")
 	var space := get_world_3d().direct_space_state
+	Net.hit_source = String(data.id) if data else ""     # Integration Kill-Feed: Waffe der Explosion (nicht Hand des Werfers)
 	for s in get_tree().get_nodes_in_group("soldiers"):
 		var sol := s as Soldier
 		if sol == null or not sol.alive:
@@ -82,12 +97,10 @@ func explode() -> void:
 		var q := PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 0.15, target, 1)
 		if not space.intersect_ray(q).is_empty():
 			continue   # Deckung
-		var falloff := 1.0 - dist / radius
-		var dmg := data.damage * falloff * falloff
-		var zone := &"torso"
-		if sol.stance == Soldier.Stance.PRONE:
-			dmg *= 0.6   # liegend weniger Splitterfläche
-		sol.apply_hit(dmg, zone, thrower if is_instance_valid(thrower) else null, (target - pos).normalized())
+		# Original hd2.exe 0x6DE780: linear (1 − d/r) · Stärke, Zone Körper, keine Haltungsminderung
+		var dmg := WeaponDB.explosion_damage(data.damage, radius, dist)
+		sol.apply_hit(dmg, &"torso", thrower if is_instance_valid(thrower) else null, (target - pos).normalized())
+	Net.hit_source = ""
 	# Fahrzeuge und Hunde (on_bullet_hit) nehmen Explosionsschaden ohne Deckungsprüfung
 	OrigInteractive.damage_objects(get_tree(), pos, radius, data.damage, thrower if is_instance_valid(thrower) else null)
 	queue_free()

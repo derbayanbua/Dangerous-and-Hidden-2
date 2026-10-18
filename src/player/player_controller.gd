@@ -8,6 +8,9 @@ var mission: Node
 var active: Soldier
 var input_enabled := true
 var interact_target: Interactable
+var command_menu: CommandMenu
+## Ingame-Inventar (Original T2847, Taste I; Durchsuchen öffnet es mit zweitem Inventar)
+var inventory: IngameInventory
 
 var _crouch_toggle := false
 
@@ -19,6 +22,7 @@ var selection_open := false
 var selection_index := 0
 var _selection_timer := 0.0
 var _suppress_fire := false
+var _mouse_idle := 0.0      ## s seit der letzten Mausbewegung (Fahrzeug-Verfolgerkamera)
 
 
 func selection_items() -> Array:
@@ -95,6 +99,72 @@ func _process(delta: float) -> void:
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_PAUSABLE
+	# Original-Befehlsmenü (Ziffernblock 0 = an alle, 1–6 = an Soldat n; nur Einzelspieler)
+	command_menu = CommandMenu.new()
+	command_menu.name = "CommandMenu"
+	command_menu.controller = self
+	add_child(command_menu)
+	inventory = IngameInventory.new()
+	inventory.name = "IngameInventory"
+	add_child(inventory)
+	Events.soldier_died.connect(_on_soldier_died)
+
+
+## Leichen ohne eigene Durchsuchen-Aktion (Mehrspieler-Spieler, Trupp) werden durchsuchbar (Original: Aktion
+## „Durchsuchen“ an jeder Leiche, Fall 7 des Aktionsmenüs hd2.exe 0x4B2830)
+func _on_soldier_died(s: Node, _attacker: Node) -> void:
+	if not s is Soldier or not is_instance_valid(s):
+		return
+	# Durchsuchen-Punkt nach der Todesanimation an die liegende Figur (der Körper fällt vom Ursprung weg)
+	get_tree().create_timer(2.5, false).timeout.connect(_place_search_point.bind(s))
+	for c in s.get_children():
+		if c is Pickups.Loot:
+			return
+	FieldInventory.add_search_spot(s as Soldier)
+
+
+func _place_search_point(s: Soldier) -> void:
+	if not is_instance_valid(s) or s.alive:
+		return
+	var box := AABB()
+	var first := true
+	for n in s.find_children("*", "VisualInstance3D", true, false):
+		var vi := n as VisualInstance3D
+		if not vi.is_visible_in_tree():
+			continue
+		var b := vi.global_transform * vi.get_aabb()
+		if b.size.length() > 6.0:
+			continue
+		box = b if first else box.merge(b)
+		first = false
+	if first:
+		return
+	var c := box.get_center()
+	for ch in s.get_children():
+		if ch is Pickups.Loot or ch is FieldInventory.SearchSpot:
+			(ch as Node3D).global_position = Vector3(c.x, s.global_position.y, c.z)
+
+
+## Benutzen an einem Durchsuchen-Ziel: Original-Inventar mit zweitem Inventar statt automatischer Übernahme
+## (Leiche: Pickups.Loot, Gefangener: EnemyBrain.CaptureAction im Schritt „Suchen“, Leichen-/Ablagestellen)
+func _open_search(it: Interactable) -> bool:
+	if it is FieldInventory.SearchSpot or it is FieldInventory.Pile:
+		it.interact(active)
+		return true
+	if it is Pickups.Loot:
+		var loot := it as Pickups.Loot
+		if not is_instance_valid(loot.corpse) or loot.corpse.alive or loot.looted:
+			return false
+		loot.looted = true
+		FieldInventory.add_search_spot(loot.corpse)
+		return inventory.open_for(active, loot.corpse)
+	if it is EnemyBrain.CaptureAction:
+		var ca := it as EnemyBrain.CaptureAction
+		if ca.brain == null or not ca.brain.captured or ca.searched or not ca.brain.soldier.alive:
+			return false
+		ca.searched = true
+		return inventory.open_for(active, ca.brain.soldier)
+	return false
 
 
 func set_active(s: Soldier) -> void:
@@ -102,18 +172,40 @@ func set_active(s: Soldier) -> void:
 	rig.set_target(s)
 
 
+## Ein Menü liegt über dem Spiel (Pausenmenü/SPIELER-SETUP, Spawnzonen-Karte, Chat, taktische Karte): keine
+## Spieleingaben, Maus bleibt frei (Mehrspieler läuft dabei weiter)
+func ui_blocking() -> bool:
+	if inventory and inventory.is_open():
+		return true
+	if mission == null:
+		return false
+	var pm = mission.get_node_or_null("PauseMenu")
+	if pm and pm.has_method("is_open") and pm.is_open():
+		return true
+	var mh = mission.get_node_or_null("MpHud")
+	if mh and ((mh.has_method("zone_map_open") and mh.zone_map_open()) or Net.chat_focus):
+		return true
+	var tm = mission.get("tactical_map")
+	return tm != null and bool(tm.get("is_open"))
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not input_enabled or not is_instance_valid(active):
 		return
+	if ui_blocking():
+		if event is InputEventMouseButton or event is InputEventMouseMotion:
+			get_viewport().set_input_as_handled()      # Klicks ins Menü feuern nicht und fangen die Maus nicht
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var sens := Settings.mouse_sensitivity * 0.01
-		if active.using_binoculars:
-			sens *= 12.0 / Settings.fov
-		elif active.aiming and active.current_weapon():
-			sens *= active.current_weapon().data.aim_fov / Settings.fov
+		# Zoom/Fernglas: Empfindlichkeit im Verhältnis des aktuellen Sichtfelds
+		sens *= clampf(rig.camera.fov / maxf(rig.base_fov(), 1.0), 0.05, 1.0)
 		active.look_yaw -= event.relative.x * sens
 		var dy: float = event.relative.y * sens * (-1.0 if Settings.invert_y else 1.0)
-		active.look_pitch = clampf(active.look_pitch - dy, deg_to_rad(-80), deg_to_rad(80))
+		# Nickwinkel-Grenze der Original-Kamera (gamecam.set: 3. Person ±70°, 1. Person/Zoom ±80°)
+		var lim := rig.pitch_limit()
+		active.look_pitch = clampf(active.look_pitch - dy, -lim, lim)
+		_mouse_idle = 0.0
 		return
 	if event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -131,8 +223,26 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			return
 
+	if event.is_action_pressed("inventory"):
+		# Original T2847: eigenes Inventar ein/aus (Fahrzeug/Tod: nicht)
+		if active.alive and active.vehicle == null:
+			close_selection()
+			inventory.open_for(active)
+		get_viewport().set_input_as_handled()
+		return
+	if event.is_action_pressed("drop_item"):
+		# Original T2827 GEGENST. FALLENL.: Gegenstand in den Händen fällt zu Boden
+		var hand := int(FieldInventory.view(active)["hands"])
+		if hand >= 0 and active.vehicle == null:
+			var r := FieldInventory.request(active, active, "hands", hand, active, "drop")
+			if r != "":
+				Events.say(r, 1.5)
+		return
 	if event.is_action_pressed("camera_toggle"):
-		rig.toggle_mode()
+		if Net.third_person_allowed():
+			rig.toggle_mode()
+		else:
+			Events.say("%s: NEIN" % Net.tx(2373, "3.PERS.-ANSICHT ERLAUBEN"), 2.0)
 	elif event.is_action_pressed("stance_crouch"):
 		active.stance_request = Soldier.Stance.STAND if active.stance_request == Soldier.Stance.CROUCH else Soldier.Stance.CROUCH
 	elif event.is_action_pressed("stance_prone"):
@@ -175,7 +285,11 @@ func _unhandled_input(event: InputEvent) -> void:
 				v.leave(active)
 			Events.say("Ausgestiegen.", 1.5)
 		elif interact_target and is_instance_valid(interact_target):
+			if _open_search(interact_target):
+				return                                     # Durchsuchen: Inventar mit zweitem Inventar
 			interact_target.interact(active)
+			if Net.is_online:
+				Net.used_interactable(interact_target)     # Türen, Schalter … auch bei den anderen
 	elif event.is_action_pressed("soldier_1"):
 		squad.set_active(0)
 	elif event.is_action_pressed("soldier_2"):
@@ -220,9 +334,11 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(_delta: float) -> void:
 	if not is_instance_valid(active) or not active.alive:
 		return
-	if not input_enabled:
+	if not input_enabled or ui_blocking():
 		active.move_input = Vector3.ZERO
 		active.trigger = false
+		active.aiming = false
+		_suppress_fire = true          # nach dem Schließen erst nach Loslassen der Taste wieder feuern
 		return
 	if _suppress_fire and not Input.is_action_pressed("fire"):
 		_suppress_fire = false
@@ -234,6 +350,12 @@ func _physics_process(_delta: float) -> void:
 			v.throttle = -iv.y
 			v.steer_input = -iv.x
 			v.handbrake = Input.is_action_pressed("stance_stand")
+			# Verfolgerkamera richtet sich ohne Mausbewegung hinter dem fahrenden Fahrzeug aus
+			_mouse_idle += _delta
+			if _mouse_idle > 1.2 and v.speed_kmh() > 6.0:
+				var k := clampf(_delta * 2.2, 0.0, 1.0)
+				active.look_yaw = lerp_angle(active.look_yaw, v.chase_yaw(), k)
+				active.look_pitch = lerpf(active.look_pitch, -0.2, k)
 		active.aiming = Input.is_action_pressed("aim") and active.seat_index > 0
 		active.trigger = active.seat_index > 0 and Input.is_action_pressed("fire") and fire_ok
 		active.aim_point = rig.crosshair_point()
@@ -259,7 +381,7 @@ func _physics_process(_delta: float) -> void:
 	# Rückstoß auf die Blickrichtung anwenden
 	var r := active.consume_recoil()
 	if r != Vector2.ZERO:
-		active.look_pitch = clampf(active.look_pitch + deg_to_rad(r.x), deg_to_rad(-80), deg_to_rad(80))
+		active.look_pitch = clampf(active.look_pitch + deg_to_rad(r.x), -rig.pitch_limit(), rig.pitch_limit())
 		active.look_yaw += deg_to_rad(r.y)
 	_update_interact_target()
 

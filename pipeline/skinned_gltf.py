@@ -150,9 +150,12 @@ def _vertex_weights(skin, nverts, lod_index=0):
     return joints4, weights4
 
 
-def export_character(model_4ds_bytes, anims, textures, tex_rel, out_path, name=None, fps=FPS, report=None):
-    """4DS-Charakter + {name: 5DS-Bytes} -> GLB. Gibt ein Info-dict zurück."""
-    model = fmt_4ds_hd2skin.read_model(model_4ds_bytes)
+def export_character(model_4ds_bytes, anims, textures, tex_rel, out_path, name=None, fps=FPS, report=None,
+                     channel_filter=None, model=None):
+    """4DS-Charakter + {name: 5DS-Bytes} -> GLB. Gibt ein Info-dict zurück.
+    channel_filter(anim_name, frame_name) -> False lässt die Spur weg (z. B. Oberkörper-Haltungen ohne Becken/Beine).
+    model: bereits gelesenes (ggf. zusammengesetztes) Modell statt model_4ds_bytes (FPV-Hände + Waffe)."""
+    model = model or fmt_4ds_hd2skin.read_model(model_4ds_bytes)
     name = name or os.path.splitext(os.path.basename(out_path))[0]
     g = cm.Gltf(tex_rel)
     g.j["asset"]["generator"] = "DH2 skinned_gltf"
@@ -252,6 +255,8 @@ def export_character(model_4ds_bytes, anims, textures, tex_rel, out_path, name=N
 
         for o in a["objects"]:
             node = by_name.get(o["name"].lower())
+            if node is not None and channel_filter is not None and not channel_filter(aname, o["name"]):
+                continue
             if node is None:
                 skipped.append(o["name"])
                 continue

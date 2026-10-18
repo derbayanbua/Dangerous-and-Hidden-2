@@ -15,15 +15,34 @@ $suites = @(
   @{ name = "test_vehicles"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_vehicles" },
   @{ name = "test_ls_compiler"; args = "--headless -- --autoplay=test_ls_compiler --scripts=res://orig_cache" },
   @{ name = "test_a1";       args = "--headless -- --mission=a1_blizzard --autoplay=test_a1" },
+  @{ name = "test_audio";    args = "--headless -- --mission=a1_blizzard --autoplay=test_audio" },
   @{ name = "test_a2";       args = "--headless -- --mission=a2_erkundung --autoplay=test_orig_part --commandos=1" },
   @{ name = "test_a3";       args = "--headless -- --mission=a3_rendezvous --autoplay=test_orig_part --commandos=4" },
   @{ name = "test_sas";      args = "--headless -- --autoplay=test_sas" },
+  @{ name = "test_ui_flow";  args = "--headless -- --autoplay=test_ui_flow --profiles_dir=user://test_ui_flow --noimport" },
+  @{ name = "test_tactical"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_tactical" },
+  @{ name = "test_movies";   args = "--headless -- --autoplay=test_movies --profiles_dir=user://test_movies --noimport" },
   @{ name = "test_interactive"; args = "--headless -- --mission=a1_blizzard --autoplay=test_interactive" },
   @{ name = "test_af6";      args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" },
   @{ name = "test_items";    args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_items" },
   @{ name = "test_water";    args = "--headless -- --mission=nw1_dampfleitung --autoplay=test_water" },
-  @{ name = "test_controls"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_controls" }
+  @{ name = "test_controls"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_controls" },
+  @{ name = "test_commands"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_commands" },
+  @{ name = "test_weapons_orig"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_weapons_orig" },
+  @{ name = "test_animations"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_animations" },
+  @{ name = "test_tools_mines"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_tools_mines" },
+  @{ name = "test_tools_mines_mp"; args = "--headless -- --autoplay=test_tools_mines --phase=mp" },
+  @{ name = "test_net";      args = "--headless -- --autoplay=test_net" },
+  @{ name = "test_mp_modes"; args = "--headless -- --autoplay=test_mp_modes" },
+  @{ name = "test_bots";     args = "--headless -- --autoplay=test_bots" },
+  @{ name = "test_lan_e2e";  args = "--headless -- --autoplay=test_lan_e2e --profiles_dir=user://test_lan_host --noimport" },
+  @{ name = "test_mp_features"; args = "--headless -- --autoplay=test_mp_features --profiles_dir=user://test_mp_features --noimport" },
+  @{ name = "test_dedicated"; args = "--headless -- --autoplay=test_dedicated --profiles_dir=user://test_ded --noimport" },
+  @{ name = "test_mp_setup_ui"; args = "--headless -- --autoplay=test_mp_setup_ui --profiles_dir=user://test_mp_setup --noimport" },
+  @{ name = "test_mp_feedback"; args = "--headless -- --autoplay=test_mp_feedback" }
 )
+# Lokale Zusatzinhalte (Ordner local/, nicht im Repository) können eigene Suiten anhängen: $suites += @{ ... }
+if (Test-Path "$proj\local\local_tests.ps1") { . "$proj\local\local_tests.ps1" }
 $failed = 0
 if (-not $Exe) {
   # Import aktualisiert u. a. die globale class_name-Registrierung neuer Skripte

@@ -56,6 +56,9 @@ func _configure_environment(e: Environment, moon: DirectionalLight3D) -> void:
 
 func _build_world() -> void:
 	light_factor = 0.5   # Nacht
+	# Übungseinsatz (eigener Entwurf): Original-Winterwind (ARCTIC1 a_winter), Untergrund Schnee (Zeile 34 „Sníh“)
+	ambience_sound = "a_winter.wav"
+	ground_material = 34
 	alarm_bell_pos = Vector3(0, 4.0, -5)
 	lb.color_ground = Color(0.82, 0.84, 0.88)
 	lb.color_ground2 = Color(0.74, 0.77, 0.82)

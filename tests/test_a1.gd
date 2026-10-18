@@ -34,8 +34,8 @@ func _run() -> void:
 		"%d Punkt, %d Spot" % [ex.stats.lights, ex.stats.spots] if ex else "-")
 	check(ex != null and ex.stats.sounds > 20, "Original-Klangquellen (sounds.bin)", str(ex.stats.sounds) if ex else "-")
 	check(ex != null and ex.stats.tracks >= 5, "Original-Spuren (tracks.dat)", str(ex.stats.tracks) if ex else "-")
-	check(ex != null and ex.music.stream != null and ex.mission_music.get("normal", "") == "ar1.ogg",
-		"Missionsmusik ar1.ogg (Musiktabelle Eintrag 19)")
+	check(ex != null and OrigAudio.music_file == "ar1.ogg" and ex.mission_music.get("normal", "") == "ar1.ogg",
+		"Missionsmusik ar1.ogg (Musiktabelle Eintrag 19, scene2.bin 0xB840)", OrigAudio.music_file)
 	# Original-Grafikoptionen wirken im Level: GRAS (Vegetation) und DYNAMIK (dynamische Lichter)
 	check(m.orig.grass_nodes.size() > 20, "Gras-Objekte erkannt (Option GRAS)", str(m.orig.grass_nodes.size()))
 	# Texturqualität „HD (KI)“: Originaltexturen sind höchstens 512 px, KI-Fassungen bis 2048 px

@@ -2,8 +2,9 @@ extends Node
 ## Projektilsimulation (Autoload "Ballistics").
 ## Geschosse fliegen mit Schwerkraft und quadratischem Luftwiderstand;
 ## jeder Physikschritt prüft das Flugsegment per Raycast gegen Welt
-## (Layer 1) und Trefferzonen (Layer 3). Schaden skaliert mit der
-## Restenergie (v/v0)^2 ab falloff_start.
+## (Layer 1) und Trefferzonen (Layer 3). Schaden wie im Original: linearer Abfall nach
+## Flugstrecke und Trefferzone (WeaponDB.bullet_damage/zone_damage); eigene Waffen ohne
+## Originalwert skalieren mit der Restenergie (v/v0)^2 ab falloff_start.
 
 const GRAVITY := 9.81
 const MAX_LIFETIME := 3.0
@@ -16,6 +17,7 @@ class Projectile:
 	var drag: float
 	var damage: float
 	var falloff_start: float
+	var data: WeaponData
 	var travelled := 0.0
 	var age := 0.0
 	var shooter: Node
@@ -23,6 +25,7 @@ class Projectile:
 	var exclude: Array[RID] = []
 	var space: PhysicsDirectSpaceState3D
 	var world: World3D
+	var whizzed := false
 
 var _projectiles: Array[Projectile] = []
 var impact_scene_parent: Node   ## Mission setzt hier ihren Effekt-Container
@@ -50,6 +53,7 @@ func fire(shooter: Node, origin: Vector3, direction: Vector3, data: WeaponData, 
 	p.drag = 0.0012 if data.muzzle_velocity > 600.0 else 0.0026
 	p.damage = data.damage
 	p.falloff_start = data.falloff_start
+	p.data = data
 	p.shooter = shooter
 	p.team = team
 	p.exclude = exclude
@@ -68,6 +72,56 @@ func _physics_process(delta: float) -> void:
 	_projectiles = alive
 
 
+## Vorbeiflug am Hörer (Kamera): Original Kat. 4/11 „Whizz Bullet Effect“ einmal je Geschoss, wenn das
+## Flugsegment näher als 3 m an der Kamera vorbeigeht (Abstand = Annahme; eigene Schüsse ausgenommen).
+func _whizz(p: Projectile, next: Vector3) -> void:
+	if p.whizzed or p.travelled < 8.0:
+		return
+	var vp := get_viewport()
+	var cam: Camera3D = vp.get_camera_3d() if vp else null
+	if cam == null:
+		return
+	var c := cam.global_position
+	var seg := next - p.pos
+	var t := clampf((c - p.pos).dot(seg) / maxf(seg.length_squared(), 1e-6), 0.0, 1.0)
+	var closest := p.pos + seg * t
+	if closest.distance_to(c) < 3.0:
+		p.whizzed = true
+		OrigAudio.play_group(OrigAudio.CAT_HIT, OrigAudio.HIT_WHIZZ, closest)
+
+
+## Helmtreffer: obere Hälfte der Kopfzone (Original: eigener Strahltest gegen das Helmmodell, 0x455670 – Form im
+## Nachbau angenähert [P])
+static func _helmet_part(hb: Hitbox, pos: Vector3) -> bool:
+	var cs: Node3D = hb.get_child(0) as Node3D if hb.get_child_count() > 0 else null
+	var c: Vector3 = cs.global_position if cs else hb.global_position
+	# obere Hälfte entlang der Kopfachse (Knochen f, +Y = Scheitel), damit auch liegend/geneigt der Helm oben ist
+	var up: Vector3 = cs.global_basis.y.normalized() if cs else Vector3.UP
+	return (pos - c).dot(up) >= 0.0
+
+
+## Zonenreihenfolge des Originals (0x455670 prüft die Volumen in fester Reihenfolge, nicht nach Abstand):
+## Körper vor Kopf/Helm vor Armen vor Beinen. Liegt z. B. ein Arm vor der Brust, zählt der Rumpftreffer.
+const ZONE_ORDER := [&"torso", &"head", &"arm", &"leg"]
+
+
+static func _priority_zone(space: PhysicsDirectSpaceState3D, hb: Hitbox, at: Vector3, dir: Vector3) -> Hitbox:
+	var best := hb
+	var ex: Array[RID] = [hb.get_rid()]
+	for i in 6:
+		var q := PhysicsRayQueryParameters3D.create(at - dir * 0.05, at + dir * 1.0, Hitbox.LAYER, ex)
+		q.collide_with_areas = true
+		q.collide_with_bodies = false
+		var h := space.intersect_ray(q)
+		if h.is_empty() or not (h.collider is Hitbox):
+			break
+		var o := h.collider as Hitbox
+		ex.append(o.get_rid())
+		if o.soldier == hb.soldier and ZONE_ORDER.find(o.zone) >= 0 and ZONE_ORDER.find(o.zone) < ZONE_ORDER.find(best.zone):
+			best = o
+	return best
+
+
 ## Gibt true zurück, solange das Projektil weiterfliegt.
 func _step(p: Projectile, delta: float) -> bool:
 	p.age += delta
@@ -84,20 +138,27 @@ func _step(p: Projectile, delta: float) -> bool:
 	q.collide_with_areas = true
 	q.collide_with_bodies = true
 	var hit := space.intersect_ray(q)
+	_whizz(p, next)
 	if hit.is_empty():
 		p.travelled += p.pos.distance_to(next)
 		p.pos = next
 		return true
 	p.travelled += p.pos.distance_to(hit.position)
-	var energy := 1.0
-	if p.travelled > p.falloff_start:
-		energy = clampf(pow(p.vel.length() / p.v0, 2.0), 0.25, 1.0)
+	# Original (hd2.exe 0x44B3B0): linearer Abfall nach Flugstrecke; eigene Waffen ohne Originalwert: Restenergie
+	var base := p.damage
+	if p.data and p.data.falloff_per_m > 0.0:
+		base = WeaponDB.bullet_damage(p.data, p.travelled)
+	elif p.travelled > p.falloff_start:
+		base = p.damage * clampf(pow(p.vel.length() / p.v0, 2.0), 0.25, 1.0)
 	var collider: Object = hit.collider
 	if collider is Hitbox:
 		var hb := collider as Hitbox
 		if is_instance_valid(hb.soldier) and hb.soldier.has_method("apply_hit"):
 			hits += 1
-			hb.soldier.apply_hit(p.damage * energy * hb.multiplier, hb.zone, p.shooter, p.vel.normalized())
+			hb = _priority_zone(space, hb, hit.position, p.vel.normalized())
+			# Trefferzone wie im Original (Kopf ×5, Helm, Arme ×0,2, Beine ×0,33; WeaponDB.zone_damage)
+			var helmet := hb.zone == &"head" and WeaponDB.wears_helmet(hb.soldier) and _helmet_part(hb, hit.position)
+			hb.soldier.apply_hit(WeaponDB.zone_damage(base, hb.zone, helmet), hb.zone, p.shooter, p.vel.normalized())
 		Effects.blood(hit.position, hit.normal)
 	else:
 		# Zerstörbare Objekte (z. B. Suchscheinwerfer) bieten on_bullet_hit an
@@ -109,7 +170,7 @@ func _step(p: Projectile, delta: float) -> bool:
 				break
 			target = target.get_parent()
 		if target and target.has_method("on_bullet_hit"):
-			target.on_bullet_hit(p.damage * energy, p.shooter)
+			target.on_bullet_hit(base, p.shooter)
 		Effects.impact(hit.position, hit.normal)
 		# Einschläge sind in der Nähe hörbar (Beschuss-Reaktion der KI).
 		Events.emit_noise(hit.position, 12.0, p.shooter, p.team, &"impact")

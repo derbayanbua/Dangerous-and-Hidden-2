@@ -7,24 +7,51 @@ extends Control
 ## (bevorzugt KI-hochskalierte Fassungen textures_4k/_hd).
 ## Live-Daten: aktiver Soldat, KI-Steuerung, Gesundheit/Ausdauer/Tarnung (Leisten), Entdeckung,
 ## Haltung, Gangart, Kompass, Waffe in der Hand/auf der Schulter (+ Munition), Waffenwahl beim Wechsel.
+##
+## Rechtes Feld tabl02 wie hd2.exe 0x4A9010/0x4A9530 (docs/re_notes_hud.md §3a): i_hands = Symbol des Gegenstands in
+## der Hand, i_shoulder = Symbol des Gegenstands auf der Schulter (items.sav-Symbol +0x2C „wi_*“ + „.bmp“, 0x7DF650 –
+## Waffenbilder, nicht die Munitionssymbole „ii_*-m“); Textblock über dem Feld mit vier Zeilen: 0 Name des
+## Gegenstands in der Hand, 1 „%d/%d“ Schuss in der Waffe / Magazine im Inventar (Hand), 2 dasselbe für die
+## Schulterwaffe, 3 „%d“ neben dem Granatensymbol des Feldes. Aktualisierung je Bild (Original: bei Wertänderung).
 
-const GROUP_ANCHOR := {"compass": "left", "weapon_select": "right", "squad_bar": "center"}
+const GROUP_ANCHOR := {"compass": "left", "weapon_select": "right", "squad_bar": "center", "vehicle": "left", "info": "right"}
 ## Ausgeblendet: Mehrspieler-Wappen, Ausklappmenüs, Platzhalter ohne Laufzeitdaten
 const SKIP := ["mpaxis", "mpallied", "signals", "rollmenu"]
-const WEAPON_ICONS := {
-	&"thompson": "ii_us-m1thomp-m", &"sten": "ii_br-sten-m", &"enfield": "ii_br-enflmk4-m",
-	&"garand": "ii_us-m1garnd-m", &"bren": "ii_br-brengun-m", &"colt": "ii_us-clt1911-m",
-	&"kar98k": "ii_ge-karb98k-m", &"mp40": "ii_ge-mp40-m", &"stg44": "ii_ge-mp44-m", &"p08": "ii_ge-parab-m",
+## Waffen ohne Originalgegenstand (eigene Datenbankeinträge): Gegenstandsnummer für Symbol/Name
+const ITEM_FALLBACK := {&"stg44": 26, &"sten": 21, &"bren": 19}
+## Hilfsmittel (Soldier.tool) -> Originalgegenstand (items.sav)
+const TOOL_ITEMS := {"medkit": 54, "explosive": 68, "mine": 251, "binoculars": 99}
+## Textzeilen im Feld tabl02 (Anteile des Feldrechtecks x0, y0, x1, y1; Ausrichtung; Schrift × Feldhöhe) – Lage
+## nach den Linien/Symbolen der Feldgrafik (Patronen links oben, Granate rechts oben) [P], Inhalt [B]
+const AMMO_LINES := {
+	"hands": [0.22, 0.14, 0.74, 0.44, HORIZONTAL_ALIGNMENT_LEFT, 0.25],
+	"grenades": [0.84, 0.0, 1.0, 0.24, HORIZONTAL_ALIGNMENT_LEFT, 0.17],
+	"name": [0.04, 0.43, 0.60, 0.585, HORIZONTAL_ALIGNMENT_LEFT, 0.14],
+	"shoulder": [0.56, 0.43, 0.97, 0.585, HORIZONTAL_ALIGNMENT_RIGHT, 0.14],
 }
 
 var mission: Mission
 var dir := ""
 var elements := {}          ## Name -> {node, rect, group, uv, tex}
 var _tex_cache := {}
-var _ammo: Label
+var _ammo: Label                 ## Zeile 1 (Hand: Schuss/Magazine), Kurzzugriff für Tests
+var ammo_labels := {}            ## "name" / "hands" / "shoulder" / "grenades" -> Label
+var hands_item := -1             ## Originalgegenstand in der Hand (Symbol i_hands), -1 = keiner
+var shoulder_item := -1          ## Originalgegenstand auf der Schulter (Symbol i_shoulder)
 var _weapon_select_t := 0.0
 var _last_slot := -1
 var _last_active: Soldier
+var _timer_labels: Array[Label] = []
+var _needle: Line2D
+var _timer_acc := 0.0
+var timers_shown: Array = []      ## [Bezeichnung, Sekunden] der angezeigten Zeitzünder (Tests)
+## Verwundungs-Overlay „injury“ (hd2.exe 0x4AD250 ff.): bei Treffer zufällig einer von 7 Plätzen
+## (AnimHit1–6 als Videotextur, Platz 7 leer), Deckkraft +4/s bis 0,5, dann −0,5/s bis 0
+var injury: VideoStreamPlayer
+var injury_alpha := 0.0
+var injury_film := ""
+var _inj_rising := false
+var _inj_hooked: Soldier
 
 
 static func available() -> bool:
@@ -44,8 +71,13 @@ func setup(m: Mission) -> void:
 	var els: Array = []
 	for e in spec.get("elements", []):
 		var g: String = e.get("group", "")
-		if not GROUP_ANCHOR.has(g) or not groups.has(g) or not e.get("onscreen_in_file", false):
+		var en := String(e.get("name", ""))
+		# Ergänzt (GAP Abschnitt 4): Tacho (Gruppe vehicle) und Zeitzünder-Liste (timer-explosive00–09)
+		var extra := en in ["speed", "speed01"] or en.begins_with("timer-explosive")
+		if not extra and (not GROUP_ANCHOR.has(g) or not groups.has(g) or not e.get("onscreen_in_file", false)):
 			continue
+		if g == "info" and not extra:
+			continue           # Info-Spalte info00–09: Platzhalter ohne Laufzeitdaten
 		if SKIP.has(e.get("name", "")) or e.get("rect") == null:
 			continue
 		els.append(e)
@@ -70,12 +102,42 @@ func setup(m: Mission) -> void:
 		node.name = String(e["name"]).validate_node_name()
 		add_child(node)
 		elements[e["name"]] = {"node": node, "rect": e["rect"], "group": e["group"], "uv": uvs, "tex": tfile}
-	_ammo = Label.new()
-	_ammo.add_theme_font_size_override("font_size", 14)
-	_ammo.add_theme_color_override("font_color", Color(0.12, 0.1, 0.07))
-	_ammo.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_ammo.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(_ammo)
+	for i in 10:
+		var tl := Label.new()
+		tl.name = "TimerText%02d" % i
+		tl.add_theme_font_size_override("font_size", 12)
+		tl.add_theme_color_override("font_color", Color(0.95, 0.9, 0.75))
+		tl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		tl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		tl.visible = false
+		add_child(tl)
+		_timer_labels.append(tl)
+	injury = VideoStreamPlayer.new()
+	injury.name = "InjuryOverlay"
+	injury.expand = true
+	injury.loop = true
+	injury.volume_db = -80.0
+	injury.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	injury.visible = false
+	add_child(injury)
+	move_child(injury, 0)
+	_needle = Line2D.new()
+	_needle.name = "TachoNeedle"
+	_needle.width = 2.0
+	_needle.default_color = Color(0.75, 0.1, 0.05)
+	_needle.visible = false
+	add_child(_needle)
+	for key in AMMO_LINES:
+		var al := Label.new()
+		al.name = "Ammo_" + String(key)
+		al.add_theme_color_override("font_color", Color(0.12, 0.1, 0.07))
+		al.horizontal_alignment = AMMO_LINES[key][4]
+		al.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		al.clip_text = true
+		al.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		add_child(al)
+		ammo_labels[key] = al
+	_ammo = ammo_labels["hands"]
 	resized.connect(_layout)
 	_layout()
 
@@ -153,10 +215,14 @@ func _layout() -> void:
 		n.size = rr.size
 		n.pivot_offset = rr.size * 0.5
 		e["screen"] = rr
-	if elements.has("i_hands"):
-		var hr: Rect2 = elements["i_hands"]["screen"]
-		_ammo.position = Vector2(hr.position.x, hr.position.y - hr.size.y * 0.95)
-		_ammo.size = Vector2(hr.size.x * 2.05, hr.size.y * 0.9)
+	if elements.has("tabl02"):
+		var tr: Rect2 = elements["tabl02"]["screen"]
+		for key in AMMO_LINES:
+			var a: Array = AMMO_LINES[key]
+			var al: Label = ammo_labels[key]
+			al.position = tr.position + Vector2(a[0] * tr.size.x, a[1] * tr.size.y)
+			al.size = Vector2((a[2] - a[0]) * tr.size.x, (a[3] - a[1]) * tr.size.y)
+			al.add_theme_font_size_override("font_size", maxi(8, int(round(tr.size.y * float(a[5])))))
 
 
 func _show_el(nm: String, visible_: bool) -> void:
@@ -223,6 +289,12 @@ func _process(delta: float) -> void:
 			if photo.get("face", "") != want:
 				photo["face"] = want
 				(photo["node"] as TextureRect).texture = _load(want)
+	_update_injury(active, delta)
+	_timer_acc -= delta
+	if _timer_acc <= 0.0:
+		_timer_acc = 0.25           # Zeitzünder-Liste viermal je Sekunde (Baumsuche)
+		_update_timers()
+	_update_tacho(active)
 	if active == null:
 		return
 	# Entdeckung des aktiven Soldaten (farbiges Rechteck, Breite = Aufmerksamkeit der Gegner)
@@ -256,24 +328,9 @@ func _process(delta: float) -> void:
 	for i in 8:
 		_show_el("kmps_rd%02d" % i, false)
 		_show_el("kmps_bl%02d" % i, false)
-	_show_el("kul_us", false)
-	_show_el("kul_en", false)
-	# --- rechtes Feld: Waffe in der Hand / auf der Schulter ---
-	var w := active.current_weapon()
-	_icon("i_hands", w)
-	var other: Weapon = null
-	for wp in active.weapons:
-		if wp and wp != w and wp.data.slot != WeaponData.Slot.GRENADE:
-			other = wp
-			break
-	_icon("i_shoulder", other)
-	if w:
-		if w.data.slot == WeaponData.Slot.GRENADE:
-			_ammo.text = "%s ×%d" % [w.data.display_name, w.total_ammo()]
-		else:
-			_ammo.text = ("NACHLADEN…" if w.is_reloading() else "%d / %d" % [w.in_mag, w.reserve])
-	else:
-		_ammo.text = ""
+	_update_compass_dots(active, delta)
+	# --- rechtes Feld: Gegenstand in der Hand / auf der Schulter mit Munition (0x4A9530) ---
+	_update_weapon_panel(active)
 	# --- Waffenwahl oben rechts: nur kurz nach einem Wechsel sichtbar ---
 	if active != _last_active or active.current_slot != _last_slot:
 		_weapon_select_t = 2.0 if _last_active == active else 0.0
@@ -294,18 +351,266 @@ func _process(delta: float) -> void:
 		sel.position = target.position - Vector2(target.size.x * 0.03, target.size.y * 0.06)
 
 
-func _icon(nm: String, w: Weapon) -> void:
+## Kompasspunkte der Teamkameraden (hd2.exe 0x493B30/0x493D10/0x4936C0/0x493860, nur Mehrspieler (0x982100 & 7)
+## == 7): Vorlagen kul_us (blau) / kul_en (rot, Kennung des Soldaten +0x19C == 2 [P: Gegner]) bleiben ausgeblendet;
+## je Kamerad eine Kopie auf dem Ring der Vorlage (Abstand Vorlage–Kompassmitte) in Richtung des Kameraden relativ
+## zur Blickrichtung der Kamera (Winkel 0x7885B0, Lage sin/cos · Radius), Entfernung ohne Einfluss. Ein-/Ausblenden
+## 0,001 je ms (1 s); tote Kameraden verblassen und werden entfernt; eigener Soldat ohne Punkt.
+var compass_dots := {}            ## Soldier-Instanz-ID -> {node, alpha, soldier}
+
+
+func _update_compass_dots(active: Soldier, delta: float) -> void:
+	_show_el("kul_us", false)
+	_show_el("kul_en", false)
+	var mates: Array = Net.compass_mates(active) if Net.is_online and Net.has_method("compass_mates") else []
+	if not elements.has("kul_us") or not elements.has("kmpscvr"):
+		mates = []
+	var seen := {}
+	var cam := get_viewport().get_camera_3d()
+	var tpl: Rect2 = elements["kul_us"].get("screen", Rect2()) if elements.has("kul_us") else Rect2()
+	var dial: Rect2 = elements["kmpscvr"].get("screen", Rect2()) if elements.has("kmpscvr") else Rect2()
+	var center := dial.get_center()
+	var radius := tpl.get_center().distance_to(center)
+	for s in mates:
+		var key: int = (s as Soldier).get_instance_id()
+		seen[key] = true
+		if not compass_dots.has(key):
+			var tr := TextureRect.new()
+			tr.name = "CompassDot%d" % key
+			var src: TextureRect = elements["kul_us"]["node"]
+			tr.texture = src.texture
+			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tr.stretch_mode = TextureRect.STRETCH_SCALE
+			tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			add_child(tr)
+			compass_dots[key] = {"node": tr, "alpha": 1.0, "soldier": s}
+	for key in compass_dots.keys():
+		var d: Dictionary = compass_dots[key]
+		var s = d["soldier"]
+		# lebende Kameraden einblenden, sonst (tot/entfernt/Seitenwechsel) ausblenden und danach entfernen
+		var alpha: float = clampf(float(d["alpha"]) + (delta if seen.has(key) else -delta), 0.0, 1.0)
+		d["alpha"] = alpha
+		var n: TextureRect = d["node"]
+		if alpha <= 0.0 or not is_instance_valid(s):
+			n.queue_free()
+			compass_dots.erase(key)
+			continue
+		var off := Vector2.ZERO
+		if cam != null:
+			var rel: Vector3 = (s as Soldier).global_position - cam.global_position
+			var fwd := Vector3(-cam.global_basis.z.x, 0.0, -cam.global_basis.z.z).normalized()
+			var right := Vector3(cam.global_basis.x.x, 0.0, cam.global_basis.x.z).normalized()
+			var v := Vector2(rel.dot(right), rel.dot(fwd))
+			if v.length() > 1e-8:
+				v = v.normalized()
+			off = Vector2(v.x, -v.y) * radius
+		n.size = tpl.size
+		n.position = center + off - tpl.size * 0.5
+		n.modulate.a = alpha
+		n.visible = true
+
+
+func _update_injury(active: Soldier, delta: float) -> void:
+	if active != _inj_hooked:
+		if is_instance_valid(_inj_hooked) and _inj_hooked.damaged.is_connected(_on_hurt):
+			_inj_hooked.damaged.disconnect(_on_hurt)
+		_inj_hooked = active
+		if active:
+			active.damaged.connect(_on_hurt)
+	if not injury.visible:
+		return
+	injury.position = screen_rect([0.0, 0.0, 1.0, 1.0], "center").position
+	injury.size = screen_rect([0.0, 0.0, 1.0, 1.0], "center").size
+	if _inj_rising:
+		injury_alpha += delta * 4.0
+		if injury_alpha >= 0.5:
+			injury_alpha = 0.5
+			_inj_rising = false
+	else:
+		injury_alpha -= delta * 0.5
+		if injury_alpha <= 0.0:
+			injury_alpha = 0.0
+			injury.stop()
+			injury.visible = false
+	injury.modulate.a = injury_alpha
+
+
+## Treffer am aktiven Soldaten: zufälliger Platz 0–6 (rand() % 7); Platz 6 ohne Film = kein Overlay
+func _on_hurt(_amount: float = 0.0, _zone: StringName = &"") -> void:
+	show_injury(randi() % 7)
+
+
+func show_injury(slot: int) -> void:
+	var p: String = Game.movie_path("AnimHit%d" % (slot + 1)) if slot < 6 else ""
+	if p == "":
+		return
+	var vs := VideoStreamTheora.new()
+	vs.file = p
+	injury.stream = vs
+	injury_film = "AnimHit%d" % (slot + 1)
+	injury_alpha = 0.0
+	_inj_rising = true
+	injury.visible = true
+	injury.modulate.a = 0.0
+	injury.play()
+
+
+## Zeitzünder-Liste (timer-explosive00–09, von unten nach oben): laufende Zeitzünder mit Restzeit –
+## eigene Sprengladungen (PlacedCharge), Original-Sprengplätze (OrigExplosive.countdown), Sprengsätze (ChargeSite)
+func _update_timers() -> void:
+	var list: Array = []
+	for n in get_tree().get_nodes_in_group("interactables"):
+		if "countdown" in n and float(n.get("countdown")) > 0.0:
+			list.append([String(n.get("label")) if "label" in n else "Sprengsatz", float(n.get("countdown"))])
+		elif n is ChargeSite and (n as ChargeSite).armed and not (n as ChargeSite).is_destroyed:
+			list.append([(n as ChargeSite).prompt.get_slice(":", 0), (n as ChargeSite).time_left])
+	if is_inside_tree() and mission:
+		for c in mission.find_children("*", "PlacedCharge", true, false):
+			var pc := c as PlacedCharge
+			if pc.kind == "explosive" and not pc._done:
+				list.append([SAS.item_label(68) if SAS.available() else "Sprengstoff", maxf(PlacedCharge.FUSE - pc._t, 0.0)])
+	list.sort_custom(func(a, b): return float(a[1]) < float(b[1]))
+	timers_shown = list.slice(0, 10)
+	for i in 10:
+		var nm := "timer-explosive%02d" % i
+		var on := i < timers_shown.size()
+		_show_el(nm, on)
+		var tl: Label = _timer_labels[i] if i < _timer_labels.size() else null
+		if tl == null:
+			continue
+		tl.visible = on and elements.has(nm)
+		if tl.visible:
+			var r: Rect2 = elements[nm].get("screen", Rect2())
+			tl.position = r.position + Vector2(4, 0)
+			tl.size = r.size - Vector2(8, 0)
+			var t := float(timers_shown[i][1])
+			tl.text = "%s  %d:%02d" % [String(timers_shown[i][0]).substr(0, 18), int(t) / 60, int(ceil(t)) % 60]
+
+
+## Tacho im Fahrzeug (Original speed/speedNN): Ziffernblatt mit Nadel, 0–120 km/h über 240° [P]
+func _update_tacho(active: Soldier) -> void:
+	var v: Node = active.vehicle if active and "vehicle" in active else null
+	_show_el("speed", v != null)
+	_show_el("speed01", false)
+	_needle.visible = v != null and elements.has("speed")
+	if not _needle.visible:
+		return
+	var kmh := 0.0
+	if v is RigidBody3D:
+		kmh = (v as RigidBody3D).linear_velocity.length() * 3.6
+	var r: Rect2 = elements["speed"].get("screen", Rect2())
+	var c := r.get_center()
+	var ang := deg_to_rad(-210.0 + 240.0 * clampf(kmh / 120.0, 0.0, 1.0))
+	_needle.points = PackedVector2Array([c, c + Vector2(cos(ang), sin(ang)) * r.size.x * 0.38])
+	_needle.width = maxf(r.size.x * 0.025, 1.5)
+
+
+## Originalgegenstand (items.sav-Nummer) einer Waffe, -1 wenn keiner.
+static func weapon_item(w: Weapon, team: int = -1) -> int:
+	if w == null:
+		return -1
+	var it := OrigWeapons.item_for(w.data, team)
+	if it < 0:
+		it = int(ITEM_FALLBACK.get(w.data.id, -1))
+	return it
+
+
+## Gegenstand auf der Schulter: die lange Waffe, die nicht in der Hand ist (Primärwaffe, sonst Raketenwerfer).
+static func shoulder_weapon(s: Soldier) -> Weapon:
+	var w: Weapon = s.current_weapon() if s.tool == "" else null
+	for slot in [WeaponData.Slot.PRIMARY, WeaponData.Slot.LAUNCHER]:
+		var wp: Weapon = s.weapons[slot] if slot < s.weapons.size() else null
+		if wp and wp != w:
+			return wp
+	return null
+
+
+## Textzeile „%d/%d“ (0x4A9420): Schuss in der Waffe / Magazine im Inventar (Raketenwerfer: Raketen); Granate in
+## der Hand: 1 / übrige; ohne Munition (Messer, Fernglas) leer.
+static func ammo_text(w: Weapon) -> String:
+	if w == null or w.data.action == WeaponData.Action.MELEE:
+		return ""
+	if w.data.slot == WeaponData.Slot.GRENADE:
+		var n := w.total_ammo()
+		return "%d/%d" % [mini(n, 1), maxi(n - 1, 0)]
+	var mags := w.reserve
+	if w.data.magazine_size > 1:
+		mags = int(ceil(float(w.reserve) / float(w.data.magazine_size)))
+	return "%d/%d" % [w.in_mag, mags]
+
+
+func _update_weapon_panel(s: Soldier) -> void:
+	var w := s.current_weapon()
+	var hand := -1
+	var name_txt := ""
+	var hand_txt := ""
+	if s.tool != "":
+		hand = int(TOOL_ITEMS.get(s.tool, -1))
+		var n := 0
+		match s.tool:
+			"medkit":
+				n = s.medkits
+			"explosive":
+				n = s.explosives
+			"mine":
+				n = s.mines
+		hand_txt = "%d/%d" % [mini(n, 1), maxi(n - 1, 0)] if s.tool != "binoculars" else ""
+		name_txt = SAS.item_label(hand) if hand >= 0 and SAS.available() else s.tool
+	elif w:
+		hand = weapon_item(w, s.team)
+		hand_txt = ammo_text(w)
+		name_txt = SAS.item_label(hand) if hand >= 0 and SAS.available() else w.data.display_name
+		if name_txt == "" or name_txt.begins_with("#"):
+			name_txt = w.data.display_name
+	var sw := shoulder_weapon(s)
+	hands_item = hand
+	shoulder_item = weapon_item(sw, s.team)
+	_item_icon("i_hands", hands_item)
+	_item_icon("i_shoulder", shoulder_item)
+	(ammo_labels["name"] as Label).text = name_txt
+	(ammo_labels["hands"] as Label).text = hand_txt
+	(ammo_labels["shoulder"] as Label).text = ammo_text(sw)
+	var g: Weapon = s.weapons[WeaponData.Slot.GRENADE] if s.weapons.size() > WeaponData.Slot.GRENADE else null
+	(ammo_labels["grenades"] as Label).text = "%d" % (g.total_ammo() if g else 0)
+
+
+## Symbol eines Originalgegenstands (items.sav „icon“: Waffen wi_*, Hilfsmittel ii_*; Inventarbilder aus
+## orig_cache/ui/menu/items bzw. ui/hud/inventory), "" wenn keines vorhanden.
+func _item_icon_file(item: int) -> String:
+	if item < 0 or not SAS.available():
+		return ""
+	var ic := String(SAS._item_data().get(item, {}).get("icon", "")).to_lower()
+	if ic == "":
+		return ""
+	for cand in ["../menu/items/%s.png" % ic, "inventory/%s.png" % ic]:
+		if FileAccess.file_exists(dir + "/" + cand):
+			return cand
+	return ""
+
+
+func _item_icon(nm: String, item: int) -> void:
 	if not elements.has(nm):
 		return
 	var e: Dictionary = elements[nm]
 	var tr := e["node"] as TextureRect
 	if tr == null:
 		return
-	var key := String(WEAPON_ICONS.get(w.data.id, "")) if w else ""
-	if e.get("icon", "-") == key:
+	var file := _item_icon_file(item)
+	if e.get("icon", "-") == file:
 		return
-	e["icon"] = key
-	if key == "":
+	e["icon"] = file
+	if file == "":
 		tr.texture = _atlas(e["tex"], e["uv"])     # leere Blase (Original X_BUBBLE)
 	else:
-		tr.texture = _load("inventory/%s.png" % key)
+		tr.texture = _load(file)
+
+
+## Waffenwahl oben rechts (select_weapon00–02): Waffensymbole wie im rechten Feld.
+func _icon(nm: String, w: Weapon) -> void:
+	var team: int = _last_active.team if is_instance_valid(_last_active) else -1
+	_item_icon(nm, weapon_item(w, team))
+
+
+## Symboldatei eines Feldes (Tests): "" = leere Blase.
+func icon_of(nm: String) -> String:
+	return String((elements.get(nm, {}) as Dictionary).get("icon", ""))

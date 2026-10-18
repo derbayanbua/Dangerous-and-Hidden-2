@@ -32,6 +32,7 @@ var whenevers_disabled := false
 var whenever_active := {}
 var events: Array[String] = []
 var trace := false
+var paused := false             ## Akteur hat sich ergeben/ist gefangen: Skript ruht (bis OnDeath)
 
 
 func _init(compiled: LsCompiler, owner: Node3D, runtime, script_name := "") -> void:
@@ -76,6 +77,13 @@ func tick(delta: float) -> void:
 		return
 	if terminated:
 		return
+	if paused:
+		if not events.has("ONDEATH"):
+			return
+		paused = false
+		atomic = false
+		events.clear()
+		events.append("ONDEATH")
 	# Ereignisse unterbrechen (nicht während Block{})
 	if not atomic and not events.is_empty():
 		_enter(code.handlers[events.pop_front()])

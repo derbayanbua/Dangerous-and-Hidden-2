@@ -17,6 +17,9 @@ var _extract_hint_shown := false
 func _build_world() -> void:
 	farm_h = 1.0
 	light_factor = 0.8   # Abenddämmerung
+	# Übungseinsatz (eigener Entwurf): Original-Vogelkulisse, Untergrund Gras (hdmaterials.def Zeile 50 „Tráva“)
+	ambience_sound = "a_birds.wav"
+	ground_material = 50
 	alarm_bell_pos = Vector3(-6, farm_h + 3.0, -14)   # Glocke am Stabsgebäude
 	lb.flatten_zones = [
 		[Vector3(0, farm_h, -10), 34.0, 0],
