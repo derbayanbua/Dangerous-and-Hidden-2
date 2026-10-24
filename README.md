@@ -19,7 +19,7 @@ SAS-Trupp, Kampagnen in Arktis, Nordafrika, Norwegen, Burma, Alpen, Normandie un
 Tarnung, Fahrzeuge, Original-Missionsabläufe.
 
 - **Nah am Original:** Leveldesign, Missionsziele, Missionsskripte, Dialoge, Musik und Klänge sollen sich so
-  anfühlen wie damals. Die Original-Missionsskripte werden von einem eigenen neuen Compiler/Interpreter ausgeführt.
+  anfühlen wie damals. Die Original-Missionsskripte wurden von einem eigenen neuen Compiler/Interpreter ausgeführt.
 - **Quality of Life:** wo es dem Spielgefühl hilft, ist die Bedienung moderner (siehe unten).
 - **Neu geschrieben:** Engine-Code, KI, Physik, Oberfläche und Werkzeuge sind eigene Entwicklungen.
   Es wird kein Code des Originals verwendet.
