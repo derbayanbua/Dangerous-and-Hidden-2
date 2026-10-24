@@ -106,3 +106,18 @@ This project is developed with substantial assistance from generative AI tools. 
 AI-assisted contributions may contain bugs, inaccuracies, security vulnerabilities, or incomplete features. Not all generated code or content is guaranteed to have undergone comprehensive manual review or testing.
 The project remains an independent, unofficial fan-made recreation and is not affiliated with or endorsed by the original game's developers, publishers, or rights holders.
 
+## Rechteinhaber / Takedown Requests
+
+Dieses Projekt ist ein unabhängiges, nicht kommerzielles Fanprojekt und verfolgt nicht die Absicht, Urheberrechte, Markenrechte oder sonstige Rechte Dritter zu verletzen.
+
+**Sollten Rechteinhaber Bedenken hinsichtlich bestimmter Inhalte oder des Projekts haben, bitten wir um direkte Kontaktaufnahme über die GitHub Issues oder die Kontaktmöglichkeiten des Repository-Inhabers.**
+
+Berechtigte Anfragen werden ernst genommen und zeitnah geprüft. Betroffene Inhalte können bei Bedarf angepasst oder entfernt werden. Falls erforderlich, kann auch die Veröffentlichung des gesamten Projekts eingestellt werden.
+
+### Rights Holders / Takedown Requests
+
+This is an independent, non-commercial fan project and is not intended to infringe upon any copyrights, trademarks, or other intellectual property rights.
+
+**If you are a rights holder and have concerns regarding any content or the project itself, please contact us directly through GitHub Issues or the repository owner's contact information.**
+
+Legitimate requests will be reviewed promptly. Relevant content may be modified or removed, and distribution of the entire project may be discontinued if necessary.
