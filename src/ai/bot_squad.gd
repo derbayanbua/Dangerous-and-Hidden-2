@@ -43,7 +43,8 @@ static func team_soldiers(tree: SceneTree, team: int) -> Array:
 				if not _mates.has(s.team):
 					_mates[s.team] = []
 				_mates[s.team].append(s)
-	return _mates.get(team, [])
+	# Zwischenspeicher je Physikbild: bis zum nächsten Bild entfernte Soldaten (Rundenwechsel, Net.leave) auslassen
+	return (_mates.get(team, []) as Array).filter(func(s): return is_instance_valid(s))
 
 
 ## Liegt p näher als d an einem Kameraden oder an einem von einem anderen Kameraden belegten Punkt?
@@ -109,6 +110,8 @@ static func separation(b: Node, radius := SEPARATION_R) -> Vector3:
 
 ## Abstand zum nächsten Kameraden (waagerecht)
 static func nearest_mate(b: Node) -> float:
+	if not is_instance_valid(b) or not is_instance_valid(b.soldier):
+		return INF
 	var me: Soldier = b.soldier
 	var best := INF
 	for t in team_soldiers(b.get_tree(), me.team):

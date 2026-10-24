@@ -750,6 +750,7 @@ func _hits(m: Node, bots: Array) -> void:
 	tgt.max_health = 100.0
 	tgt.health = 100.0
 	var h2: Hitbox = hb_by_zone.get(&"head")
+	await seconds(1.5)          # Trefferreaktion abklingen lassen (Zonen folgen der Animation)
 	if h2:
 		var c2: Vector3 = (h2.get_child(0) as Node3D).global_position
 		var o2 := c2 - Vector3(0, 0, 30)

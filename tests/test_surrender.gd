@@ -66,22 +66,26 @@ func _run() -> void:
 	loot.interact(hale)
 	check(not hale.disguised, "Uniform eines Toten kann nicht angezogen werden")
 
-	# --- 2. Ahnungsloser Posten wird aus 8 m anvisiert -> ergibt sich ---
+	# --- 2. Moral < 20 (Original-Akteurwert, z. B. CZECH1 Ge_7 = 5): sieht den Feind unter 15 m -> ergibt sich ---
+	# Original: Moral bleibt im Einsatz konstant (re_notes_ai §1); Panik nur bei Moral < 20 oder ohne Waffe [B]
 	var e := m.enemies[1]
-	var b := reset_enemy(e, 10, 20, PI * 0.5)        # schaut nach Westen? (yaw +90° = Westen) – Spieler kommt von Osten
+	var b := reset_enemy(e, 10, 20, -PI * 0.5)      # blickt nach Osten zum Spieler
+	b.morale = 5.0
+	b.morale_initial = 5.0
 	check(b.capture_action != null, "Gegner hat die Aktion „Gefangennehmen“")
 	place(hale, 18, 20, PI * 0.5)
-	await frames(2)
-	Input.action_press("aim")
+	var per: Perception = e.get_node("Perception")
+	per.awareness[hale] = 1.0
+	per.last_known[hale] = hale.global_position
+	b.target = hale
 	var t := 0.0
 	while t < 3.0 and not b.surrendered:
-		aim_at(hale, e)
+		per.awareness[hale] = 1.0
 		await frames(6)
 		t += 0.1
-	check(b.surrendered and e.has_meta("hands_up"), "Anvisierter ahnungsloser Gegner (8 m) ergibt sich", "%.1f s" % t)
+	check(b.surrendered and e.has_meta("hands_up"), "Moral 5 + gesehener Feind (8 m): ergibt sich", "%.1f s" % t)
 	check(e.team == Soldier.TEAM_NEUTRAL, "Ergebener ist kein Ziel mehr für die Trupp-KI (neutral)")
 	check(t >= 0.3, "Hände hoch nach Original-Verzögerung (300 ms)", "%.1f s" % t)
-	Input.action_release("aim")
 	await seconds(1.0)
 	check(b.surrendered and not e.trigger and e.alive, "Ergebener bleibt stehen und schießt nicht")
 	var ca: Interactable = b.capture_action
@@ -105,49 +109,53 @@ func _run() -> void:
 	check(hale.get_meta("orig_items", []).has(129), "Uniform zählt als Originalgegenstand (_IsInInventory)")
 	check(b.uniform_taken and not ca.can_interact(m.squad.members[1]), "Uniform nur einmal vergeben")
 
-	# --- 3. Gegner im Kampf mit hoher Moral ergibt sich nicht ---
+	# --- 3. Moral 80 (Standard), bewaffnet: Anvisieren aus 8 m bewirkt nichts (keine Moraländerung im Original) ---
 	hale.disguised = false
 	var e2 := m.enemies[2]
 	var b2 := reset_enemy(e2, 10, 26, -PI * 0.5)
 	b2.morale = 80.0
 	b2.morale_initial = 80.0
-	b2.target = hale
-	b2.set_state(EnemyBrain.State.COMBAT)
 	b2.enabled = false        # nicht zurückschießen lassen, nur Ergeben-Prüfung
+	var per2: Perception = e2.get_node("Perception")
+	per2.awareness[hale] = 1.0
+	per2.last_known[hale] = hale.global_position
 	place(hale, 18, 26, PI * 0.5)
 	Input.action_press("aim")
 	for i in 20:
 		aim_at(hale, e2)
+		per2.awareness[hale] = 1.0
 		await frames(3)
 		b2._check_surrender()
 	Input.action_release("aim")
-	check(not b2.surrendered and b2._surrender_delay < 0.0, "Kämpfender Gegner (Moral 80, bewaffnet) ergibt sich nicht")
-	# niedrige Moral (z. B. nach Verlusten): auch im Kampf Panik -> ergibt sich, wenn unbewaffnet bzw. Moral < 75 Anfangswert
-	b2.morale = 10.0
-	b2.morale_initial = 60.0
-	Input.action_press("aim")
-	for i in 30:
-		aim_at(hale, e2)
+	check(not b2.surrendered and b2._surrender_delay < 0.0, "Moral 80, bewaffnet: ergibt sich nicht (auch nicht angezielt)")
+	b2.morale = 80.0
+	check(is_equal_approx(b2.morale, 80.0), "Moral bleibt konstant")
+	# Unbewaffnet: Panik (0x54B730) -> ergibt sich bei Feind unter 15 m
+	for i in e2.weapons.size():
+		if e2.weapons[i] and e2.weapons[i].data.action != WeaponData.Action.MELEE:
+			e2.weapons[i] = null
+	e2._on_weapon_switched()
+	for i in 10:
+		per2.awareness[hale] = 1.0
 		b2._check_surrender()
 		await frames(3)
-	Input.action_release("aim")
 	await frames(30)
-	check(b2.surrendered, "Panik (Moral < 20, Anfangsmoral < 75): Gegner im Kampf ergibt sich")
-	# „Sehr schwer“/Anfangsmoral ≥ 90: nie Panik
+	check(b2.surrendered, "Unbewaffneter Gegner (Moral 80) ergibt sich bei Feind unter 15 m")
+	# Anfangsmoral ≥ 90 (Flag 1, z. B. „Sehr schwer“): Moral 100 → nie Panik
 	var e3 := m.enemies[3]
-	var b3 := reset_enemy(e3, 12, 30, PI * 0.5)
+	var b3 := reset_enemy(e3, 12, 30, -PI * 0.5)
 	b3.morale = 100.0
 	b3.morale_initial = 100.0
+	b3.enabled = false
+	var per3: Perception = e3.get_node("Perception")
 	place(hale, 20, 30, PI * 0.5)
-	Input.action_press("aim")
 	for i in 20:
-		aim_at(hale, e3)
+		per3.awareness[hale] = 1.0
+		per3.last_known[hale] = hale.global_position
 		b3._check_surrender()
 		await frames(3)
-	Input.action_release("aim")
 	await frames(30)
 	check(not b3.surrendered, "Anfangsmoral ≥ 90 (Flag 1): keine Panik, kein Ergeben")
-
 	# --- 4. Beschuss eines Ergebenen: bewaffnet -> Gegenwehr ---
 	var e4 := m.enemies[4]
 	var b4 := reset_enemy(e4, 14, 34, PI * 0.5)

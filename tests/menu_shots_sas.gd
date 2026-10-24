@@ -10,7 +10,7 @@ func _run() -> void:
 	var menu := get_tree().current_scene
 	menu.show_menu("main_menu")
 	for id in ["a1_blizzard", "af1_spaghetti_airport"]:
-		menu._show_briefing(id)
+		menu._show_briefing(id, true)   # ohne Intro-/Briefing-Filme (lagen sonst über allen Kontrollbildern)
 		await shot("sas_%s_0_briefing" % id)
 		menu._open_sas_screen(id)
 		var sas: SasScreen = menu.sas_screen

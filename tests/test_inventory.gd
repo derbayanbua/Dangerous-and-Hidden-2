@@ -8,6 +8,7 @@ extends "res://tests/test_gameplay.gd"
 ## Fenster (Kontrollbilder test_output/inventory_*.png): ohne --headless, zusätzlich --shots=1
 
 const MP_PORT_OFS := 40
+const ItemOrderT := preload("res://src/ui/item_order.gd")
 const RESULT := "user://inv_client_result.txt"
 
 
@@ -369,6 +370,118 @@ func _sp() -> void:
 	await shot("prisoner")
 	ui.close()
 	hale.disguised = false
+	await _order(hale)
+
+
+## Ingame-Inventar in Aufnahmereihenfolge (Original 0x7D7390 anhängen/stapeln, 0x7D7470 aufrücken, Anzeige 0x4A2010):
+## drei Gegenstände in der Mission aufheben (echte Weltgegenstände, Benutzen), Reihenfolge im I-Menü prüfen
+func _order(hale: Soldier) -> void:
+	var ui := inv_ui()
+	var ids0 := _ids(FieldInventory.view(hale))
+	# drei Ausrüstungsgegenstände ohne Laufzeitabbild, absteigende Nummern (keine Sortierung nach Nummer erlaubt)
+	var cands: Array = []
+	for id in range(400, 100, -1):
+		if cands.size() >= 3:
+			break
+		if SAS.item(id).size() > 0 and not SAS.item_kind(id) in ["weapon", "ammo"] and not FieldInventory.TOOL_IDS.has(id) \
+				and SAS.slot_for(id) == "" and not ids0.has(id) and not ItemOrderT.is_ammo(id):
+			cands.append(id)
+	check(cands.size() == 3, "Reihenfolge: drei Testgegenstände gefunden", str(cands))
+	if cands.size() < 3:
+		return
+	for id in cands:
+		_pick(hale, int(id))
+		await frames(2)
+	var ids := _ids(FieldInventory.view(hale))
+	check(ids == ids0 + cands, "Aufgenommenes hinten angehängt, in Aufnahmereihenfolge (nicht nach Nummer)",
+		"vorher %s, nachher %s" % [ids0, ids])
+	_pick(hale, int(cands[0]))
+	await frames(2)
+	var v := FieldInventory.view(hale)
+	check(_ids(v) == ids0 + cands and SAS.count_of(v, int(cands[0])) == 2, "Gleiche Sorte zur vorhandenen Gruppe (Anzahl 2, Stelle bleibt)",
+		str(v["items"]))
+	# Anzeige im I-Menü (Taschen, dann Rucksack) in derselben Reihenfolge
+	await tap("inventory")
+	check(ui.is_open(), "I-Menü geöffnet")
+	var cols := IngameInventory.split_columns(FieldInventory.view(hale))
+	var shown: Array = []
+	for c in cols:
+		for e in c:
+			shown.append(int(e[0]))
+	var pos := cands.map(func(id): return shown.find(int(id)))
+	check(pos[0] >= 0 and pos[0] < pos[1] and pos[1] < pos[2] and pos[2] == shown.size() - 1,
+		"I-Menü zeigt die Aufnahmereihenfolge (letzter Gegenstand am Ende)", "Anzeige %s" % [shown])
+	await shot("order")
+	# Entfernen: ganze Gruppe ablegen -> Rest rückt auf; erneut aufgenommen -> ans Ende
+	var res := ui.move_item("own", "items", int(cands[1]), "own", "drop")
+	await frames(3)
+	ids = _ids(FieldInventory.view(hale))
+	check(res == "" and ids == ids0 + [cands[0], cands[2]], "Abgelegte Gruppe fehlt, Rest rückt auf", "%s %s" % [res, ids])
+	# erneut in der Welt aufgehoben (Benutzen; Ablagestapel-Weg prüft oben schon die Granaten, hier wäre der Raum
+	# durch die zusätzlich aufgehobenen Testgegenstände ggf. erschöpft)
+	var pile := FieldInventory.pile_near(hale.global_position)
+	if pile:
+		ui.open_for(hale, pile)
+		print("INFO Ablagestapel -> Taschen: '%s', Raum %.1f/%.1f" % [ui.move_item("other", "items", int(cands[1]), "own", "items"),
+			SAS.inv_space(FieldInventory.view(hale)), FieldInventory.capacity(hale, FieldInventory.view(hale))])
+		await frames(3)
+		print("INFO Reihenfolge nach Stapel: %s" % [_ids(FieldInventory.view(hale))])
+		if SAS.count_of(FieldInventory.view(hale), int(cands[1])) > 0:
+			FieldInventory.drop(hale, "items", int(cands[1]))      # für den Weltweg unten wieder ablegen
+	ui.close()
+	_pick(hale, int(cands[1]))
+	await frames(2)
+	ids = _ids(FieldInventory.view(hale))
+	check(ids == ids0 + [cands[0], cands[2], cands[1]], "Wieder aufgenommen: neue Gruppe am Ende", str(ids))
+	await tap("inventory")
+	await shot("order_after")
+	ui.close()
+	# Mehrspieler-Abgleich trägt die Reihenfolge (export_state/import_state)
+	var st := FieldInventory.export_state(hale)
+	check((st.get("order", []) as Array) == ids, "Reihenfolge im Netzabgleich enthalten")
+	await _mission_end(hale, cands)
+
+
+## Missionsende (Original 0x698F80 → 0x5A9040 → 0x5A8B50): SAS-Datensatz = aktuelles Inventar des Soldaten.
+## Aufgehobenes bleibt, Abgelegtes/Verbrauchtes fehlt, Reihenfolge der Gruppen bleibt.
+func _mission_end(hale: Soldier, cands: Array) -> void:
+	const IDX := 9999                       # Prüf-Datensatz (kein echter Kadersoldat), danach entfernt
+	var invs: Dictionary = Game.campaign.get("inv", {})
+	Game.campaign["inv"] = invs
+	invs[str(IDX)] = SAS.new_inventory()
+	SAS.add_item(invs[str(IDX)], 54, 3)     # alter Stand: soll vollständig ersetzt werden
+	var dropped := int(cands[2])
+	FieldInventory.drop(hale, "items", dropped)
+	await frames(2)
+	var med0 := hale.medkits
+	if med0 > 0:
+		hale.medkits = med0 - 1             # ein Verband verbraucht
+	var v := FieldInventory.view(hale)
+	Game._write_back_inventory(hale, IDX)
+	var inv: Dictionary = Game.sas_inventory(IDX)
+	check(SAS.count_of(inv, int(cands[0])) == 2 and SAS.count_of(inv, int(cands[1])) == 1,
+		"Missionsende: im Einsatz Aufgehobenes ins SAS-Inventar übernommen (0x5A8B50)", str(inv["items"]))
+	check(SAS.count_of(inv, dropped) == 0, "Missionsende: Abgelegtes nicht übernommen", str(inv["items"]))
+	var med := 0
+	for m in FieldInventory.MEDKITS:
+		med += SAS.count_of(inv, m)
+	check(med == hale.medkits, "Missionsende: Verbrauchtes fehlt (Verbände %d → %d)" % [med0, med], str(inv["items"]))
+	check(_ids(inv) == _ids(v) and int(inv["hands"]) == int(v["hands"]) and int(inv["shoulder"]) == int(v["shoulder"])
+		and int(inv["uniform"]) == int(v["uniform"]), "Missionsende: Hände/Schulter/Uniform/Taschen wie im Einsatz, Gruppenreihenfolge",
+		"%s / %s" % [_ids(inv), _ids(v)])
+	invs.erase(str(IDX))
+
+
+func _pick(s: Soldier, id: int) -> void:
+	var wi := OrigInteractive.OrigWorldItem.new()
+	wi.item = id
+	mission().add_child(wi)
+	wi.interact(s)
+	wi.queue_free()
+
+
+func _ids(inv: Dictionary) -> Array:
+	return (inv["items"] as Array).map(func(e): return int(e[0]))
 
 
 # --- Mehrspieler (zweiprozessig) -----------------------------------------------------------------------------
@@ -428,6 +541,8 @@ func _mp() -> void:
 	bot.set_meta("protect_until", 0)
 	bot.apply_hit(1000.0, &"torso", Net._soldiers[1], Vector3.FORWARD)
 	await frames(5)
+	print("MP-DIAG: Client-Figur %s (net_target %s), Bot-Leiche %s" % [puppet.global_position, puppet.net_target, bot.global_position])
+	get_tree().create_timer(3.0).timeout.connect(func(): print("MP-DIAG +3s: Client-Figur %s (net_target %s), Bot-Leiche %s" % [puppet.global_position, puppet.net_target, bot.global_position]))
 	check(not bot.alive and bw >= 0, "MP: Bot-Leiche neben dem Client", str(bw))
 	# Client durchsucht und nimmt die Waffe in die Hände (Anfrage an den Server)
 	var taken := func() -> bool: return _has_weapon(Net._soldiers.get(cid), bw) and int(FieldInventory.view(bot)["hands"]) != bw

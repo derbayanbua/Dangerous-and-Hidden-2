@@ -206,7 +206,11 @@ func _hand_items(m: Mission, s: Soldier) -> void:
 	check(s.tool == "explosive" and s.explosives == 1 and not _weapon_visible(s), "Ladung gelegt, weitere bleibt in der Hand")
 	s.use_tool()
 	await frames(4)
-	check(s.tool == "" and s.explosives == 0 and _weapon_visible(s), "Letzte Ladung gelegt → zurück zur Waffe")
+	var tool_after := s.tool
+	# Ablegen spielt 1,0 s „!manipulm“ (Benutzen-Einmalaktion, BodyAnim.weapon_hidden blendet die Waffe so lange aus)
+	await seconds(1.3)
+	check(tool_after == "" and s.explosives == 0 and _weapon_visible(s), "Letzte Ladung gelegt → zurück zur Waffe",
+		"tool=%s expl=%d" % [tool_after, s.explosives])
 	for ch in get_tree().get_nodes_in_group("placed_charges"):
 		ch.queue_free()               # Zeitzünder nicht abwarten
 	await frames(3)

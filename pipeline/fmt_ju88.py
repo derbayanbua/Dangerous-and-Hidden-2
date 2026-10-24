@@ -32,8 +32,8 @@ import fmt_4ds  # noqa: E402
 import fmt_5ds  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORIG = os.path.join(ROOT, "HD2_orig")
-CACHE = os.path.join(ROOT, "DangerousHidden2", "orig_cache")
+ORIG = os.environ.get("DH2_ORIG") or os.path.join(ROOT, "HD2_orig")
+CACHE = os.environ.get("DH2_CACHE") or os.path.join(ROOT, "DangerousHidden2", "orig_cache")
 MDIR = os.path.join(CACHE, "africa6")
 FPS = 25.0
 ROUND_POS = 3

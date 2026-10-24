@@ -140,5 +140,6 @@ func info_lines() -> PackedStringArray:
 		# Ergänzungen (kein Original-Text): Kill-Cam, Namen über Spielern, Trefferanzeige
 		"Kill-Cam: %s" % _yn(r.get("kill_cam", false)),
 		"Namen über Spielern: %s" % _yn(r.get("show_names", true)),
-		"Trefferanzeige: %s" % _yn(r.get("hit_indicator", true))]
+		"Trefferanzeige (Schütze): %s" % _yn(r.get("hit_indicator", true)),
+		"Treffer-Richtungsanzeige (Getroffener): %s" % _yn(r.get("hurt_indicator", true))]
 	return out

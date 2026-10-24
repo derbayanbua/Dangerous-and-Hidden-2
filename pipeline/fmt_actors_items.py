@@ -21,8 +21,8 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-ORIG = r"D:\Workspace_D\HD2_orig"
-CACHE = r"D:\Workspace_D\DangerousHidden2\orig_cache"
+ORIG = os.environ.get("DH2_ORIG") or os.path.join(os.path.dirname(HERE), "HD2_orig")
+CACHE = os.environ.get("DH2_CACHE") or os.path.join(os.path.dirname(HERE), "DangerousHidden2", "orig_cache")
 
 # --------------------------------------------------------------------------- Menschen
 # Reihenfolge der 12 u32-Werte = Akteursfelder +0xEC..+0x118 (Standardwerte aus Konstruktor 0x59BF00)
@@ -142,6 +142,10 @@ def _decode_behaviour(code, b):
             "reload_ms": _f(b, 48), "velocity": _f(b, 52), "f14": _f(b, 56),
             "f15": _f(b, 60), "f16": _f(b, 64), "f17": _f(b, 68), "u18": _i(b, 72),
             "fuse_ms": _i(b, 76),
+            # Explosionsstaerke (zotti) und -radius (m) des Geschosses: Laufzeit-Verhalten +0x5C/+0x60, gelesen in
+            # hd2.exe 0x449290 (Direkttreffer Fahrzeug: Damage(7, +0x5C)) -> 0x451990 (Explosion) [B]; Datensatz +0xDC/+0xE0
+            # (Panzerfaust 2900/6, KwK 40 4000/5,5, KwK 36 3250/6, Flak 38 1400/3; docs/re_notes_ai.md Par. 4)
+            "strength": _f(b, 88), "blast_radius": _f(b, 92),
         }
     return {"raw_u32": [_i(b, k) for k in range(0, len(b) - 3, 4)]}
 

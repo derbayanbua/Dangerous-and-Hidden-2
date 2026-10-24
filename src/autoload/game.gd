@@ -931,14 +931,15 @@ func _sas_entry(idx: int) -> Dictionary:
 
 
 ## Kaderwerte, Inventar und Ausrüstung eines SAS-Soldaten auf die Spielfigur übertragen
-## (Gesundheit wie Gegner mit Mission.HP-Skala 0,5; Magazine/Granaten/Verbände aus dem Inventar).
+## (Gesundheit wie Gegner mit OrigMission.HP_SCALE; Magazine/Granaten/Verbände aus dem Inventar).
 func apply_sas(s: Soldier, pid: String) -> void:
 	var idx := sas_index(pid)
 	var st: Dictionary = sas_states().get(str(idx), {})
 	if st.is_empty():
 		return
 	var stats: Dictionary = st["stats"]
-	s.max_health = clampf(float(stats.get("health", 500)) * 0.5, 50.0, 500.0)
+	# HumanStore-Gesundheit in zotti (Spawn 0x59EDC0 → Mensch +0xEC), Spielskala 1 = 10 zotti wie Gegner und Waffenschaden
+	s.max_health = maxf(float(stats.get("health", 500)) * OrigMission.HP_SCALE, 1.0)
 	s.health = s.max_health
 	s.skill_shooting = float(stats.get("shooting", 50))
 	s.skill_stealth = float(stats.get("stealth", 50))
@@ -948,6 +949,7 @@ func apply_sas(s: Soldier, pid: String) -> void:
 	s.medkits = int(lo["medkits"])
 	s.has_binoculars = bool(lo["binoculars"])
 	s.set_meta("orig_items", lo["items"])
+	FieldInventory.set_start_order(s, sas_inventory(idx))   # Missionsstart 0x59EB60: Reihenfolge des Ausrüstungsbildschirms
 	s.set_meta("sas", idx)
 	s.set_meta("lockpick", float(stats.get("lockpick", 50)))
 	# Feinduniform im Inventar (z. B. ALPS2 „Uniform GE03“): von Beginn an getarnt (Original:
@@ -1052,43 +1054,30 @@ func _finish_sas(members: Array, success: bool, objectives_done: int) -> Diction
 		"improved": improved, "fallen": fallen.map(func(i): return SAS.display_name(i)), "members": panels}
 
 
+## Missionsende wie Original 0x698F80 → 0x5A9040 → 0x5A8B50 (docs/re_notes_roster_inventory.md §4b): der Team-
+## Datensatz wird geleert (0x6A27C0) und vollständig aus dem aktuellen Inventar des Menschen neu geschrieben – Kopf,
+## Uniform, Rücken, Schulter, Hände, Taschen- und Rucksackgruppen in Gruppenreihenfolge. Damit bleibt alles, was der
+## Soldat am Ende trägt (auch im Einsatz Aufgehobenes); Weggeworfenes/Verbrauchtes fehlt. Einzige Ausnahme: eine
+## abgefeuerte Panzerfaust 60 (Gegenstand 38, Ladung 0) in Händen/Schulter wird nicht übernommen. Gleiche Sorten
+## werden danach zusammengefasst (0x6A2A90).
 func _write_back_inventory(s: Soldier, idx: int) -> void:
-	var inv := sas_inventory(idx)
-	var lo := SAS.to_loadout(inv)
-	# Originalnummer der Waffe je WeaponData (Hände, Schulter, Inventar)
-	var orig_of := {}
-	var wids: Array = [int(inv.get("hands", -1)), int(inv.get("shoulder", -1))]
+	var inv := FieldInventory.view(s)      # aktuelles Inventar, Reihenfolge fortgeschrieben (inv_order)
+	var hand_w: Weapon = s.current_weapon() if s.tool == "" else null
+	var sh_w: Weapon = OrigHud.shoulder_weapon(s)
+	for pair in [["hands", hand_w], ["shoulder", sh_w]]:
+		var w: Weapon = pair[1]
+		if int(inv[pair[0]]) == PANZERFAUST_60 and w != null and w.in_mag <= 0:
+			inv[pair[0]] = -1
+	var merged: Array = []
 	for e in inv["items"]:
-		wids.append(int(e[0]))
-	for wid in wids:
-		if wid >= 0 and SAS.item_kind(wid) == "weapon":
-			var wd := WeaponDB.from_orig(wid)
-			if wd and not orig_of.has(wd.id):
-				orig_of[wd.id] = wid
-	for w in s.weapons:
-		if w == null or not orig_of.has(w.data.id):
-			continue
-		var wid: int = orig_of[w.data.id]
-		if w.data.slot == WeaponData.Slot.GRENADE:
-			for e in inv["items"]:
-				if int(e[0]) == wid:
-					e[1] = w.in_mag + w.reserve
-		else:
-			var ammo := SAS.ammo_of(wid)
-			for e in inv["items"]:
-				if int(e[0]) == ammo:
-					e[1] = int(ceil(float(w.reserve) / maxf(w.data.magazine_size, 1)))
-	# verbrauchter Sprengstoff / Minen
-	for pair in [["explosives", [68, 67]], ["mines", [70, 71]]]:
-		var used := int(lo.get(pair[0], 0)) - int(s.get(pair[0]))
-		for id in pair[1]:
-			if used > 0:
-				used -= SAS.remove_item(inv, id, used)
-	var used_med := int(lo["medkits"]) - s.medkits
-	for m in SAS.MEDKITS:
-		if used_med > 0:
-			used_med -= SAS.remove_item(inv, m, used_med)
-	inv["items"] = inv["items"].filter(func(e): return int(e[1]) > 0)
+		if int(e[1]) > 0:
+			SAS.add_item({"items": merged}, int(e[0]), int(e[1]))
+	inv["items"] = merged
+	sas_inventory(idx)                     # legt campaign["inv"] an, falls nötig
+	campaign["inv"][str(idx)] = inv
+
+
+const PANZERFAUST_60 := 38      ## items.sav „Panzer faust 60“ (Sonderfall in 0x5A8B50)
 
 
 ## Einsatzfähiger Trupp: überlebender Stammkader, aufgefüllt aus der Reserve.

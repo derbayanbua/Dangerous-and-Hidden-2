@@ -69,12 +69,13 @@ func _run() -> void:
 	check(gg != null and gg.team == Soldier.TEAM_AXIS, "Torwache Gate_Guard gespawnt")
 	var ggw: Array = gg.weapons.map(func(w): return String(w.data.id) if w else "")
 	check(ggw.has("kar98k") and ggw.has("m24"), "Torwache: Karabiner 98K + Stielhandgranaten (items.dat)", str(ggw))
-	check(is_equal_approx(gg.max_health, 100.0) and is_equal_approx(gg.get_node("Perception").sight_range, 35.0),
+	# actors.bin 200 zotti; Spielskala 1 LP = 10 zotti wie Waffenschaden (OrigMission.HP_SCALE, re_notes_weapons §10b)
+	check(is_equal_approx(gg.max_health, 200.0 * OrigMission.HP_SCALE) and is_equal_approx(gg.get_node("Perception").sight_range, 35.0),
 		"Torwache: Original-HP 200, Sichtweite 35 m (actors.bin)", "%.0f HP, %.0f m" % [gg.max_health, gg.get_node("Perception").sight_range])
 	# Schwierigkeitsgrad des Profils wirkt wie im Original auf Gegnerwerte (leicht ×0,7)
 	Game.profile["difficulty"] = 1
 	m._apply_orig_params(gg, "Gate_Guard")
-	check(is_equal_approx(gg.max_health, 70.0), "Schwierigkeit „leicht“: Torwache 200×0,7 HP", "%.1f HP" % gg.max_health)
+	check(is_equal_approx(gg.max_health, 200.0 * 0.7 * OrigMission.HP_SCALE), "Schwierigkeit „leicht“: Torwache 200×0,7 HP", "%.1f HP" % gg.max_health)
 	Game.profile["difficulty"] = 3
 	m._apply_orig_params(gg, "Gate_Guard")
 	var kan := rt.actors.get("KANISTERNIK") as Soldier
@@ -92,6 +93,16 @@ func _run() -> void:
 	rt.end_cutscene()   # Überspringen wie per Leertaste
 	await seconds(2.0)
 	check(not rt.in_cutscene and m.controller.input_enabled, "Zwischensequenz übersprungen, Steuerung frei")
+	# Alle Kommandos nach dem Intro am Boden (früher: FRM_TeleportNearFrameBack(padak) setzte den Anführer zum Fallschirm
+	# im Flugzeug, y ≈ 391)
+	var air: Array = []
+	var space := m.get_viewport().world_3d.direct_space_state
+	for s in m.squad.members:
+		var p: Vector3 = (s as Node3D).global_position
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(p + Vector3.UP * 1.0, p + Vector3.DOWN * 600.0, 1))
+		if hit.is_empty() or p.y - (hit.position as Vector3).y > 1.0:
+			air.append("%s y=%.1f Boden=%s" % [s.name, p.y, "-" if hit.is_empty() else "%.1f" % (hit.position as Vector3).y])
+	check(air.is_empty() and m.squad.members.size() == 4, "Alle 4 Kommandos nach dem Intro am Boden (±1 m)", str(air))
 	var active := 0
 	for o in m.objectives:
 		if o.state != Objective.State.INACTIVE:
@@ -124,17 +135,35 @@ func _run() -> void:
 	hale.global_position = rebel.global_position + Vector3(0, 1.0, 3.5)
 	await seconds(12.0)
 	check(said.any(func(t): return t == rt.text(1990214)), "Begrüßungsdialog: " + rt.text(1990214))
-	# 10 s beobachten: welchen Clip spielt Sygurd, während er sich bewegt?
-	var clip_while_leading := ""
+	# 10 s beobachten: welche Clips spielt Sygurd, während er sich bewegt? Seit BodyAnim (18.10.2026) sind das die
+	# Original-Bewegungsclips aus TABLES\anim.sav (Haltung × Richtung × Gangart, z. B. stehend gehen „m_chuzeZBr41“)
+	# statt der alten Sammelclips walk/run/sprint. Das Skript schaltet beim Losgehen von Hocken auf Stehen
+	# (HUMAN_SETMODE_Crouch → _Stand); dabei läuft einmalig der Original-Übergang „!dr-st3“ (m_drst3) – zulässig nur
+	# als laufende Übergangs-Einmalaktion, danach muss der Bewegungsclip der aktuellen Haltung folgen.
+	var move_clips := {}
+	for st in (BodyAnim.table().get("move", {}) as Dictionary):
+		for d in (BodyAnim.table()["move"][st] as Dictionary):
+			for c in BodyAnim.table()["move"][st][d]:
+				move_clips[String(c)] = int(st)
+	var moving_clips: Array[String] = []
+	var bad_clips: Array[String] = []
 	var last := rebel.global_position
 	for i in 20:
 		await seconds(0.5)
-		if rebel.global_position.distance_to(last) > 0.3 and clip_while_leading == "":
-			clip_while_leading = rebel.model._orig_clip
+		var bd: BodyAnim = rebel.model.body
+		var c := String(rebel.model._orig_clip)
+		if rebel.global_position.distance_to(last) > 0.3:
+			if bd and bd.oneshot != "" and bd.oneshot_kind == "transition" and c == bd.oneshot:
+				pass                                   # Haltungswechsel-Übergang (Einmalaktion) beim Losgehen
+			elif move_clips.get(c, -1) == rebel.stance:
+				moving_clips.append(c)
+			else:
+				bad_clips.append("%s(Haltung %d)" % [c, rebel.stance])
 		last = rebel.global_position
 	var moved := rebel.global_position.distance_to(rpos)
 	check(moved > 3.0, "Sygurd führt los (Wegpunkte AlBert_* / Rebel_*)", "%.1f m" % moved)
-	check(clip_while_leading in ["walk", "run", "sprint"], "Original-Laufanimation während der Bewegung", clip_while_leading)
+	check(moving_clips.size() >= 3 and bad_clips.is_empty(), "Original-Laufanimation während der Bewegung",
+		"Bewegungsclips %s, andere %s" % [str(moving_clips.slice(0, 3)), str(bad_clips)])
 	check(not m.finished, "Mission läuft (Ziel 1 nicht verfehlt)", str(Game.last_result.get("reason", "")))
 
 	# --- Weitere Original-Akteure: Wachhund, LKW, MG-Stellung ---

@@ -144,7 +144,7 @@ def _wav_tables():
     global _WAV_TABLES
     if _WAV_TABLES is None:
         import json
-        p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wav_tables.json")
+        p = os.environ.get("DH2_WAV_TABLES") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "wav_tables.json")
         _WAV_TABLES = {int(k): v for k, v in json.load(open(p)).items()}
     return _WAV_TABLES
 

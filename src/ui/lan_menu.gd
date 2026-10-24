@@ -30,6 +30,7 @@ var _vehicles: CheckBox
 var _names: CheckBox               ## Ergänzung: Namen über Spielern erlauben (shownames)
 var _hits: CheckBox                ## Ergänzung: Trefferanzeige erlauben (hitindicator)
 var _killcam: CheckBox             ## Ergänzung: Kill-Cam (killcam; Standard nur Deathmatch)
+var _hurts: CheckBox               ## Ergänzung: Treffer-Richtungsanzeige beim Getroffenen (hurtindicator)
 var _port: SpinBox
 var _voice: OptionButton
 var _maplist_mode: OptionButton
@@ -86,6 +87,7 @@ func _apply_style_defaults() -> void:
 	_vehicles.button_pressed = d["allow_vehicles"]
 	_names.button_pressed = d["show_names"]
 	_hits.button_pressed = d["hit_indicator"]
+	_hurts.button_pressed = d["hurt_indicator"]
 	_killcam.button_pressed = d["kill_cam"]
 	_fill_map_choice()
 
@@ -153,9 +155,7 @@ func map_rotation() -> Array:
 
 
 func _check(g: GridContainer, label: String, val: bool) -> CheckBox:
-	var l := Label.new()
-	l.text = label
-	g.add_child(l)
+	_label(g, label)
 	var c := CheckBox.new()
 	c.button_pressed = val
 	g.add_child(c)
@@ -185,8 +185,11 @@ func open() -> void:
 	cols.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	v.add_child(cols)
 	# --- links: Server erstellen ---
+	# Beide Spalten teilen die Breite (passt ab 1280 px Basisbreite, 4:3 bis 21:9)
 	var left := VBoxContainer.new()
 	left.custom_minimum_size.x = 460
+	left.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	left.size_flags_stretch_ratio = 1.0
 	cols.add_child(left)
 	_head("SERVER ERSTELLEN", left)
 	# Server-Regeln wie im Original-Servermenü (T2351–2382, Bereiche 0x629EE0) in einer Bildlaufliste
@@ -208,6 +211,12 @@ func open() -> void:
 	_mode = _option(g, SAS.text(2353, "Stil auswählen:").trim_suffix(":"))
 	for i in Net.MODE_NAMES.size():
 		_mode.add_item(Net.MODE_NAMES[i], i)
+	# Standard = erste Original-MP-Karte (lokale eigene Karten stehen vorne in der Liste)
+	for i in _map.item_count:
+		var mm: Dictionary = Game.MISSIONS[String(_map.get_item_metadata(i))]
+		if mm.get("mp_mode") != null and String(mm.get("orig", "")) != "":
+			_map.select(i)
+			break
 	_map.item_selected.connect(func(_i): _sync_mode())
 	_mode.item_selected.connect(func(_i): _apply_style_defaults())
 	_cls = _option(g, "Klasse")
@@ -241,7 +250,10 @@ func open() -> void:
 	_autorestart = _check(g, "AUTORESTART (dedizierter Server)", false)
 	# Ergänzungen (unter den Original-Feldern, damit deren Lage im Formular gleich bleibt)
 	_names = _check(g, "NAMEN ÜBER SPIELERN ERLAUBEN", true)
-	_hits = _check(g, "TREFFERANZEIGE ERLAUBEN", true)
+	_hits = _check(g, "TREFFERANZEIGE SCHÜTZE ERLAUBEN", true)
+	_hits.tooltip_text = "Hitmarker, Treffermeldung und Treffergeräusch für den Schützen (hitindicator)"
+	_hurts = _check(g, "TREFFER-RICHTUNG GETROFFENER", true)
+	_hurts.tooltip_text = "Roter Richtungsbogen beim Getroffenen (hurtindicator)"
 	_killcam = _check(g, "KILL-CAM", true)
 	_voice = _option(g, SAS.text(2375, "Codec für Voice-Chat"))
 	for c in Net.VOICE_CODECS:
@@ -250,10 +262,8 @@ func open() -> void:
 	for i in 5:
 		_maplist_mode.add_item(SAS.text(20200 + i, "Liste %d" % i), i)
 	_maplist_mode.item_selected.connect(func(_i): _fill_map_choice())
-	var srv_l := Label.new()
-	srv_l.text = SAS.text(2380, "Server-Typ:")
-	g.add_child(srv_l)
-	var srv := HBoxContainer.new()
+	_label(g, SAS.text(2380, "Server-Typ:"))
+	var srv := VBoxContainer.new()
 	g.add_child(srv)
 	_inet = CheckBox.new()
 	_inet.name = "InternetServer"
@@ -267,7 +277,7 @@ func open() -> void:
 	_map_choice = ItemList.new()
 	_map_choice.name = "MapChoice"
 	_map_choice.select_mode = ItemList.SELECT_MULTI
-	_map_choice.custom_minimum_size = Vector2(440, 120)
+	_map_choice.custom_minimum_size = Vector2(0, 120)
 	_map_choice.tooltip_text = SAS.text(2354, "Liste der verfügbaren Karten:")
 	_map_choice.multi_selected.connect(func(_i, _s): _save_map_choice())
 	left.add_child(_map_choice)
@@ -287,7 +297,7 @@ func open() -> void:
 	_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_list.item_activated.connect(func(i): _join_listed(i))
 	right.add_child(_list)
-	var row := HBoxContainer.new()
+	var row := HFlowContainer.new()
 	right.add_child(row)
 	UIKit.button("Beitreten", func():
 		var sel := _list.get_selected_items()
@@ -307,7 +317,7 @@ func open() -> void:
 				Net.remove_favorite(String(_list.get_item_metadata(i).get("key", "")))
 			_refresh(), row).name = "RemoveFavorite"
 	# Original-Knöpfe SERVER-FILTER (T2309, server filters.4ds) und SPIEL-INFO (T2312, gameinfo.4ds)
-	var row2 := HBoxContainer.new()
+	var row2 := HFlowContainer.new()
 	right.add_child(row2)
 	UIKit.button(SAS.text(2309, "SERVER-FILTER"), open_filter, row2).name = "FilterButton"
 	UIKit.button(SAS.text(2312, "SPIEL-INFO"), open_game_info, row2).name = "GameInfoButton"
@@ -327,7 +337,15 @@ func open() -> void:
 	_ip = _line(g2, SAS.text(2308, "SERVER-IP EINGEBEN") + " (IP/Name[:Port])", "127.0.0.1")
 	_ip.name = "IpEdit"
 	_join_pw = _line(g2, "Passwort", "")
+	g2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UIKit.button("Per IP beitreten", func(): _do_join(_ip.text.strip_edges(), Net.PORT), right)
+	# Knöpfe der rechten Spalte schmaler (UIKit 320 px) – Zeilen brechen bei Bedarf um
+	for r in [row, row2]:
+		for b in r.get_children():
+			if b is Button:
+				b.custom_minimum_size.x = 250
+				b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				b.clip_text = true
 	if internet:
 		var hint := Label.new()
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -337,6 +355,8 @@ func open() -> void:
 		right.add_child(hint)
 	_status = Label.new()
 	_status.name = "Status"
+	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_status.custom_minimum_size.x = 200
 	_status.add_theme_color_override("font_color", UIKit.ACCENT)
 	v.add_child(_status)
 	UIKit.button("Zurück", func():
@@ -409,35 +429,49 @@ func _close_player_setup() -> void:
 func _head(t: String, parent: Node) -> void:
 	var l := Label.new()
 	l.text = t
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size.x = 120
 	l.add_theme_color_override("font_color", UIKit.ACCENT)
 	parent.add_child(l)
 
 
-func _line(g: GridContainer, label: String, val: String) -> LineEdit:
+## Formular-Beschriftung: feste Breite mit Zeilenumbruch, damit lange Texte das Menü nicht verbreitern
+func _label(g: Control, label: String) -> Label:
 	var l := Label.new()
 	l.text = label
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.custom_minimum_size.x = LABEL_W
+	l.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	g.add_child(l)
+	return l
+
+
+const LABEL_W := 230
+const FIELD_W := 230
+
+
+func _line(g: GridContainer, label: String, val: String) -> LineEdit:
+	_label(g, label)
 	var e := LineEdit.new()
 	e.text = val
-	e.custom_minimum_size.x = 230
+	e.custom_minimum_size.x = FIELD_W
 	g.add_child(e)
 	return e
 
 
 func _option(g: GridContainer, label: String) -> OptionButton:
-	var l := Label.new()
-	l.text = label
-	g.add_child(l)
+	_label(g, label)
 	var o := OptionButton.new()
-	o.custom_minimum_size.x = 230
+	o.custom_minimum_size.x = FIELD_W
+	o.fit_to_longest_item = false
+	o.clip_text = true
 	g.add_child(o)
 	return o
 
 
 func _spin(g: GridContainer, label: String, lo: int, hi: int, val: int) -> SpinBox:
-	var l := Label.new()
-	l.text = label
-	g.add_child(l)
+	_label(g, label)
 	var s := SpinBox.new()
 	s.min_value = lo
 	s.max_value = hi
@@ -547,7 +581,7 @@ func server_settings() -> Dictionary:
 		"warmup_s": int(_warm.value), "allow_respawn": _allow_resp.button_pressed, "team_balance": _balance.button_pressed,
 		"third_person": _third.button_pressed, "spawn_protect_s": int(_protect.value), "inverse_damage": int(_inverse.value),
 		"falling_damage": _falling.button_pressed, "allow_vehicles": _vehicles.button_pressed,
-		"show_names": _names.button_pressed, "hit_indicator": _hits.button_pressed, "kill_cam": _killcam.button_pressed,
+		"show_names": _names.button_pressed, "hit_indicator": _hits.button_pressed, "hurt_indicator": _hurts.button_pressed, "kill_cam": _killcam.button_pressed,
 		"voice_codec": _voice.get_selected_id(), "map_list": map_rotation(), "internet": _inet.button_pressed,
 		"dedicated": _ded.button_pressed, "admin_login": _admin_login.text.strip_edges(), "admin_pass": _admin_pass.text,
 		"max_ping": int(_max_ping.value), "max_freq": int(_max_freq.value), "max_inactivity": int(_max_idle.value),

@@ -56,11 +56,12 @@ func _run() -> void:
 		return
 	# der Server legt die Bot-Leiche neben den Client; nur bei zu großem Abstand heranrücken
 	var d0 := me.global_position.distance_to(corpse.global_position)
-	print("INV-CLIENT: Abstand zur Leiche %.1f m" % d0)
+	print("INV-CLIENT: Abstand zur Leiche %.1f m (ich %s, Leiche %s, Leichen-net_target %s)" % [d0, me.global_position, corpse.global_position, corpse.net_target])
 	if d0 > 2.2:
 		me.global_position = corpse.global_position + Vector3(0.8, 0.3, 0.0)
 		me.velocity = Vector3.ZERO
 	await get_tree().create_timer(2.0).timeout
+	print("INV-CLIENT: nach 2 s ich %s, Leiche %s" % [me.global_position if is_instance_valid(me) else Vector3.INF, corpse.global_position])
 	if not is_instance_valid(me) or not me.alive:
 		me = Net._soldiers.get(Net.my_id())
 		print("INV-CLIENT: eigener Soldat ersetzt/gestorben")

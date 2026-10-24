@@ -36,8 +36,11 @@ var _player_names: Array = []    ## Original-Namen der Spielerfiguren (Akteurtyp
 const WEAPON_MAP := [["98", "kar98k"], ["MP 40", "mp40"], ["MP40", "mp40"], ["P08", "p08"],
 	["Parabellum", "p08"], ["MP 44", "stg44"], ["StG", "stg44"], ["Thompson", "thompson"], ["Sten", "sten"],
 	["Bren", "bren"], ["Enfield", "enfield"], ["Garand", "garand"], ["Colt", "colt"]]
-## Gesundheitsskala: Original-Standardgegner 200 HP = 100 HP im Spiel
-const HP_SCALE := 0.5
+## Gesundheitsskala: 1 Lebenspunkt im Spiel = 10 Original-Einheiten („zotti“), dieselbe Skala wie der Waffenschaden
+## (items.sav Schaden/10, WeaponDB) und der Mehrspieler (100 = 1000). hd2.exe Human::Damage 0x5A1C90 zieht den Geschoss-
+## schaden in zotti direkt von Gesundheit +0xEC ab (actors.bin Feinde 150–500, SAS-Kader ~500–600) [B]. Vorher 0,5:
+## Gegner hielten im Einzelspieler das Fünffache aus (K98k-Rumpftreffer 488 tötet im Original einen 300er-Gegner).
+const HP_SCALE := 0.1
 
 
 func _build_world() -> void:
@@ -118,6 +121,22 @@ func _spawn_actors() -> void:
 			_spawn_orig_dog(nm, model, t2)
 		elif typ == 4:
 			_spawn_orig_car(nm, model, t2)
+		elif typ == 20 and model != "":
+			_spawn_orig_submarine(nm, model, t2, PackedByteArray(a.get("params", [])))
+		elif typ == 36 and model != "":
+			# Angreifendes Flugzeug (AirAttack, AFRICA1/2): fliegt und schießt nach hd2.exe (src/orig/orig_air_attack.gd)
+			var aa: Node3D = load("res://src/orig/orig_air_attack.gd").new()
+			aa.name = nm.validate_node_name()
+			var aparams := {}
+			var ij = LsRuntime._read_json(orig.mission_dir + "/interactive.json")
+			if typeof(ij) == TYPE_DICTIONARY:
+				for e in ij.get("air_attacks", []):
+					if String(e.get("name", "")) == nm:
+						aparams = e.get("params", {})
+			aa.setup(self, runtime, orig.model_instance(model), aparams, HP_SCALE)
+			dynamic_root.add_child(aa)
+			aa.global_transform = t2
+			runtime.register_actor(nm, aa)
 		else:
 			# Kisten, MG-Stellungen u. a.: statische Originalmodelle;
 			# Akteure ohne Modell (z. B. Sprach-Dummies) als leere Frames
@@ -130,6 +149,12 @@ func _spawn_actors() -> void:
 			if model != "" and typ in [5, 7, 9, 13, 14, 15, 20, 21, 22, 23, 25, 28]:
 				orig._add_collision(inst)     # z. B. Normandie-Kanonen (Typ 25) müssen Treffer erhalten
 			runtime.register_actor(nm, inst)
+			if typ == 14:
+				# Zug (CZECH1 „lokotka“): Wagen folgen der Lok (src/vehicles/orig_train.gd, re_notes_ai §5)
+				var tr = load("res://src/vehicles/orig_train.gd").new()
+				tr.name = "Train_" + nm.validate_node_name()
+				dynamic_root.add_child(tr)
+				tr.setup(inst, runtime.find_frame, PackedByteArray(a.get("params", [])))
 	# Interaktive Originalakteure (Türen, Leitern, Schalter, Sprengplätze …; interactive.json)
 	interactive = OrigInteractive.new()
 	interactive.name = "OrigInteractive"
@@ -190,12 +215,15 @@ func water_level_at(pos: Vector3) -> float:
 	return orig.water_level_at(pos) if orig else NAN
 
 
-## Weltlage eines actors.bin-Akteurs: die Position ist relativ zum Elternframe. Sektoren liegen im Ursprung;
-## andere Eltern (z. B. CZECH5 GE_8 unter „Yelbld143“, Straßenobjekte) werden einbezogen.
+## Weltlage eines actors.bin-Akteurs: die Position ist relativ zum Elternframe (z. B. CZECH5 GE_8 unter „Yelbld143“,
+## Straßenobjekte). Auch Sektoren: nur „Primary sector“ liegt im Ursprung, Raumsektoren aus scene.4ds haben eine eigene
+## Lage (ALPS2 „sector B01_k_01“ t=(-12.7, 4.9, -19.9), 90° um X; Agentin AL2_agent lokal (-1.68, -3.07, 1.90) mit
+## gekippter Drehung → erst mit der Sektorlage aufrecht auf dem Boden y≈3,05; vorher fiel sie aus y=-3 ins Leere).
+## Gleiches Muster u. a. NORMANDY N*-Wachen unter m_SECT_help_*, CZECH2 „sector venek“, NORMANDY2 M_banka_01.
 func actor_xform(a: Dictionary) -> Transform3D:
 	var t := OrigLevel.xform(a)
 	var par := String(a.get("parent", ""))
-	if par == "" or par.to_lower().contains("sector"):
+	if par == "" or par.to_lower() == "primary sector":
 		return t
 	var pn: Node3D = orig.nodes.get(par)
 	if pn == null:
@@ -261,7 +289,7 @@ func _apply_orig_params(s: Soldier, nm: String) -> void:
 	var shooting := float(p.get("shooting", 64))
 	if enemy:
 		shooting = 100.0 if diff >= 4 else shooting * k
-	s.max_health = clampf(hp * HP_SCALE, 25.0, 500.0)
+	s.max_health = maxf(hp * HP_SCALE, 1.0)
 	s.health = s.max_health
 	var per: Perception = s.get_node_or_null("Perception")
 	if per:
@@ -285,7 +313,7 @@ func _spawn_orig_dog(nm: String, model: String, t: Transform3D) -> void:
 		d.health = float(dp.get("health", 250)) * HP_SCALE
 		d.sight_range = float(dp.get("sight_range", 20))
 		d.hear_range = float(dp.get("hear_range", 50))
-		d.bite_damage = float(dp.get("bite_damage", 50)) * 0.28
+		d.bite_damage = float(dp.get("bite_damage", 50)) * HP_SCALE     # Biss +0x4A4 in zotti (re_notes_actors_items §3)
 	var vis: Node3D = orig.model_instance(model)
 	if vis:
 		vis.rotation.y = PI     # LS3D-Modelle blicken nach -Z (nach Z-Spiegelung), Dog läuft entlang +Z
@@ -326,7 +354,10 @@ func _spawn_orig_car(nm: String, model: String, t: Transform3D) -> void:
 	for it in actor_params.get(nm, {}).get("inventory", []):
 		if String(it.get("kind", "")) == "ammo":
 			v.ammo_items.append(int(it.get("item", -1)))
-	# Strukturpunkte (actors.bin-Fahrzeugblock nicht dekodiert) [E]: Panzer 3000, Halbkette 1200, sonst 600
+	# Rohr-Parameter (BARRELnn_00) aus dem Modell, Schadensmodell DM<Modell>.4ds (tools/fmt_vehicle_dm.py) [B]
+	v.model_path = orig.mission_dir + "/models/" + model.to_lower() + ".glb"
+	v.dm_path = orig.mission_dir + "/models/dm_" + model.to_lower() + ".glb"
+	# Strukturpunkte nur noch ohne Schadensmodell (alter Cache) [E]: Panzer 3000, Halbkette 1200, sonst 600
 	var ml := model.to_lower()
 	if ml.contains("tiger") or ml.contains("sherman") or ml.contains("panzer") or ml.contains("panther") or ml.contains("isu"):
 		v.max_health = 3000.0
@@ -351,6 +382,33 @@ func _spawn_orig_car(nm: String, model: String, t: Transform3D) -> void:
 	runtime.register_actor(nm, v)
 
 
+## Kleinst-U-Boot (Akteurtyp 20 „Submarine“, NORWAY/NORMANDY): fahrbar mit zwei Sitzen (src/vehicles/orig_submarine.gd).
+## Parameter: Chunk 1 f32 = Höchsthöhe +0xD8 (NORWAY −1,0, NORMANDY −6,8) [B Daten, hd2.exe 0x5E15E0]
+func _spawn_orig_submarine(nm: String, model: String, t: Transform3D, raw: PackedByteArray) -> void:
+	var v = load("res://src/vehicles/orig_submarine.gd").new()
+	v.name = nm.validate_node_name()
+	v.persistent_id = nm
+	v.vehicle_name = "Kleinst-U-Boot"
+	var p := 0
+	while p + 6 <= raw.size():
+		var id := raw.decode_u16(p)
+		var ln := raw.decode_u32(p + 2)
+		if ln < 6 or p + ln > raw.size():
+			break
+		if id == 1 and ln >= 10:
+			v.max_height = raw.decode_float(p + 6)
+		p += ln
+	var vis: Node3D = orig.model_instance(model)
+	if vis:
+		vis.rotation.y = PI
+		v.custom_visual = vis
+	v.model_path = orig.mission_dir + "/models/" + model.to_lower() + ".glb"
+	dynamic_root.add_child(v)
+	v.global_position = t.origin
+	v.global_rotation.y = t.basis.get_euler().y + PI
+	runtime.register_actor(nm, v)
+
+
 ## Blutbad-Ziel „Töten Sie die Feinde“ (aktiviert nur im Spieltyp Blutbad über *_obj_krvak.scr)
 const CARNAGE_OBJECTIVE_TEXT := 6063
 
@@ -365,9 +423,12 @@ func _setup_objectives() -> void:
 		entry = db.get("missions", {}).get(orig_mission.to_upper(), {})
 	if not entry.is_empty():
 		var objs: Array = entry.get("objectives", [])
+		var carnage_idx := _carnage_objective_indices()
 		for i in objs.size():
 			var tid := int(objs[i].get("text_id", 0))
-			if tid == CARNAGE_OBJECTIVE_TEXT and not Game.is_carnage():
+			# Text 6063 ist auch ein normales Ziel (AFRICA3 Ziel 2 „Töten Sie die Feinde“, af3a_obj.scr setzt es in jedem
+			# Spieltyp): nur der Index aus dem Blutbad-Skript (*_obj_carnage/_krvak.scr) entfällt; ohne solches Skript alle
+			if tid == CARNAGE_OBJECTIVE_TEXT and not Game.is_carnage() and (carnage_idx.is_empty() or carnage_idx.has(i + 1)):
 				continue     # Spieltyp Kampagne/Einzelgänger: Blutbad-Ziel entfällt (Blutbad: *_obj_krvak.scr aktiviert es)
 			var o := add_objective(StringName("o%d" % (i + 1)), t.call(tid), bool(objs[i].get("optional", false)))
 			o.state = Objective.State.INACTIVE
@@ -387,6 +448,30 @@ func _setup_objectives() -> void:
 		orig_objectives[i] = o.id
 	if text_title > 0:
 		Events.say(t.call(text_title) + " – " + t.call(text_place_time), 6.0)
+
+
+## Zielindizes, die die Blutbad-Skripte des Einsatzes setzen (auch auskommentiert: AFRICA1/AFRICA3 haben das
+## Blutbad-Ziel nur noch als Kommentar, der Index steht trotzdem fest)
+func _carnage_objective_indices() -> Array:
+	var out := []
+	if orig == null:
+		return out
+	var dir := DirAccess.open(orig.mission_dir + "/scripts")
+	if dir == null:
+		return out
+	var re := RegEx.create_from_string("(?i)SetObjectiveStatus\\s*\\(\\s*(\\d+)")
+	for f in dir.get_files():
+		var lf := String(f).to_lower()
+		if not (lf.contains("carnage") or lf.contains("krvak")):
+			continue
+		var fa := FileAccess.open(orig.mission_dir + "/scripts/" + f, FileAccess.READ)
+		if fa == null:
+			continue
+		for mm in re.search_all(fa.get_as_text()):
+			var idx := int(mm.get_string(1))
+			if not out.has(idx):
+				out.append(idx)
+	return out
 
 
 func _exit_tree() -> void:

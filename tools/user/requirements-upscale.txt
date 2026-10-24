@@ -1,0 +1,2 @@
+# Zusätzlich für das KI-Hochskalieren (PyTorch selbst installiert das Menü passend für CPU oder CUDA)
+spandrel>=0.4

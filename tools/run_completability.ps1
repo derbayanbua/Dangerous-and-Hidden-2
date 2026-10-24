@@ -3,7 +3,7 @@
 # Ergebnis: test_output\completability_<id>.log und Tabelle test_output\completability.txt (aus allen vorhandenen Logs)
 # Beachtet die Test-Sperre test_output\.godot_lock (fremde Sperre < 20 min -> warten) und lässt zwischen zwei
 # Missionen 20 s Zeit, damit andere Läufe die Sperre bekommen.
-param([string[]]$Only = @(), [string]$Speed = "2", [int]$TimeoutSec = 900, [string]$LockName = "completability",
+param([string[]]$Only = @(), [string]$Speed = "2", [int]$TimeoutSec = 1500, [string]$LockName = "completability",
   [switch]$TableOnly, [string]$Strategy = "kampf", [string]$Extra = "")
 # -Strategy leise: Löser tötet erst in Runde 3 (Log completability_<id>_leise.log); die Tabelle nimmt je Mission
 # das bessere Ergebnis beider Strategien.

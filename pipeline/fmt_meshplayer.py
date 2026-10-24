@@ -5,7 +5,7 @@ hd2.exe lädt den Film als Videotextur (GameMovie\\%s, 0x4847E4) und legt ihn au
 Aufruf: pyenv\\Scripts\\python.exe -I fmt_meshplayer.py [MISSION ...]   (ohne Angabe: alle Missionen im Cache)
 """
 import json, os, struct, sys
-sys.path.insert(0, r"D:\Workspace_D\tools")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 import convert_mission as cm
 

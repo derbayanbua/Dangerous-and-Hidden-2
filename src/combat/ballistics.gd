@@ -122,6 +122,18 @@ static func _priority_zone(space: PhysicsDirectSpaceState3D, hb: Hitbox, at: Vec
 	return best
 
 
+## Einzelspieler (hd2.exe Projektil 0x44B910, 0x44BDB0–0x44BDE5): ist der Schütze nicht der vom Spieler gesteuerte Mensch
+## (0x5A0890: Steuerobjekt +0x48 == 1) und haben Schütze und Getroffener Seite 1 (Spielertrupp), wird der Mensch nicht
+## getroffen – Kugeln der KI-Kameraden fliegen durch den eigenen Trupp [B Code; „vom Spieler gesteuert“ = Deutung P].
+static func _sp_squad_pass(p: Projectile, hb: Hitbox) -> bool:
+	if Net.is_online or not is_instance_valid(hb.soldier) or not (p.shooter is Soldier) or p.shooter == hb.soldier:
+		return false
+	var m := Game.current_mission() as Mission
+	if m == null or m.squad == null or p.shooter == m.squad.leader():
+		return false
+	return WeaponDB.orig_side(p.shooter) == 1 and WeaponDB.orig_side(hb.soldier) == 1
+
+
 ## Gibt true zurück, solange das Projektil weiterfliegt.
 func _step(p: Projectile, delta: float) -> bool:
 	p.age += delta
@@ -153,13 +165,20 @@ func _step(p: Projectile, delta: float) -> bool:
 	var collider: Object = hit.collider
 	if collider is Hitbox:
 		var hb := collider as Hitbox
+		if _sp_squad_pass(p, hb):
+			# Einzelspieler: Geschosse von KI-Kameraden durchdringen den eigenen Trupp (s. _sp_squad_pass)
+			p.exclude.append_array(hb.soldier.exclude_rids() if hb.soldier.has_method("exclude_rids") else [hb.get_rid()])
+			p.travelled -= p.pos.distance_to(hit.position)
+			return true
 		if is_instance_valid(hb.soldier) and hb.soldier.has_method("apply_hit"):
 			hits += 1
 			hb = _priority_zone(space, hb, hit.position, p.vel.normalized())
-			# Trefferzone wie im Original (Kopf ×5, Helm, Arme ×0,2, Beine ×0,33; WeaponDB.zone_damage)
+			# Trefferzone wie im Original (Kopf ×5, Helm, Arme ×0,2, Beine ×0,33); im Einzelspieler zusätzlich der
+			# Schwierigkeitsgrad (hd2.exe 0x5A1C90) – gemeinsame Quelle WeaponDB.bullet_hit_damage
 			var helmet := hb.zone == &"head" and WeaponDB.wears_helmet(hb.soldier) and _helmet_part(hb, hit.position)
-			hb.soldier.apply_hit(WeaponDB.zone_damage(base, hb.zone, helmet), hb.zone, p.shooter, p.vel.normalized())
-		Effects.blood(hit.position, hit.normal)
+			hb.soldier.apply_hit(WeaponDB.bullet_hit_damage(base, hb.zone, helmet, hb.soldier, p.shooter, not Net.is_online,
+				Game.difficulty()), hb.zone, p.shooter, p.vel.normalized())
+		Effects.blood(hit.position, hit.normal, p.vel.normalized(), hb.zone, hb.soldier)
 	else:
 		# Zerstörbare Objekte (z. B. Suchscheinwerfer) bieten on_bullet_hit an
 		var target: Node = collider as Node
@@ -169,7 +188,10 @@ func _step(p: Projectile, delta: float) -> bool:
 			if target == null or target.has_method("on_bullet_hit"):
 				break
 			target = target.get_parent()
-		if target and target.has_method("on_bullet_hit"):
+		if target and target.has_method("projectile_hit"):
+			# Fahrzeug mit Original-Schadensmodell: Treffpunkt/Richtung für den Zonen-Strahltest (Damage Art 1)
+			target.projectile_hit(1, base, hit.position, p.vel.normalized(), p.shooter)
+		elif target and target.has_method("on_bullet_hit"):
 			target.on_bullet_hit(base, p.shooter)
 		Effects.impact(hit.position, hit.normal)
 		# Einschläge sind in der Nähe hörbar (Beschuss-Reaktion der KI).

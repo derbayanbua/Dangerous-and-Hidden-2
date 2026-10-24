@@ -26,7 +26,10 @@ from PIL import Image
 from spandrel import ModelLoader
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WEIGHTS = os.path.join(HERE, "sr_models", "RealESRGAN_x4plus.pth")
+MODELS = os.environ.get("DH2_SR_MODELS") or os.path.join(HERE, "sr_models")
+WEIGHTS = os.path.join(MODELS, "RealESRGAN_x4plus.pth")
+# Rechengeraet: DH2_SR_DEVICE=cuda nutzt eine NVIDIA-GPU (torch mit CUDA noetig), Standard cpu
+DEV = os.environ.get("DH2_SR_DEVICE", "cpu")
 MAX_SIDE = 2048
 MIN_SR = 64
 PAD = 16
@@ -34,9 +37,10 @@ TILE = 192
 
 
 def load_model():
-    torch.set_num_threads(os.cpu_count() or 4)
+    torch.set_num_threads(int(os.environ.get("DH2_SR_THREADS", os.cpu_count() or 4)))
     m = ModelLoader().load_from_file(WEIGHTS)
     m.model.eval()
+    m.to(DEV)
     return m
 
 
@@ -54,7 +58,7 @@ def sr_rgb(model, rgb: np.ndarray) -> np.ndarray:
         for x in range(0, W, TILE):
             y0, x0 = max(y - ov, 0), max(x - ov, 0)
             y1, x1 = min(y + TILE + ov, H), min(x + TILE + ov, W)
-            r = model(t[:, :, y0:y1, x0:x1])
+            r = model(t[:, :, y0:y1, x0:x1].to(DEV)).float().cpu()
             ty, tx = (y - y0) * 4, (x - x0) * 4
             th, tw = (min(y + TILE, H) - y) * 4, (min(x + TILE, W) - x) * 4
             out[:, :, y * 4:y * 4 + th, x * 4:x * 4 + tw] = r[:, :, ty:ty + th, tx:tx + tw]
@@ -83,7 +87,7 @@ def upscale(model, im: Image.Image) -> Image.Image:
     return big
 
 
-WEIGHTS_FAST = os.path.join(HERE, "sr_models", "realesr-general-x4v3.pth")
+WEIGHTS_FAST = os.path.join(MODELS, "realesr-general-x4v3.pth")
 MAX_SIDE_4K = 4096
 
 
@@ -104,6 +108,7 @@ def run_4k(src):
         torch.set_num_threads(int(os.environ.get("DH2_SR_THREADS", os.cpu_count() or 4)))
         model = ModelLoader().load_from_file(WEIGHTS_FAST if os.path.exists(WEIGHTS_FAST) else WEIGHTS)
         model.model.eval()
+        model.to(DEV)
     t0 = time.time()
     for i, f in enumerate(todo, 1):
         s = os.path.join(hd, f) if os.path.exists(os.path.join(hd, f)) else os.path.join(base, f)

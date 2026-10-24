@@ -22,6 +22,8 @@ func interact(s: Soldier) -> void:
 	# Original-Benutzenclip der Figur (Tür, Aufheben, Schalter …; Soldier.play_use_anim)
 	if is_instance_valid(s) and s.has_method("play_use_anim"):
 		s.play_use_anim(self)
+	if is_instance_valid(s):
+		FieldInventory.view(s)       # Aufgenommenes in Aufnahmereihenfolge festhalten (Ingame-Inventar, inv_order)
 	used.emit(s)
 
 

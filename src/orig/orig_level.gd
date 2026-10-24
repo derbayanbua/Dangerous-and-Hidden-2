@@ -76,6 +76,7 @@ func build() -> bool:
 var _klz_faces := {}      ## Name bzw. „Objekt.Frame“ -> true (Bit 0: Flächen)
 var _klz_vols := {}       ## nur Kistenvolumen (Bit 1)
 var _hidden := {}         ## scene2.bin 0x4033
+var _klz_pass := {}       ## tree.klz-Links mit Bit 0x100000 (Grenze, Drahtgeflecht, Zelt): nur Bewegung sperren (Ebene 5)
 var _klz_boxes := {}      ## Kisten (XTOBB/AABB) – solche Frames behalten ihre Kollision
 
 
@@ -86,7 +87,8 @@ func _load_collision_info() -> bool:
 	var d = JSON.parse_string(f.get_as_text())
 	if typeof(d) != TYPE_DICTIONARY:
 		return false
-	for pair in [["faces", _klz_faces], ["volumes", _klz_vols], ["hidden", _hidden], ["boxes", _klz_boxes]]:
+	for pair in [["faces", _klz_faces], ["volumes", _klz_vols], ["hidden", _hidden], ["boxes", _klz_boxes],
+			["pass_through", _klz_pass]]:
 		for n in d.get(pair[0], []):
 			pair[1][_klz_key(String(n))] = true
 	return true
@@ -127,6 +129,11 @@ func _build_orig_collision() -> void:
 	for e in meshes:
 		var mi: MeshInstance3D = e[0]
 		var collide: bool = e[2] or e[3]            # versteckt: nur mit Klz-Link
+		if _in_backdrop(mi):
+			# Himmelskulisse (Objekte im „Backdrop sector“, z. B. AFRICA2 g_AF2_sky): keine Kollision – sonst blockiert
+			# die Himmelskugel Schüsse nach oben und die Sicht angreifender Flugzeuge (Akteurtyp 36)
+			_mesh_collider(mi, false)
+			continue
 		if not e[1] and not e[2] and not e[4]:      # sichtbar, ohne Klz-Flächen und ohne Kiste (nur OBB/kein Link)
 			collide = true
 			var box := mi.global_transform * mi.get_aabb()
@@ -139,6 +146,21 @@ func _build_orig_collision() -> void:
 					break
 		# Klz-Ebenen wirken beidseitig: Ersatzkörper/Treppenuntersichten (ARCTIC2 T2_strop_03) zeigen teils nach unten
 		_mesh_collider(mi, collide, e[1] or mi.has_meta("klz_proxy"))
+		if e[5]:
+			# Klz-Bit 0x100000 (Grenze „Border - enemy filter“, Drahtgeflecht, Zeltplane): sperrt nur Bewegung, Sicht und
+			# Geschosse gehen durch (Ebene 5 wie Zäune) [P, docs/re_notes_script_anims.md §6]
+			for c in mi.get_children():
+				if c is StaticBody3D:
+					(c as StaticBody3D).collision_layer = 1 << 4
+			stats["pass_through"] = int(stats.get("pass_through", 0)) + 1
+
+
+static func _in_backdrop(n: Node) -> bool:
+	while n != null:
+		if n.has_meta("backdrop"):
+			return true
+		n = n.get_parent()
+	return false
 
 
 func _klz_walk(n: Node, obj: String, hidden: bool, out: Array) -> void:
@@ -154,7 +176,7 @@ func _klz_walk(n: Node, obj: String, hidden: bool, out: Array) -> void:
 		(n as Node3D).visible = false
 		stats["hidden"] = int(stats.get("hidden", 0)) + 1
 	if n is MeshInstance3D:
-		out.append([n, hidden, _klz_faces.has(key), _klz_vols.has(key), _klz_boxes.has(key)])
+		out.append([n, hidden, _klz_faces.has(key), _klz_vols.has(key), _klz_boxes.has(key), _klz_pass.has(key)])
 	for c in n.get_children():
 		if not (c is CollisionObject3D):
 			_klz_walk(c, obj, hidden, out)
@@ -373,6 +395,8 @@ func _place_objects(collide := true) -> void:
 			Vector3(p[0], p[1], p[2]))
 		n.set_meta("orig_type", t)
 		n.set_meta("klz_obj", String(n.name))
+		if String(o.get("parent", "")) == "Backdrop sector":
+			n.set_meta("backdrop", true)      # Himmelskulisse (LS3D-Backdrop-Sektor): nie Kollision
 		created.append([n, o])
 		if not nodes.has(String(o.get("name", ""))):
 			nodes[String(o.get("name", ""))] = n
@@ -386,7 +410,7 @@ func _place_objects(collide := true) -> void:
 			root.add_child(n)
 		else:
 			parent.add_child(n)
-		if collide and int(pair[1].get("type", -1)) == OBJ_MODEL:
+		if collide and int(pair[1].get("type", -1)) == OBJ_MODEL and not n.has_meta("backdrop"):
 			_add_collision(n)
 
 

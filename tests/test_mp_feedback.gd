@@ -140,6 +140,53 @@ func _check_figures(tag: String) -> void:
 		"%d Soldaten %s" % [n, ", ".join(bad)])
 
 
+## Richtungsbogen je Seitenverhältnis (Fläche in Oberflächenpixeln; stretch canvas_items/expand → Höhe 720 bei
+## Querformat): Mitte = Fadenkreuz, Kreis (gleicher Abstand in x und y), Radius aus der kürzeren Seite, Richtung
+## 0 = oben, +90° = rechts, 180° = unten, −90° = links; dazu screen_angle mit Bezugspunkt Soldat (3. Person).
+func _check_arc_geometry() -> void:
+	var areas := {"16:9": Vector2(1280, 720), "16:10": Vector2(1152, 720), "21:9": Vector2(1680, 720), "4:3": Vector2(960, 720),
+		"16:9 nativ": Vector2(1920, 1080), "Hochformat": Vector2(720, 1280)}
+	var bad: PackedStringArray = []
+	var radii: PackedStringArray = []
+	for k in areas:
+		var a: Vector2 = areas[k]
+		var r := -1.0
+		for pair in [[0.0, Vector2(0, -1)], [PI * 0.5, Vector2(1, 0)], [PI, Vector2(0, 1)], [-PI * 0.5, Vector2(-1, 0)], [0.6, Vector2(sin(0.6), -cos(0.6))]]:
+			var g: Dictionary = FB.hurt_arc_geometry(a, float(pair[0]))
+			var c: Vector2 = g["center"]
+			var tipv: Vector2 = (g["tip"] as Vector2) - c
+			if not c.is_equal_approx(a * 0.5):
+				bad.append("%s Mitte %s" % [k, c])
+			if tipv.normalized().distance_to(pair[1]) > 0.01:
+				bad.append("%s Richtung %.2f → %s" % [k, float(pair[0]), tipv.normalized()])
+			if absf(tipv.length() - float(g["radius"]) * 1.2) > 0.01:
+				bad.append("%s nicht kreisförmig" % k)
+			if not Rect2(Vector2.ZERO, a).has_point(g["tip"]):
+				bad.append("%s Spitze außerhalb" % k)
+			r = float(g["radius"])
+		if r < 56.0 or r > minf(a.x, a.y) * 0.25:
+			bad.append("%s Radius %.1f" % [k, r])
+		radii.append("%s r=%.0f" % [k, r])
+	var same := absf(float(FB.hurt_arc_geometry(areas["16:9"], 0.0)["radius"]) - float(FB.hurt_arc_geometry(areas["21:9"], 0.0)["radius"])) < 0.01 \
+		and absf(float(FB.hurt_arc_geometry(areas["4:3"], 0.0)["radius"]) - float(FB.hurt_arc_geometry(areas["16:10"], 0.0)["radius"])) < 0.01
+	check(bad.is_empty() and same, "Richtungsbogen: Kreis um das Fadenkreuz, Richtung, Größe je Seitenverhältnis gleich",
+		"%s %s" % [", ".join(radii), ", ".join(bad)])
+	# Richtung relativ zur Blickrichtung: Kamera blickt nach Norden (−Z)
+	var cam := Camera3D.new()
+	add_child(cam)
+	cam.global_position = Vector3(0, 1.6, 4)          # 3.-Person-Kamera 4 m hinter dem Soldaten bei (0, 0, 0)
+	cam.look_at(Vector3(0, 1.6, -10), Vector3.UP)
+	var sol := Vector3.ZERO
+	var front := FB.screen_angle(cam, Vector3(0, 0, -10), sol)
+	var right := FB.screen_angle(cam, Vector3(10, 0, 0), sol)
+	var behind := FB.screen_angle(cam, Vector3(0, 0, 2), sol)   # zwischen Kamera und Soldat: hinter dem Soldaten
+	var left := FB.screen_angle(cam, Vector3(-10, 0, 0), sol)
+	check(absf(front) < 0.01 and absf(right - PI * 0.5) < 0.01 and absf(absf(behind) - PI) < 0.01 and absf(left + PI * 0.5) < 0.01,
+		"Richtung relativ zur Blickrichtung (vorn/rechts/hinten/links, Bezugspunkt Soldat)",
+		"%.2f %.2f %.2f %.2f" % [front, right, behind, left])
+	cam.queue_free()
+
+
 # --- Host ----------------------------------------------------------------------------------------------
 
 func _host() -> void:
@@ -151,8 +198,11 @@ func _host() -> void:
 		"Server-Regeln: Kill-Cam Standard nur Deathmatch, Namen/Trefferanzeige an")
 	check(Net.RULE_KEYS.get("kill_cam") == "killcam" and Net.RULE_KEYS.get("show_names") == "shownames"
 		and Net.RULE_KEYS.get("hit_indicator") == "hitindicator", "Konsolen-/Konfigurationsschlüssel killcam/shownames/hitindicator")
-	var ct := LanMenu.config_text({"name": "x", "map": _map(), "kill_cam": true, "show_names": false, "hit_indicator": true})
-	check(ct.contains("killcam 1") and ct.contains("shownames 0") and ct.contains("hitindicator 1"), "Konfigurationsdatei des dedizierten Servers")
+	var ct := LanMenu.config_text({"name": "x", "map": _map(), "kill_cam": true, "show_names": false, "hit_indicator": true, "hurt_indicator": false})
+	check(ct.contains("killcam 1") and ct.contains("shownames 0") and ct.contains("hitindicator 1") and ct.contains("hurtindicator 0"),
+		"Konfigurationsdatei des dedizierten Servers (inkl. hurtindicator)")
+	check(dm["hurt_indicator"] and Net.RULE_KEYS.get("hurt_indicator") == "hurtindicator", "Regel hurtindicator (Standard an)")
+	_check_arc_geometry()
 	# FPS-Option (Konsole lokal, Overlay am Autoload Settings)
 	var ov = Settings.get_node_or_null("FpsOverlay")
 	check(ov != null and not Settings.show_fps and not ov.visible, "FPS-Anzeige vorhanden, Standard aus")
@@ -245,6 +295,24 @@ func _host() -> void:
 	(bots[Soldier.TEAM_ALLIED] as Soldier).apply_hit(15.0, &"arm", puppet, Vector3.FORWARD)
 	await get_tree().create_timer(1.0).timeout
 	_write(STEP_HOST, JSON.stringify({"step": "client_hit"}))
+	# Server-Regeln hitindicator/hurtindicator aus (Konsole) → an alle übertragen, kein Feedback mehr (Host und Client)
+	await wait_for(func(): return _read(STEP_CLIENT).begins_with("hit_checked"), 60.0)
+	var r1 := Net.server_command("hitindicator 0", 0)
+	var r2 := Net.server_command("hurtindicator 0", 0)
+	check(not bool(Net.rule("hit_indicator")) and not bool(Net.rule("hurt_indicator")), "Konsole: hitindicator 0 / hurtindicator 0", "%s; %s" % [r1, r2])
+	await get_tree().create_timer(1.0).timeout
+	var n_off: int = fb.hits_shown
+	var hl_off := Net.hit_log.size()
+	(bots[Soldier.TEAM_ALLIED] as Soldier).apply_hit(5.0, &"torso", puppet, Vector3.FORWARD)    # Client als Schütze
+	puppet.apply_hit(5.0, &"leg", me, Vector3.FORWARD)                                          # Host als Schütze
+	await get_tree().process_frame
+	check(fb.hits_shown == n_off and Net.hit_log.size() == hl_off, "Regel aus: Host erhält keinen Hitmarker")
+	await get_tree().create_timer(1.5).timeout
+	_write(STEP_HOST, JSON.stringify({"step": "rules_off"}))
+	await wait_for(func(): return _read(STEP_CLIENT).begins_with("rules_checked"), 60.0)
+	Net.server_command("hitindicator 1", 0)
+	Net.server_command("hurtindicator 1", 0)
+	_write(STEP_HOST, JSON.stringify({"step": "rules_on"}))
 	await wait_for(func(): return _read(STEP_CLIENT).begins_with("ready_to_die"), 60.0)
 	puppet.apply_hit(500.0, &"head", me, Vector3.FORWARD)
 	await get_tree().process_frame
@@ -308,6 +376,31 @@ func _client() -> void:
 		"Client: serverbestätigter Treffer → Hitmarker beim Schützen", str(h))
 	check(Net.kill_feed.any(func(e): return int(e["killer"]) == 1 and int(e["vteam"]) == Soldier.TEAM_AXIS),
 		"Client: Kill-Feed-Eintrag des Host-Abschusses empfangen")
+	# Server-Regeln aus: beim Client weder Hitmarker/Meldung/Klang (als Schütze) noch Richtungsbogen (als Getroffener)
+	var n0: int = fb.hits_shown
+	var s0: int = fb.sounds_played
+	var hl0 := Net.hit_log.size()
+	var hu0 := Net.hurt_log.size()
+	_write(STEP_CLIENT, "hit_checked")
+	await wait_for(func(): return _read(STEP_HOST).contains("rules_off"), 90.0)
+	check(not bool(Net.rule("hit_indicator")) and not bool(Net.rule("hurt_indicator")), "Regeln hitindicator/hurtindicator aus beim Client angekommen")
+	check(Net.hit_log.size() == hl0 and fb.hits_shown == n0 and fb.sounds_played == s0, "Regel hitindicator aus: kein Hitmarker/Meldung/Klang beim Client",
+		"%d→%d" % [hl0, Net.hit_log.size()])
+	check(Net.hurt_log.size() == hu0 and fb.active_hurts().is_empty(), "Regel hurtindicator aus: kein Richtungsbogen beim Client",
+		"%d→%d" % [hu0, Net.hurt_log.size()])
+	_write(STEP_CLIENT, "rules_checked")
+	await wait_for(func(): return _read(STEP_HOST).contains("rules_on") and bool(Net.rule("hit_indicator")) and bool(Net.rule("hurt_indicator")), 60.0)
+	check(bool(Net.rule("hit_indicator")) and bool(Net.rule("hurt_indicator")), "Regeln wieder an (beim Client)")
+	# Client-Optionen schalten zusätzlich lokal ab (Regel an)
+	Settings.hit_feedback = false
+	Settings.hurt_feedback = false
+	var n1: int = fb.hits_shown
+	var hz0: int = fb.active_hurts().size()
+	fb._on_hit({"victim": -1, "name": "X", "zone": "torso", "head": false, "killed": false, "ff": false})
+	fb._on_hurt(Vector3.ZERO)
+	check(fb.hits_shown == n1 and fb.active_hurts().size() == hz0, "Client-Optionen Trefferanzeige/Richtung aus: lokal keine Anzeige")
+	Settings.hit_feedback = true
+	Settings.hurt_feedback = true
 	# Tod durch den Host → Richtungsanzeige, Kill-Feed, Kill-Cam auf den Schützen
 	var kc = _hud().kill_cam
 	var hurts0 := Net.hurt_log.size()

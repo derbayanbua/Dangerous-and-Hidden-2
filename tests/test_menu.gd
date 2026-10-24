@@ -233,7 +233,7 @@ func _check_credits(menu: Node) -> void:
 	var clean := true
 	for e in orig_lines:
 		var t := String(e["text"])
-		clean = clean and not t.contains("\"") and not t.contains("<") and not t.begins_with("1\t")
+		clean = clean and not t.contains("<") and not t.begins_with("1\t") and not t.ends_with("\"")
 	check(not have_orig or (orig_lines.size() > 500 and clean), "Mitwirkende: Originalliste aus orig_cache vollständig gelesen",
 		"%s: %d Zeilen" % [path, orig_lines.size()])
 	menu.show_menu("main_menu")

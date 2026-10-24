@@ -53,9 +53,17 @@ func set_active(i: int) -> bool:
 		prev.trigger = false
 		prev.aiming = false
 		prev.move_input = Vector3.ZERO
+		# Original (hd2.exe 0x53BC50 → Team-vtable+0x34 = 0x4593E0): gibt der Spieler einen Soldaten ab, hören alle
+		# KI-Kameraden, die ihm folgten, auf zu folgen (0x5377F0(0, leise bleibt)) und bleiben, wo sie sind; der
+		# abgegebene Soldat selbst folgt niemandem [P]. Erst „Folgt mir“/„Neu sammeln“ bindet sie an den neuen Soldaten.
 		var b := brain_of(prev)
 		if b:
-			b.set_order(SquadBrain.Order.FOLLOW)
+			b.clear_tasks()
+			b.set_order(SquadBrain.Order.HOLD)
+		for m in members:
+			var mb := brain_of(m)
+			if m != prev and m != members[i] and m.alive and mb and mb.order == SquadBrain.Order.FOLLOW:
+				mb.set_order(SquadBrain.Order.HOLD, Vector3.ZERO, mb.quiet)
 	active_index = i
 	var cur := members[i]
 	cur.is_player_controlled = true

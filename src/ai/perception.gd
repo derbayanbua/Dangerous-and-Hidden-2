@@ -137,7 +137,10 @@ func _refresh_light() -> void:
 
 func _line_of_sight(space: PhysicsDirectSpaceState3D, from: Vector3, to: Vector3, target: Soldier) -> bool:
 	var q := PhysicsRayQueryParameters3D.create(from, to, 1)
-	q.exclude = [soldier.get_rid()]
+	var ex: Array[RID] = [soldier.get_rid()]
+	if soldier.vehicle is CollisionObject3D:
+		ex.append((soldier.vehicle as CollisionObject3D).get_rid())   # Besatzung sieht nicht gegen die eigene Wanne
+	q.exclude = ex
 	var hit := space.intersect_ray(q)
 	if not hit.is_empty():
 		return false

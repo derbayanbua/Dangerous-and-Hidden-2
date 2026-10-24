@@ -9,9 +9,13 @@ extends VehicleBody3D
 ## Originalmodelle (docs/re_notes_ai.md §3): Sitze = Frames SEAT00..SEATnn (00 Fahrer), Waffensitze mit HORTnn
 ## (Drehung um die Hochachse = Turm/Lafette), VERTnn (Höhenrichtung), BARRELnn_xx (Rohr), SHDUM (Mündung). Waffen
 ## der Sitze aus der Munition im items.dat-Inventar des Fahrzeugs (z. B. Tiger: 213 -> KwK 40, 211 -> Tank MG 34):
-## Kanone an den Sitz mit Hauptvisier (CAMERAFPVMain), Maschinengewehre an die übrigen Waffensitze [O]. Panzer
-## (Kanone vorhanden) sind gepanzert: Handwaffen wirkungslos, Besatzung unsichtbar und nur über das Fahrzeug
-## verwundbar [E]. Turmdrehung 25°/s, Höhenrichtung −10°…+20° [E – Originalwerte nicht dekodiert].
+## Waffe je Waffensitz aus dem Rohr-Frame BARRELnn_00 „itemid“ (hd2.exe 0x4C1AD0: +0x158 = Gegenstand aus „itemid“),
+## sonst aus der Munition. Richtwerte ebenfalls aus BARRELnn_00 (0x4C1AD0/0x4C2580, docs/re_notes_ai.md §4) [B]:
+## hs/vs = Seiten-/Höhenrichtgeschwindigkeit in °/s (fehlt: 45°/s), up/down/left/right = Grenzen in ° (fehlt:
+## unbegrenzt; Höhe zusätzlich ±89,8°), Schritt je Bild = min(Abweichung, dt·Geschwindigkeit), Totzone 0,001 rad.
+## Panzer (Kanone vorhanden): Besatzung unsichtbar. Schaden über das Original-Schadensmodell DM<Modell>.4ds
+## (VehicleDamage: Zonen mit HP/Panzerung, Explosionsverzögerung) – damit wirken Handwaffen gegen Panzerung nicht,
+## weil ihr Schaden unter der Materialpanzerung liegt [B].
 
 signal destroyed_vehicle
 
@@ -30,6 +34,7 @@ var wrecked := false
 var throttle := 0.0
 var steer_input := 0.0
 var handbrake := false
+var vertical_input := 0.0      ## Tauchen/Auftauchen (nur OrigSubmarine): +1 auf, −1 ab
 
 var _noise_t := 0.0
 var _entry: Interactable
@@ -73,10 +78,18 @@ var ammo_items: Array = []
 var armored := false
 var turrets := {}                 ## Sitz -> Dictionary (hort, vert, muzzle, axis, base_h, base_v, yaw, pitch, weapon …)
 var _saved_weapons := {}          ## Soldat -> [Waffen, Platz]
-const TURRET_SPEED := 0.436       ## rad/s (25°/s) [E]
-const PITCH_MIN := -0.17          ## −10° [E]
-const PITCH_MAX := 0.35           ## +20° [E]
+## Richtwerte ohne BARREL-Parameter (Original 0x4C1AD0: hs/vs fehlen → 0,7853982 rad/s = 45°/s; Grenzen fehlen → 1e6) [B]
+const TURRET_SPEED := 0.7853982
+const NO_LIMIT := 1.0e6
+const PITCH_ABS := 1.5676548      ## Höhenrichtung höchstens ±89,8° (0x4C2580, Konstanten 0x8106AC/0x8106B0) [B]
+const AIM_DEADBAND := 0.001       ## rad (0x8106B8) [B]
 signal hit(damage: float, by: Node)   ## Treffer (Originalskript OnHit)
+
+## Originalmodell-Datei (Rohr-Parameter) und Schadensmodell (vor add_child setzen; OrigMission._spawn_orig_car)
+var model_path := ""
+var dm_path := ""
+var damage_model: VehicleDamage
+var _last_by: Node = null
 
 
 func _ready() -> void:
@@ -99,6 +112,12 @@ func _ready() -> void:
 	add_child(_entry)
 	_entry.position = Vector3(1.3, 0, 0)
 	_setup_orig_seats()
+	if dm_path != "":
+		damage_model = VehicleDamage.new()
+		if not damage_model.setup_from(self, custom_visual, dm_path):
+			damage_model = null
+	if persistent_id != "":
+		_entry.persistent_id = "veh_" + persistent_id     # Netzabgleich Zerstörung/Zonen (Net.object_state)
 
 
 # --- Originalsitze und Bordwaffen ----------------------------------------------------
@@ -139,26 +158,43 @@ func _setup_orig_seats() -> void:
 			cannons.append(w)
 		else:
 			guns.append(w)
-	armored = not cannons.is_empty()
 	var main_seat := -1
+	var barrels := barrel_params(model_path)
 	for i in seats.size():
 		var t := _turret_of(seats[i])
 		if t.is_empty():
 			continue
 		turrets[i] = t
+		_apply_barrel_params(t, barrels)
 		if seats[i].find_child("CAMERAFPVMain", true, false) != null:
 			main_seat = i
 	if main_seat < 0 and not cannons.is_empty() and not turrets.is_empty():
 		main_seat = turrets.keys().max()
 	var gi := 0
 	for i in turrets:
-		if i == main_seat and not cannons.is_empty():
+		# Original: Waffe aus „itemid“ des Rohr-Frames (0x4C1AD0), Munition aus dem Fahrzeuginventar
+		var iid := int(turrets[i].get("itemid", -1))
+		var wd: WeaponData = OrigInteractive.heavy_weapon(iid) if iid >= 0 else null
+		if wd:
+			var w := Weapon.new(wd, false)
+			var ammo_n := 0
+			for a in counts:
+				if OrigInteractive.weapon_for_ammo(int(a)) == iid:
+					ammo_n += int(counts[a])
+			ammo_n = maxi(ammo_n, 1)
+			w.in_mag = wd.magazine_size
+			w.reserve = wd.magazine_size * (ammo_n - 1)
+			turrets[i]["weapon"] = w
+			if wd.action == WeaponData.Action.ROCKET and wd.shot_interval() >= 1.0:
+				cannons.append(w)
+		elif i == main_seat and not cannons.is_empty():
 			turrets[i]["weapon"] = cannons[0]
 		elif not guns.is_empty():
 			turrets[i]["weapon"] = guns[gi % guns.size()]
 			gi += 1
 		elif not cannons.is_empty():
 			turrets[i]["weapon"] = cannons[0]
+	armored = not cannons.is_empty()
 
 
 func _turret_of(seat: Node3D) -> Dictionary:
@@ -182,9 +218,93 @@ func _turret_of(seat: Node3D) -> Dictionary:
 	var axis := Vector3.FORWARD
 	if barrel and barrel.position.length() > 0.05 and barrel.get_parent() == pivot:
 		axis = barrel.position.normalized()
-	return {"hort": hort, "vert": vert, "barrel": barrel, "muzzle": muzzle, "axis": axis,
+	# Nummer des Waffensitzes (HORTnn/VERTnn/BARRELnn_xx) für die Rohr-Parameter
+	var num := -1
+	var src: Node3D = hort if hort else vert
+	var digits := String(src.name).to_upper().trim_prefix("HORT").trim_prefix("VERT").substr(0, 2)
+	if digits.is_valid_int():
+		num = int(digits)
+	return {"hort": hort, "vert": vert, "barrel": barrel, "muzzle": muzzle, "axis": axis, "num": num,
 		"base_h": hort.transform if hort else Transform3D(), "base_v": vert.transform if vert else Transform3D(),
-		"yaw": 0.0, "pitch": 0.0, "weapon": null, "ysign": 0.0, "psign": 0.0}
+		"yaw": 0.0, "pitch": 0.0, "weapon": null, "ysign": 0.0, "psign": 0.0,
+		"hs": TURRET_SPEED, "vs": TURRET_SPEED, "up": NO_LIMIT, "down": NO_LIMIT, "left": NO_LIMIT, "right": NO_LIMIT}
+
+
+static var _barrel_cache := {}
+
+
+## Parameter aller Rohr-Frames BARRELnn_00 des Fahrzeugmodells (glTF extras.params, 4DS-Frameparameter):
+## nn → {itemid, up, down, left, right, hs, vs} (Gradangaben wie im Modell) [B Daten, hd2.exe 0x4C1AD0]
+static func barrel_params(path: String) -> Dictionary:
+	if path == "":
+		return {}
+	if _barrel_cache.has(path):
+		return _barrel_cache[path]
+	var out := {}
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f and f.get_length() > 20 and f.get_32() == 0x46546C67:
+		f.get_32()
+		f.get_32()
+		var ln := f.get_32()
+		f.get_32()
+		var j = JSON.parse_string(f.get_buffer(ln).get_string_from_utf8())
+		if typeof(j) == TYPE_DICTIONARY:
+			for n in j.get("nodes", []):
+				var nm := String(n.get("name", "")).to_upper()
+				var ex = n.get("extras", {})
+				if typeof(ex) != TYPE_DICTIONARY:
+					continue
+				# Turmklänge am Seitenrichtungs-Frame HORTnn: SOUNDM = Bewegung, SOUNDS = Stopp (Kat. 3, 0x4C6E50) [B]
+				if nm.begins_with("HORT") and nm.substr(4, 2).is_valid_int():
+					var hp := String(ex.get("params", "")).to_upper()
+					var hd: Dictionary = out.get(int(nm.substr(4, 2)), {})
+					for key in ["SOUNDM", "SOUNDS"]:
+						var at := hp.find(key)
+						if at >= 0:
+							var digits := ""
+							var q: int = at + String(key).length()
+							while q < hp.length() and hp[q].is_valid_int():
+								digits += hp[q]
+								q += 1
+							if digits != "":
+								hd[key.to_lower()] = int(digits)
+					out[int(nm.substr(4, 2))] = hd
+					continue
+				if not nm.begins_with("BARREL"):
+					continue
+				var num := nm.substr(6, 2)
+				if not num.is_valid_int() or (out.has(int(num)) and (out[int(num)] as Dictionary).has("from_barrel")):
+					continue
+				var p: Dictionary = out.get(int(num), {})
+				p["from_barrel"] = true
+				# Werte stehen teils ohne Komma hintereinander („up40,down10matid13“, „up30down10“): an Schlüsseln trennen
+				var s := String(ex.get("params", "")).to_lower()
+				for key in ["itemid", "matid", "down", "left", "right", "up", "hs", "vs"]:
+					s = s.replace(key, "," + key)
+				for tok in s.split(",", false):
+					var t := String(tok).strip_edges()
+					for key in ["itemid", "up", "down", "left", "right", "hs", "vs"]:
+						if t.begins_with(key) and t.substr(key.length()).is_valid_int():
+							p[key] = int(t.substr(key.length()))
+				out[int(num)] = p
+	_barrel_cache[path] = out
+	return out
+
+
+## Rohr-Parameter auf einen Waffensitz anwenden (Grad → rad wie 0x4C1AD0; −1/fehlend = Standard)
+func _apply_barrel_params(t: Dictionary, barrels: Dictionary) -> void:
+	var p: Dictionary = barrels.get(int(t.get("num", -1)), {})
+	if p.is_empty():
+		return
+	t["itemid"] = int(p.get("itemid", -1))
+	t["soundm"] = int(p.get("soundm", -1))
+	t["sounds"] = int(p.get("sounds", -1))
+	for k in ["hs", "vs"]:
+		if p.has(k) and int(p[k]) != -1:
+			t[k] = deg_to_rad(float(p[k]))
+	for k in ["up", "down", "left", "right"]:
+		if p.has(k) and int(p[k]) != -1:
+			t[k] = deg_to_rad(float(p[k]))
 
 
 ## Weltrichtung des Rohrs eines Waffensitzes
@@ -229,6 +349,7 @@ func _update_turrets(delta: float) -> void:
 		var t: Dictionary = turrets[i]
 		var o = occupants[i] if i < occupants.size() else null
 		if not is_instance_valid(o) or not (o as Soldier).alive:
+			_turret_sound(t, false, delta)
 			continue
 		var s := o as Soldier
 		# Drehsinn einmalig numerisch bestimmen (Modelle können gespiegelt sein)
@@ -244,18 +365,53 @@ func _update_turrets(delta: float) -> void:
 			t["psign"] = 1.0 if turret_dir(i).y >= p0 else -1.0
 			t["pitch"] = 0.0
 			_apply_turret(t)
+		# Original 0x4C2580: Seite/Höhe getrennt, Schritt = min(|Abweichung|, dt·hs bzw. vs), Totzone 0,001 rad,
+		# Seitenwinkel relativ zur Wanne in [−right, +left] (+ = links; Datenlage durchweg symmetrisch [P Seitenzuordnung]),
+		# Höhe relativ zur Lafette in [−down, +up] und ±89,8° [B]
 		var cur := turret_dir(i)
+		var before := Vector2(float(t["yaw"]), float(t["pitch"]))
 		var dyaw := angle_difference(_yaw_of(cur), s.look_yaw)
-		t["yaw"] = float(t["yaw"]) + clampf(dyaw, -TURRET_SPEED * delta, TURRET_SPEED * delta) * float(t["ysign"])
+		if absf(dyaw) > AIM_DEADBAND:
+			var hs := float(t["hs"]) * delta
+			var ys := float(t["ysign"])
+			var rel_y := float(t["yaw"]) * ys + clampf(dyaw, -hs, hs)
+			t["yaw"] = clampf(rel_y, -float(t["right"]), float(t["left"])) * ys
 		var dp := s.look_pitch - asin(clampf(cur.y, -1.0, 1.0))
-		var ps := float(t["psign"])
-		var rel := float(t["pitch"]) * ps + clampf(dp, -TURRET_SPEED * delta, TURRET_SPEED * delta)
-		t["pitch"] = clampf(rel, PITCH_MIN, PITCH_MAX) * ps
+		if absf(dp) > AIM_DEADBAND:
+			var vs := float(t["vs"]) * delta
+			var ps := float(t["psign"])
+			var rel := float(t["pitch"]) * ps + clampf(dp, -vs, vs)
+			rel = clampf(rel, -minf(float(t["down"]), PITCH_ABS), minf(float(t["up"]), PITCH_ABS))
+			t["pitch"] = rel * ps
 		_apply_turret(t)
+		_turret_sound(t, Vector2(float(t["yaw"]), float(t["pitch"])).distance_to(before) > 0.00001, delta)
 		var nd := turret_dir(i)
 		s.look_yaw = _yaw_of(nd)
 		s.look_pitch = asin(clampf(nd.y, -1.0, 1.0))
 		s.has_aim_point = false
+
+
+## Turmklänge (0x4C2580 Ende): Bewegung beginnt → Stopp-Klang aus, Bewegungsklang (SOUNDM, Kat. 3, z. B. 55 „Tank
+## Turret Move“) als Schleife; nach > 300 ms Stillstand → Bewegungsklang aus, Stopp-Klang (SOUNDS, z. B. 58) [B]
+func _turret_sound(t: Dictionary, moving: bool, delta: float) -> void:
+	if int(t.get("soundm", -1)) < 0:
+		return
+	var src: Node3D = t["hort"] if t["hort"] else t["vert"]
+	if moving:
+		t["still_ms"] = 0.0
+		if not bool(t.get("snd_on", false)):
+			t["snd_on"] = true
+			if is_instance_valid(t.get("snd_stop")):
+				(t["snd_stop"] as Node).queue_free()
+			t["snd_loop"] = OrigAudio.play_group(3, int(t["soundm"]), src.global_position, src, 1.0, true)
+		return
+	t["still_ms"] = float(t.get("still_ms", 0.0)) + delta * 1000.0
+	if bool(t.get("snd_on", false)) and float(t["still_ms"]) > 300.0:
+		t["snd_on"] = false
+		if is_instance_valid(t.get("snd_loop")):
+			(t["snd_loop"] as Node).queue_free()
+		if int(t.get("sounds", -1)) >= 0:
+			t["snd_stop"] = OrigAudio.play_group(3, int(t["sounds"]), src.global_position, src)
 
 
 ## Waffensitz besetzen: Bordwaffe in die Hand (wie Waffenstellungen), im Panzer Besatzung verbergen
@@ -374,7 +530,9 @@ func _on_impact(dv: float, other: Object) -> void:
 	if not crash.is_empty():
 		OrigAudio.play_file(String(crash[randi() % crash.size()]), global_position, 5.0, 90.0, clampf(dv / 12.0, 0.3, 1.0), self)
 	var dmg := pow(maxf(dv - 5.0, 0.0), 1.5) * 4.0 * (0.1 if armored or drive.kind == VehicleDrive.Kind.TANK else 1.0)
-	if dmg > 0.0:
+	# Original-Schadensmodell: Zusammenstöße verformen nur Karosserieteile und verletzen den Fahrer („Damage driver“,
+	# 0x83BE14), die Zonen-HP bleiben [P] → keine Strukturpunkte; ohne Schadensmodell bisherige Annahme [E]
+	if dmg > 0.0 and damage_model == null:
 		health -= dmg
 		hit.emit(dmg, other if other is Node else null)
 		if health <= 0.0:
@@ -588,6 +746,7 @@ var _best_dist := INF
 
 
 var _recover_t := 0.0
+var _dbg_t := 0.0
 
 
 ## Skriptfahrt fährt physikalisch (VehicleDrive.ai_control: Zielpunkt mit Vorausschau, Kurven-/Zielbremsung);
@@ -664,10 +823,31 @@ func _script_drive(delta: float) -> void:
 	var space := get_world_3d().direct_space_state
 	var stop_d := _size.z * 0.5 + 1.5 + drive.speed * drive.speed / 6.0
 	var from := global_position + global_basis.y * 1.2
-	var ahead := PhysicsRayQueryParameters3D.create(from, from + heading.normalized() * stop_d, 1 | (1 << 1), [get_rid()])
+	# eigene Insassen ausnehmen (Panzer-Richtschütze steht unsichtbar vor der Mündung, CZECH5-Kolonne blieb stehen)
+	var own: Array[RID] = [get_rid()]
+	for o in occupants:
+		if is_instance_valid(o):
+			own.append((o as Soldier).get_rid())
+	var ahead := PhysicsRayQueryParameters3D.create(from, from + heading.normalized() * stop_d, 1 | (1 << 1), own)
 	var ah := space.intersect_ray(ahead)
 	if not ah.is_empty() and (ah["normal"] as Vector3).y < 0.6 and _recover_t <= 0.0:
 		want = 0.0
+	if Game.cli.has("drive_debug"):
+		_dbg_t -= delta
+		if _dbg_t <= 0.0:
+			_dbg_t = 1.0
+			print("DRIVEDBG %s pos %s goal %s rest %.1f want %.2f v %.2f rec %.1f stuck %.1f ahead %s" % [name, global_position, _drive_goal, rest, want, drive.speed, _recover_t, _stuck_t, (ah.get("collider") as Node).name if not ah.is_empty() else "-"])
+			var hits := []
+			for c in get_children():
+				if c is CollisionShape3D:
+					var hq := PhysicsShapeQueryParameters3D.new()
+					hq.shape = (c as CollisionShape3D).shape
+					hq.transform = global_transform * (c as CollisionShape3D).transform
+					hq.collision_mask = 1
+					hq.exclude = [get_rid()]
+					for r in get_world_3d().direct_space_state.intersect_shape(hq, 4):
+						hits.append(String((r["collider"] as Node).get_path()).get_file())
+			print("DRIVEDBG2 kind %s grounded %d/%d thr %.2f brk %.2f hb %s park %s gear %d rpm %.0f force %.0f mass %.0f pow %.0f freeze %s sleep %s hull %s" % [drive.kind, drive.grounded, drive.wheels.size(), drive.throttle, drive.brake_in, drive.handbrake, drive.parked, drive.gear, drive.rpm, drive.drive_force, drive.mass, drive.power_w, freeze, sleeping, hits])
 	if _recover_t > 0.0:
 		_recover_t -= delta
 		var back := global_position - heading.normalized() * 6.0 + global_basis.x * signf(to_local(_drive_goal).x) * -4.0
@@ -694,6 +874,8 @@ func _physics_process(delta: float) -> void:
 	_update_engine_sound()
 	if not turrets.is_empty() and not wrecked:
 		_update_turrets(delta)
+	if damage_model and damage_model.timer_ms != 0 and not _net_client():
+		damage_model.tick(delta, _last_by)
 	_crash_t = maxf(_crash_t - delta, 0.0)
 	if drive:
 		drive.update_visuals()
@@ -818,23 +1000,91 @@ func _update_engine_sound() -> void:
 
 # --- Schaden -----------------------------------------------------------------
 
-func on_bullet_hit(damage: float, shooter: Node) -> void:
-	if wrecked:
-		return
-	hit.emit(damage, shooter)
-	if armored:
-		return          # Panzer: Handwaffen wirkungslos [E]
-	health -= damage
-	if health <= 0.0:
-		explode(shooter)
+## Mehrspieler: Schaden entscheidet der Server; Clients erhalten Zonen/Zerstörung über Net.object_state (VehicleEntry)
+func _net_client() -> bool:
+	return Net.is_online and multiplayer.has_multiplayer_peer() and not multiplayer.is_server()
 
 
-## Explosionen (Granaten, Raketen, Kanonen, Sprengladungen; OrigInteractive.damage_objects)
-func on_explosion(damage: float, by: Node) -> void:
-	if wrecked:
+func _net_push() -> void:
+	if Net.is_online and is_instance_valid(_entry):
+		Net.object_state(_entry)
+
+
+## Geschoss (Art 1, Ballistics) bzw. Raketen-/Granat-Direkttreffer (Art 7, Grenade) mit Treffpunkt und Flugrichtung;
+## Schaden in Nachbau-Einheiten (zotti/10). Mit Schadensmodell: Zonen-Strahltest wie Original 0x4E1A20.
+func projectile_hit(kind: int, damage: float, at: Vector3, dir: Vector3, by: Node) -> void:
+	if wrecked or _net_client():
 		return
 	hit.emit(damage, by)
-	health -= damage * 2.5
+	if damage_model == null:
+		if kind == 1:
+			_legacy_damage(damage, by, true)      # Raketen: Schaden über die folgende Explosion (on_explosion)
+		return
+	if by != null:
+		_last_by = by
+	damage_model.damage(kind, damage * VehicleDamage.ZOTTI, at, at - dir.normalized() * 3.0, by)
+	_net_push()
+
+
+## Explosion bei pos (Granate, Rakete, Sprengsatz, MakeExplosion; OrigInteractive.damage_objects): mit Schadensmodell
+## Art 2 – Schaden |(1 − d/r)·Stärke| (0x6DE780, d = Abstand zur Fahrzeughülle [P]) an der nächsten Zone. false = kein
+## Schadensmodell (dann bisheriger Weg über on_explosion)
+func explosion_at(pos: Vector3, radius: float, strength: float, by: Node) -> bool:
+	if damage_model == null:
+		return false
+	if wrecked or _net_client():
+		return true
+	var d := _hull_distance(pos)
+	if radius <= 0.0 or d >= radius:
+		return true
+	var dmg := WeaponDB.explosion_damage(strength, radius, d)
+	if dmg <= 0.0:
+		return true
+	hit.emit(dmg, by)
+	if by != null:
+		_last_by = by
+	damage_model.damage(2, dmg * VehicleDamage.ZOTTI, pos, pos, by)
+	_net_push()
+	return true
+
+
+## Abstand eines Punktes zur Kollisionsbox des Fahrzeugs (0 innerhalb)
+func _hull_distance(p: Vector3) -> float:
+	for c in get_children():
+		if c is CollisionShape3D and (c as CollisionShape3D).shape is BoxShape3D:
+			var cs := c as CollisionShape3D
+			var lp := (global_transform * cs.transform).affine_inverse() * p
+			var e := ((cs.shape as BoxShape3D).size * 0.5)
+			var q := Vector3(clampf(lp.x, -e.x, e.x), clampf(lp.y, -e.y, e.y), clampf(lp.z, -e.z, e.z))
+			return lp.distance_to(q)
+	return p.distance_to(global_position)
+
+
+func on_bullet_hit(damage: float, shooter: Node) -> void:
+	if wrecked or _net_client():
+		return
+	hit.emit(damage, shooter)
+	if damage_model != null:
+		return          # ohne Treffpunkt kein Zonen-Strahltest (Ballistics ruft projectile_hit)
+	_legacy_damage(damage, shooter, true)
+
+
+## Explosionen ohne Ortsangabe (Fahrzeuge ohne Schadensmodell bzw. Altaufrufe)
+func on_explosion(damage: float, by: Node) -> void:
+	if wrecked or _net_client():
+		return
+	if damage_model != null:
+		explosion_at(global_position, 1.0, damage, by)
+		return
+	hit.emit(damage, by)
+	_legacy_damage(damage * 2.5, by, false)
+
+
+## Fahrzeuge ohne Original-Schadensmodell (Übungseinsätze, eigene Karten): Strukturpunkte [E]
+func _legacy_damage(damage: float, by: Node, bullet: bool) -> void:
+	if bullet and armored:
+		return
+	health -= damage
 	if health <= 0.0:
 		explode(by)
 
@@ -855,10 +1105,17 @@ func explode(by: Node = null) -> void:
 		cls = OrigAudio.EXP_CAR_LIGHT
 	Effects.explosion(global_position + Vector3.UP, 6.0, [OrigAudio.CAT_EXPLOSION, cls])
 	Events.emit_noise(global_position, 300.0, by, 1, &"explosion")
+	if damage_model:
+		damage_model.destroyed = true
+		damage_model.timer_ms = 0
+	# Original 0x4DBF00: jeder Insasse erhält Damage(5, −1) – tödlich [B Aufruf, P Bedeutung −1]; ohne Schadensmodell
+	# bisherige Annahme 120/400 [E]
 	for o in occupants.duplicate():
 		if is_instance_valid(o):
 			leave(o)
-			o.apply_hit(120.0 if not armored else 400.0, &"torso", by, Vector3.UP)
+			var lethal := maxf(o.health, 1.0) * 100.0 if damage_model else (120.0 if not armored else 400.0)
+			o.apply_hit(lethal, &"torso", by, Vector3.UP)
+	_net_push()
 	for mi in find_children("*", "MeshInstance3D", true, false):
 		var m := StandardMaterial3D.new()
 		m.albedo_color = Color(0.08, 0.07, 0.06)
@@ -868,7 +1125,10 @@ func explode(by: Node = null) -> void:
 
 func serialize() -> Dictionary:
 	var p := global_position
-	return {"pos": [p.x, p.y, p.z], "yaw": global_rotation.y, "health": health, "wrecked": wrecked}
+	var out := {"pos": [p.x, p.y, p.z], "yaw": global_rotation.y, "health": health, "wrecked": wrecked}
+	if damage_model:
+		out["dm"] = damage_model.serialize()
+	return out
 
 
 func deserialize(d: Dictionary) -> void:
@@ -877,8 +1137,26 @@ func deserialize(d: Dictionary) -> void:
 	global_rotation = Vector3(0, d.get("yaw", 0.0), 0)
 	linear_velocity = Vector3.ZERO
 	health = d.get("health", max_health)
+	if damage_model and d.has("dm"):
+		damage_model.deserialize(d["dm"])
 	if d.get("wrecked", false):
 		wrecked = false
+		explode()
+
+
+## Netzstand für Clients/Spät-Beitretende (über VehicleEntry → Net.object_state/_obj_states)
+func net_state() -> Dictionary:
+	var out := {"wrecked": wrecked, "health": health}
+	if damage_model:
+		out["dm"] = damage_model.serialize()
+	return out
+
+
+func apply_net_state(st: Dictionary) -> void:
+	health = float(st.get("health", health))
+	if damage_model and st.has("dm"):
+		damage_model.deserialize(st["dm"])
+	if bool(st.get("wrecked", false)) and not wrecked:
 		explode()
 
 
@@ -892,6 +1170,14 @@ class VehicleEntry extends Interactable:
 
 	func can_interact(s: Soldier) -> bool:
 		return vehicle and not vehicle.wrecked and s.vehicle == null
+
+	## Server-Stand des Fahrzeugs (Zerstörung, Schadenszonen) für Net.object_state/_obj_states
+	func net_state() -> Dictionary:
+		return vehicle.net_state() if vehicle else {}
+
+	func net_apply(st: Dictionary, _join: bool) -> void:
+		if vehicle:
+			vehicle.apply_net_state(st)
 
 	func interact(s: Soldier) -> void:
 		if not can_interact(s):

@@ -6,8 +6,9 @@ extends Control
 ##    Darunter kurz die Original-Treffermeldung T8851 „Sie haben %s am %s getroffen!!!“ (Teamkamerad T8850,
 ##    Zonen T8801–8806) bzw. bei Tötung T8857/8858/8856. Klang: Original Kat. 4/7 „Flash or Dead Body“ (2D,
 ##    Tonhöhe je Art = Annahme). Schalter: Settings.hit_feedback und Server-Regel hit_indicator.
-##  - Richtungsanzeige erlittener Treffer (Net._hurt_from): roter Bogen um die Bildmitte in Richtung des Schützen,
-##    1,5 s ausblendend (relativ zur aktuellen Blickrichtung).
+##  - Richtungsanzeige erlittener Treffer (Net._hurt_from): roter Bogen um das Fadenkreuz in Richtung des Schützen,
+##    1,5 s ausblendend (relativ zur Blickrichtung, Bezugspunkt eigener Soldat; Kreis aus der kürzeren Bildseite,
+##    hurt_arc_geometry). Schalter: Settings.hurt_feedback und Server-Regel hurt_indicator (getrennt vom Schützen).
 ##  - Kill-Feed oben rechts unter der Punktetafel: „Schütze [Waffensymbol wi_*] Opfer“, Kopfschuss-Marke, Teamfarben,
 ##    Friendly-Fire/Selbstmord/Sturz gekennzeichnet (Original-Wortlaut), ~5 s sichtbar, höchstens 5 Einträge (Net.kill_feed).
 ##  - Namen über Spielern: Teamkameraden immer (Sichtlinie, bis TEAM_RANGE m, ab TEAM_FADE m ausblendend, Teamfarbe);
@@ -54,6 +55,10 @@ func _ready() -> void:
 
 static func hits_enabled() -> bool:
 	return Settings.hit_feedback and bool(Net.rule("hit_indicator"))
+
+
+static func hurts_enabled() -> bool:
+	return Settings.hurt_feedback and bool(Net.rule("hurt_indicator"))
 
 
 static func names_enabled() -> bool:
@@ -113,14 +118,17 @@ func _play_hit_sound(kind: String) -> void:
 
 
 func _on_hurt(from_pos: Vector3) -> void:
+	if not hurts_enabled():
+		return
 	_hurts.append({"pos": from_pos, "ms": Time.get_ticks_msec()})
 	if _hurts.size() > 8:
 		_hurts.pop_front()
 
 
-## Bildschirmwinkel (0 = oben, im Uhrzeigersinn) der Weltposition relativ zur Blickrichtung der Kamera
-static func screen_angle(cam: Camera3D, world: Vector3) -> float:
-	var rel := world - cam.global_position
+## Bildschirmwinkel (0 = oben, im Uhrzeigersinn) der Weltposition relativ zur Blickrichtung der Kamera; Bezugspunkt =
+## eigener Soldat (origin), sonst die Kamera – in der 3. Person liegt ein Schütze dicht hinter dem Soldaten sonst „vorn“
+static func screen_angle(cam: Camera3D, world: Vector3, origin := Vector3.INF) -> float:
+	var rel := world - (origin if origin.is_finite() else cam.global_position)
 	var fwd := Vector3(-cam.global_basis.z.x, 0.0, -cam.global_basis.z.z).normalized()
 	var right := Vector3(cam.global_basis.x.x, 0.0, cam.global_basis.x.z).normalized()
 	return atan2(rel.dot(right), rel.dot(fwd))
@@ -274,26 +282,41 @@ func _draw_names(font: Font) -> void:
 		draw_string(font, p, txt, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
 
+## Geometrie des Richtungsbogens für eine Zeichenfläche (Pixel der Control = Bildschirmpunkte; die Oberfläche skaliert
+## mit stretch canvas_items/expand gleichmäßig, daher bleibt der Kreis rund): Mitte = Fadenkreuz (Flächenmitte),
+## Radius aus der KÜRZEREN Seite (gleich groß bei 4:3, 16:10, 16:9, 21:9 gleicher Höhe), Grenzen 56–260 px.
+## ang: 0 = Schütze voraus (Bogen oben), +PI/2 = rechts. Rückgabe: center, radius, a0/a1 (Godot-Bogenwinkel, 0 = rechts,
+## im Uhrzeigersinn), width, tip/base_l/base_r (Pfeilspitze nach außen).
+static func hurt_arc_geometry(area: Vector2, ang: float) -> Dictionary:
+	var c := area * 0.5
+	var r := clampf(minf(area.x, area.y) * 0.16, 56.0, 260.0)
+	var ga := ang - PI * 0.5
+	var dir := Vector2(cos(ga), sin(ga))
+	var side := Vector2(-dir.y, dir.x) * r * 0.08
+	var base := c + dir * (r * 1.04)
+	return {"center": c, "radius": r, "a0": ga - 0.34, "a1": ga + 0.34, "width": maxf(r * 0.06, 3.0),
+		"tip": c + dir * (r * 1.2), "base_l": base + side, "base_r": base - side, "dir": dir}
+
+
 func _draw_hurts() -> void:
 	var cam := get_viewport().get_camera_3d()
-	if cam == null:
+	if cam == null or not hurts_enabled():
 		return
-	var c := size * 0.5
-	var r := minf(size.x, size.y) * 0.13
+	var me: Soldier = Net._soldiers.get(Net.my_id())
+	var origin: Vector3 = me.global_position if is_instance_valid(me) else Vector3.INF
 	var now := Time.get_ticks_msec()
 	for h in active_hurts():
-		var a := screen_angle(cam, h["pos"])
-		var k := 1.0 - float(now - int(h["ms"])) / (HURT_SHOW_S * 1000.0)
+		var g := hurt_arc_geometry(size, screen_angle(cam, h["pos"], origin))
+		var k := clampf(1.0 - float(now - int(h["ms"])) / (HURT_SHOW_S * 1000.0), 0.0, 1.0)
 		var col := Color(0.9, 0.12, 0.08, 0.85 * k)
-		var ga := a - PI * 0.5               # Godot-Bogenwinkel: 0 = rechts, im Uhrzeigersinn
-		draw_arc(c, r, ga - 0.32, ga + 0.32, 16, col, maxf(r * 0.05, 3.0), true)
-		var tip := c + Vector2(cos(ga), sin(ga)) * (r + r * 0.16)
-		var side := Vector2(-sin(ga), cos(ga)) * r * 0.07
-		var base := c + Vector2(cos(ga), sin(ga)) * (r + r * 0.03)
-		draw_colored_polygon(PackedVector2Array([tip, base + side, base - side]), col)
+		draw_arc(g["center"], g["radius"], g["a0"], g["a1"], 24, Color(0, 0, 0, 0.5 * k), float(g["width"]) + 3.0, true)
+		draw_arc(g["center"], g["radius"], g["a0"], g["a1"], 24, col, g["width"], true)
+		draw_colored_polygon(PackedVector2Array([g["tip"], g["base_l"], g["base_r"]]), col)
 
 
 func _draw_hitmarker(font: Font) -> void:
+	if not hits_enabled():
+		return                         # Regel/Option während der Anzeige abgeschaltet
 	var age := float(Time.get_ticks_msec() - hit_ms) / 1000.0
 	var c := size * 0.5
 	var dur := KILL_SHOW_S if hit_kind == "kill" else HIT_SHOW_S

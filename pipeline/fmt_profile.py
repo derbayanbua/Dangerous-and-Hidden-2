@@ -449,7 +449,7 @@ def main(argv):
         return 2
     root, out_path = argv[1], argv[2]
     here = os.path.dirname(os.path.abspath(__file__))
-    cache = os.path.join(here, "..", "DangerousHidden2", "orig_cache")
+    cache = os.environ.get("DH2_CACHE") or os.path.join(here, "..", "DangerousHidden2", "orig_cache")
     texts = _load_json(os.path.join(cache, "texts_german.json"))
     items_j = _load_json(os.path.join(cache, "items.json"))
     item_names = {i["id"]: i["name"] for i in items_j["items"]} if items_j else None

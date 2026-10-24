@@ -66,8 +66,30 @@ echo Freigabe eingerichtet (Netzwerkprofil "Privat" bzw. "Domaene").
 pause
 "@ | Set-Content -Encoding ASCII "$Out\Firewall_freigeben.cmd"
 
+# 4b) Nutzer-Werkzeug: Menü + Konverter (eigener Code, keine Originaldaten) + Paketlisten, damit Spieler die
+#     Spieldaten selbst aus ihrer Installation erzeugen und Texturen hochskalieren können
+"-- Nutzer-Werkzeug (HD2-Werkzeuge.cmd, pipeline, tools\user)"
+Copy-Item "$proj\HD2-Werkzeuge.cmd" $Out -Force
+New-Item -ItemType Directory -Force "$Out\tools\user", "$Out\pipeline" | Out-Null
+Copy-Item "$proj\tools\user\*" "$Out\tools\user" -Force
+Get-ChildItem "$proj\pipeline" -File -Filter *.py | ForEach-Object { Copy-Item $_.FullName "$Out\pipeline" -Force }
+foreach ($f in @("wav_tables.json")) { Remove-Item "$Out\pipeline\$f" -ErrorAction SilentlyContinue }   # aus rw_data.dll – nie mitliefern
 # 5) Lies-mich (aus build\playtest übernehmen, falls vorhanden; Version ersetzen)
 $readme = "$proj\build\playtest\SPIELTEST_LIESMICH.txt"
+$selbst = @"
+
+SPIELDATEN SELBST ERZEUGEN (eigene Installation von Hidden & Dangerous 2 nötig)
+  1. HD2-Werkzeuge.cmd doppelklicken.
+  2. 1) Original-Installation suchen  -> Ordner mit hd2.exe wählen (wird nur gelesen).
+  3. 2) Werkzeuge einrichten          -> Python-Umgebung in werkzeuge\ (fragt vor jedem Download).
+  4. 3) Spieldaten exportieren        -> erzeugt orig_cache\ neben der EXE (fortsetzbar, Protokoll in
+                                         werkzeuge\protokolle\).
+  5. 4) Filme konvertieren (optional, ffmpeg) und 5) Texturen hochskalieren (optional, HD/4K,
+     CPU oder NVIDIA-GPU; dauert lange, jederzeit fortsetzbar).
+  6. 6) Status prüfen, 7) Spiel starten.
+  Entwickelt mit der Original-CD-Version; "Courage Under Fire"/"Sabre Squadron" können abweichen.
+  Die erzeugten Daten stammen aus dem eigenen Spiel – nicht weitergeben.
+"@
 $lan = @"
 
 LAN MIT ZWEI PCS
@@ -82,9 +104,10 @@ LAN MIT ZWEI PCS
 if (Test-Path $readme) {
   $t = [IO.File]::ReadAllText($readme, [Text.Encoding]::UTF8) -replace "Spieltest-Build v[0-9.]+", "Spieltest-Build v$version"
   if ($t -notmatch "LAN MIT ZWEI PCS") { $t += $lan }
+  if ($t -notmatch "SPIELDATEN SELBST ERZEUGEN") { $t += $selbst }
   [IO.File]::WriteAllText("$Out\SPIELTEST_LIESMICH.txt", $t, (New-Object Text.UTF8Encoding $true))
 } else {
-  [IO.File]::WriteAllText("$Out\SPIELTEST_LIESMICH.txt", "DANGEROUS AND HIDDEN 2 (unofficial) – Spieltest-Build v$version`r`n" + $lan, (New-Object Text.UTF8Encoding $true))
+  [IO.File]::WriteAllText("$Out\SPIELTEST_LIESMICH.txt", "DANGEROUS AND HIDDEN 2 (unofficial) – Spieltest-Build v$version`r`n" + $lan + $selbst, (New-Object Text.UTF8Encoding $true))
 }
 
 # 6) Optional: Prüfung mit der fertigen EXE (startet sich für den LAN-Test selbst als Client)

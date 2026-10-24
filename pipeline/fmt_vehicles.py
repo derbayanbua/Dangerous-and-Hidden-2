@@ -31,7 +31,7 @@ import fmt_scene2  # noqa: E402
 import fmt_actors_items as fai  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CACHE = os.path.join(ROOT, "DangerousHidden2", "orig_cache")
+CACHE = os.environ.get("DH2_CACHE") or os.path.join(ROOT, "DangerousHidden2", "orig_cache")
 
 
 def unrle(p: bytes) -> bytes:
