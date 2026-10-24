@@ -7,7 +7,7 @@ Kein offizielles Spiel des Herstellers, keine kommerzielle Absicht – einfach n
 > 🛒 **Kauft das Original!** *Hidden & Dangerous 2* gibt es z. B. bei [GOG](https://www.gog.com/) – ohne eine
 > eigene Original-Installation funktioniert dieses Projekt auch gar nicht.
 >
-** Hinweis: Die Entwicklung fand rein mit dem Orignal Spiel (CD) statt, daher nicht mit der Version Courace under Fire und auch ohne das Addon Sabre Squadron**
+**Hinweis: Die Entwicklung fand rein mit dem Orignal Spiel (CD) statt, daher nicht mit der Version Courace under Fire und auch ohne das Addon Sabre Squadron**
 
 ---
 
