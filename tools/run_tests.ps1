@@ -22,7 +22,10 @@ $suites = @(
   @{ name = "test_ui_flow";  args = "--headless -- --autoplay=test_ui_flow --profiles_dir=user://test_ui_flow --noimport" },
   @{ name = "test_tactical"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_tactical" },
   @{ name = "test_movies";   args = "--headless -- --autoplay=test_movies --profiles_dir=user://test_movies --noimport" },
+  @{ name = "test_movie_skip"; args = "--headless -- --autoplay=test_movie_skip --profiles_dir=user://test_movie_skip --noimport" },
   @{ name = "test_interactive"; args = "--headless -- --mission=a1_blizzard --autoplay=test_interactive" },
+  # Zweiprozessig: startet den Client (test_normandie_doors_client) selbst; MP-Tests nie parallel (Port 11001/27101)
+  @{ name = "test_normandie_doors"; args = "--headless -- --autoplay=test_normandie_doors" },
   @{ name = "test_af6";      args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" },
   @{ name = "test_items";    args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_items" },
   @{ name = "test_water";    args = "--headless -- --mission=nw1_dampfleitung --autoplay=test_water" },
@@ -34,7 +37,8 @@ $suites = @(
   @{ name = "test_tools_mines_mp"; args = "--headless -- --autoplay=test_tools_mines --phase=mp" },
   @{ name = "test_net";      args = "--headless -- --autoplay=test_net" },
   @{ name = "test_mp_modes"; args = "--headless -- --autoplay=test_mp_modes" },
-  @{ name = "test_bots";     args = "--headless -- --autoplay=test_bots" },
+  # B-009, MP-Bots zurückgestellt (Auftraggeber 24.10.2026): test_bots vorerst nicht Teil der Gesamtsuite
+  # @{ name = "test_bots";     args = "--headless -- --autoplay=test_bots" },
   @{ name = "test_lan_e2e";  args = "--headless -- --autoplay=test_lan_e2e --profiles_dir=user://test_lan_host --noimport" },
   @{ name = "test_mp_features"; args = "--headless -- --autoplay=test_mp_features --profiles_dir=user://test_mp_features --noimport" },
   @{ name = "test_dedicated"; args = "--headless -- --autoplay=test_dedicated --profiles_dir=user://test_ded --noimport" },

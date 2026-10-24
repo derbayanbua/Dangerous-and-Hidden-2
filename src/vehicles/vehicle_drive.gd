@@ -366,6 +366,7 @@ func reverse_top_speed() -> float:
 
 ## Skript-/KI-Fahrer: auf einen Zielpunkt zu, mit Wunschgeschwindigkeit (m/s, negativ = rückwärts)
 func ai_control(target: Vector3, want: float, delta: float) -> void:
+	parked = false     # KI-/Skriptfahrt löst die Feststellbremse (blieb sonst nach dem Abstellen gesetzt: CZECH5-Kolonne)
 	var lt := v.to_local(target)
 	var reverse := want < 0.0
 	var ang := atan2(lt.x, lt.z) if not reverse else atan2(lt.x, -lt.z)

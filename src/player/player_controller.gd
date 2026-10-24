@@ -287,6 +287,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif interact_target and is_instance_valid(interact_target):
 			if _open_search(interact_target):
 				return                                     # Durchsuchen: Inventar mit zweitem Inventar
+			FieldInventory.view(active)                    # Inventarreihenfolge vor dem Aufnehmen festhalten (neu = hinten)
 			interact_target.interact(active)
 			if Net.is_online:
 				Net.used_interactable(interact_target)     # Türen, Schalter … auch bei den anderen
@@ -350,6 +351,8 @@ func _physics_process(_delta: float) -> void:
 			v.throttle = -iv.y
 			v.steer_input = -iv.x
 			v.handbrake = Input.is_action_pressed("stance_stand")
+			# Kleinst-U-Boot (OrigSubmarine): Leertaste auftauchen, Hocken-Taste tauchen
+			v.vertical_input = (1.0 if Input.is_action_pressed("stance_stand") else 0.0) - (1.0 if Input.is_action_pressed("stance_crouch") else 0.0)
 			# Verfolgerkamera richtet sich ohne Mausbewegung hinter dem fahrenden Fahrzeug aus
 			_mouse_idle += _delta
 			if _mouse_idle > 1.2 and v.speed_kmh() > 6.0:

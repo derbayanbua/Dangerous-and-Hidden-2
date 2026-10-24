@@ -9,18 +9,24 @@ var _decals: Array[Node3D] = []
 var _hole_tex: Texture2D
 var _blood_tex: Texture2D
 var _container: Node3D
+var blood_fx: Node      ## src/combat/blood_fx.gd
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_PAUSABLE
 	_hole_tex = _radial_texture(Color(0.05, 0.05, 0.05, 0.95), 32)
 	_blood_tex = _radial_texture(Color(0.35, 0.02, 0.02, 0.9), 32)
+	blood_fx = preload("res://src/combat/blood_fx.gd").new()
+	blood_fx.name = "BloodFx"
+	add_child(blood_fx)
 
 
 ## Die Mission ruft dies auf, damit Effekte mit der Welt entfernt werden.
 func set_container(node: Node3D) -> void:
 	_container = node
 	_decals.clear()
+	if blood_fx:
+		blood_fx.reset()
 
 
 func _parent() -> Node3D:
@@ -85,11 +91,10 @@ func impact(pos: Vector3, normal: Vector3) -> void:
 
 
 ## Treffer an einer Figur: Blut und Original-Klang „Flash or Dead Body“ (Kat. 4/7)
-func blood(pos: Vector3, normal: Vector3) -> void:
+## dir = Flugrichtung, zone = Trefferzone, victim = Getroffener (Spritzer/Strahl/Decals: src/combat/blood_fx.gd)
+func blood(pos: Vector3, normal: Vector3, dir := Vector3.ZERO, zone: StringName = &"", victim: Node = null) -> void:
 	OrigAudio.play_group(OrigAudio.CAT_HIT, OrigAudio.HIT_FLESH, pos)
-	if not Settings.blood:
-		return   # Original-Option „BLUTFLECKEN“
-	_puff(pos, normal, Color(0.4, 0.03, 0.03, 0.9), 5)
+	blood_fx.hit(pos, normal, dir, zone, victim)   # Stufe AUS (Original „BLUTFLECKEN“ nein) = nichts
 
 
 ## Explosion: sound = [Kategorie, Gruppe] der Klangtabelle (Standard Kat. 6/0 „Explosion Grenade“),

@@ -381,4 +381,104 @@ func _run() -> void:
 	await key(KEY_0)
 	await key(KEY_0)
 	check(not cm.is_open, "Menü geschlossen")
+
+	await _persistence(m, c, cm, sq, lead)
 	_finish()
+
+
+## Befehle bleiben bestehen (Fehlerbericht 23.10.2026 „die folgen immer nur“): echte Tasten, 20 s Spielzeit, der
+## Anführer läuft dabei weg. Original: Halt/Position halten löschen das Folge-Flag (hd2.exe 0x535C00 → 0x537E50 →
+## 0x5377F0(0)); Soldatenwechsel lässt die Folger des abgegebenen Soldaten stehen (0x53BC50 → 0x4593E0).
+func _persistence(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadManager, lead: Soldier) -> void:
+	cm.point_override = Vector3.INF
+	cm.context_override = null
+	c.set_active(lead)
+	place(lead, 0, 22, 0.0)
+	var mates: Array[Soldier] = []
+	for mm in sq.alive_members():
+		if mm != lead:
+			mates.append(mm)
+			place(mm, -3.0 + mates.size() * 2.0, 25, 0.0)
+			sq.brain_of(mm).clear_tasks()
+	await cmd("command_all", [1, 1])          # Folgt mir
+	await seconds(1.0)
+	# Halt (Bewegung › Stehen bleiben) – Anführer läuft 6 s davon, nach 20 s stehen alle noch
+	await cmd("command_all", [1, 4])
+	var p0 := {}
+	for mm in mates:
+		p0[mm] = mm.global_position
+	var lp0 := lead.global_position
+	Input.action_press("move_forward")
+	await seconds(6.0)
+	Input.action_release("move_forward")
+	await seconds(14.0)
+	var held := true
+	var info := []
+	for mm in mates:
+		var d: float = mm.global_position.distance_to(p0[mm])
+		info.append("%s %d %.1f m" % [mm.soldier_name, sq.brain_of(mm).order, d])
+		held = held and sq.brain_of(mm).order == SquadBrain.Order.HOLD and d < 1.5
+	check(held and lead.global_position.distance_to(lp0) > 4.0,
+		"Halt bleibt nach 20 s bestehen (Anführer läuft weg, Trupp folgt nicht)",
+		"Anführer %.1f m; %s" % [lead.global_position.distance_to(lp0), ", ".join(info)])
+	# Dorthin (Fadenkreuzpunkt) – erreicht das Ziel und bleibt dort, auch wenn der Anführer weiterläuft
+	var goal: Vector3 = m.lb.ground(12, 14, 0.0)
+	cm.point_override = goal
+	await cmd("command_all", [1, 3])
+	cm.point_override = Vector3.INF
+	place(lead, 10, 5, PI)
+	Input.action_press("move_forward")
+	await seconds(5.0)
+	Input.action_release("move_forward")
+	await seconds(15.0)
+	var there := true
+	info = []
+	for mm in mates:
+		var d2: float = Vector2(mm.global_position.x - goal.x, mm.global_position.z - goal.z).length()
+		info.append("%s %d %.1f m" % [mm.soldier_name, sq.brain_of(mm).order, d2])
+		there = there and sq.brain_of(mm).order == SquadBrain.Order.MOVE and d2 < 3.5
+	check(there, "Dorthin: nach 20 s am Ziel, Befehl besteht (kein Folgen)", ", ".join(info))
+	# Position halten an einen einzelnen Soldaten (Ziffernblock 2), die übrigen folgen
+	var two := sq.members[1]
+	await cmd("command_all", [1, 1])
+	await cmd("command_2", [1, 5])
+	var p2 := two.global_position
+	Input.action_press("move_back")
+	await seconds(5.0)
+	Input.action_release("move_back")
+	await seconds(15.0)
+	var others_follow := true
+	for mm in mates:
+		if mm != two:
+			others_follow = others_follow and sq.brain_of(mm).order == SquadBrain.Order.FOLLOW
+	check(sq.brain_of(two).order == SquadBrain.Order.HOLD and sq.brain_of(two).strict_hold and two.global_position.distance_to(p2) < 1.5
+		and others_follow, "Einzelbefehl „Position halten“ bleibt 20 s, die anderen folgen weiter",
+		"%.1f m" % two.global_position.distance_to(p2))
+	# Soldatenwechsel: abgegebener Soldat und seine Folger bleiben stehen (Original 0x4593E0)
+	var p3 := {}
+	for mm in sq.alive_members():
+		p3[mm] = mm.global_position
+	await tap("soldier_3")
+	var nl := sq.leader()
+	check(nl == sq.members[2] and c.active == nl, "Wechsel auf Soldat 3")
+	Input.action_press("move_forward")
+	await seconds(5.0)
+	Input.action_release("move_forward")
+	await seconds(15.0)
+	var stay := true
+	info = []
+	for mm in sq.alive_members():
+		if mm == nl:
+			continue
+		var d3: float = mm.global_position.distance_to(p3[mm])
+		info.append("%s %d %.1f m" % [mm.soldier_name, sq.brain_of(mm).order, d3])
+		stay = stay and sq.brain_of(mm).order == SquadBrain.Order.HOLD and d3 < 1.5
+	check(stay, "Soldatenwechsel: niemand fällt auf Folgen zurück (20 s)", ", ".join(info))
+	await cmd("command_all", [1, 1])
+	await seconds(4.0)
+	var fol := true
+	for mm in sq.alive_members():
+		if mm != nl:
+			fol = fol and sq.brain_of(mm).order == SquadBrain.Order.FOLLOW and mm.global_position.distance_to(nl.global_position) < 16.0
+	check(fol, "„Folgt mir“ bindet den Trupp an den neuen Soldaten")
+	await tap("soldier_1")

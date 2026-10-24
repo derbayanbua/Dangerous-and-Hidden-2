@@ -90,6 +90,17 @@ func _run() -> void:
 			break
 	check(not tm.plans.has(ash) and ab.order == SquadBrain.Order.HOLD and ash.global_position.distance_to(wp2) < 3.0,
 		"Planende: Soldat hält am letzten Wegpunkt", "%.1f m" % ash.global_position.distance_to(wp2))
+	# Fehlerbericht 23.10.2026: Kartenbefehl bleibt bestehen, auch wenn der Anführer wegläuft (20 s, kein Folgen)
+	var pa := ash.global_position
+	var hp0 := hale.global_position
+	Input.action_press("move_back")
+	await seconds(6.0)
+	Input.action_release("move_back")
+	await seconds(14.0)
+	check(ab.order == SquadBrain.Order.HOLD and ash.global_position.distance_to(pa) < 1.5 and hale.global_position.distance_to(hp0) > 8.0,
+		"Planende: nach 20 s hält er noch am Wegpunkt (Anführer läuft weg)",
+		"%.1f m, Anführer %.1f m" % [ash.global_position.distance_to(pa), hale.global_position.distance_to(hp0)])
+	place(hale, 0, 30, 0.0)
 	# Löschen
 	tm.add_waypoint(ash, wp1)
 	tm.selected.clear()
@@ -125,8 +136,9 @@ func _run() -> void:
 			await seconds(1.6)
 			check(not oh.injury.visible, "Overlay blendet in 1 s aus (−0,5/s)")
 		var dl := WeaponDB.from_orig(7)
-		check(dl != null and oh._icon_key(Weapon.new(dl, false)) != "", "Waffensymbol auch für De Lisle (aus items.sav-Symbol)",
-			oh._icon_key(Weapon.new(dl, false)) if dl else "-")
+		# Symbol über den Originalgegenstand (OrigHud seit dem Waffenbild-Feld 0x4A9530: weapon_item → items.sav „icon“)
+		var dl_icon: String = oh._item_icon_file(OrigHud.weapon_item(Weapon.new(dl, false))) if dl else ""
+		check(dl != null and dl_icon != "", "Waffensymbol auch für De Lisle (aus items.sav-Symbol)", dl_icon if dl else "-")
 	else:
 		check(false, "OrigHud vorhanden (Originaldaten-Cache)")
 

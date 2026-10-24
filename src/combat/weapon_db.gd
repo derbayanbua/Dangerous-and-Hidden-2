@@ -54,6 +54,67 @@ static func zone_damage(base: float, zone: StringName, helmet := false, roll := 
 	return base * float(ZONE_FACTOR.get(zone, 1.0))
 
 
+## --- Einzelspieler (Stand 23.10.2026, docs/re_notes_weapons.md §10b) -----------------------------------------------
+## hd2.exe Human::Damage 0x5A1C90 wertet den Schwierigkeitsgrad nur im Einzelspieler (Spielmodus 0x982100 & 7 == 7) bzw.
+## Koop (0x6B66B0: Spielart 3) und nur für Schadensart 1 (Geschoss, Aufruf aus 0x44B910) aus; Stufe = 0x6B6700 (SP:
+## Profil-Schwierigkeit, MP fest 3). Opfer Seite 1 (Spielertrupp) oder 4 (verbündeter NPC): Schaden × 0,2 / 0,4 / 1,0 /
+## 1,2 für Stufe 1 / 2 / 3 / 4 (Konstanten 0x80F540 / 0x80F554 / – / 0x80FAD0). Übrige Opfer: nur Stufe 1 und Schütze
+## Seite 1 → × 1,2 (0x80FAD0) [B]. Danach Zonenfaktor, Abzug ⌊Schaden⌋ in zotti (__ftol 0x7E5E00). Helm (Zone 11):
+## Durchschlag (RandFloat < 0,3) im SP gegen Seite 1 auf Stufe 1 × 1 statt × 5 (0x5A20F6–0x5A210E) [B].
+## Im Mehrspieler (Net.is_online) bleibt zone_damage unverändert.
+const SP_VICTIM_FACTOR := {1: 0.2, 2: 0.4, 3: 1.0, 4: 1.2}
+const SP_EASY_SHOOTER_FACTOR := 1.2
+
+
+## Seite eines Menschen wie actors.bin (+0x19C): 1 Spielertrupp, 2 Feind, 3 neutral, 4 verbündeter NPC
+static func orig_side(s: Node) -> int:
+	if s == null or not is_instance_valid(s):
+		return 0
+	var p = s.get_meta("orig_params", {}) if s.has_meta("orig_params") else {}
+	if p is Dictionary and (p as Dictionary).has("side"):
+		return int(p["side"])
+	var t = s.get("team")
+	if t == null:
+		return 0
+	if int(t) == Soldier.TEAM_ALLIED:
+		return 1
+	if int(t) == Soldier.TEAM_AXIS:
+		return 2
+	return 3
+
+
+## Schwierigkeitsfaktor eines Geschosstreffers im Einzelspieler (0x5A1C90, s. o.)
+static func sp_bullet_factor(victim: Node, attacker: Node, difficulty: int) -> float:
+	var vs := orig_side(victim)
+	if vs == 1 or vs == 4:
+		return float(SP_VICTIM_FACTOR.get(difficulty, 1.0))
+	if difficulty == 1 and orig_side(attacker) == 1:
+		return SP_EASY_SHOOTER_FACTOR
+	return 1.0
+
+
+## Schaden eines Geschosstreffers nach Zone (gemeinsame Quelle für SP und MP). MP: zone_damage unverändert.
+## SP: Schwierigkeitsfaktor vor dem Zonenfaktor, Helmregel Stufe 1, ganzzahlige zotti (Gesundheit 1 = 10 zotti).
+static func bullet_hit_damage(base: float, zone: StringName, helmet: bool, victim: Node, attacker: Node,
+		single_player: bool, difficulty: int, roll := -1.0) -> float:
+	if not single_player:
+		return zone_damage(base, zone, helmet, roll)
+	var k := sp_bullet_factor(victim, attacker, difficulty)
+	var b := base * k
+	var d := 0.0
+	if helmet:
+		# Panzerung des Helmmaterials zieht schon das Geschoss ab (0x44B910), der Faktor wirkt danach in 0x5A1C90
+		var rest := (base - HELMET_ARMOR) * k
+		if rest <= 0.0:
+			return 0.0
+		var r: float = randf() if roll < 0.0 else roll
+		var pierce := 1.0 if (difficulty == 1 and orig_side(victim) == 1) else HELMET_PIERCE_FACTOR
+		d = rest * (pierce if r < HELMET_PIERCE_CHANCE else HELMET_GLANCE_FACTOR)
+	else:
+		d = b * float(ZONE_FACTOR.get(zone, 1.0))
+	return floorf(d * 10.0 + 1e-4) / 10.0
+
+
 ## Explosion (hd2.exe 0x6DE780 → 0x6DDD40): Schaden = |(1 − Abstand/Radius) · Stärke| minus Materialpanzerung des
 ## Ziels (Mensch: Material 66 „Fleisch“ = 0), Schadensart 2/4 in Zone 0 (Körper) [B]
 static func explosion_damage(strength: float, radius: float, dist: float) -> float:
@@ -91,6 +152,11 @@ static func wears_helmet(s: Node) -> bool:
 		var eq = OrigInteractive.item_info(int(it)).get("equip_raw", [])
 		if eq is Array and (eq as Array).size() > 1 and int(eq[1]) == HEAD_ITEM_CATEGORY:
 			return true
+	# Original-Menschen (actors.bin) und SAS-Kader im Einzelspieler: nur der Kopfgegenstand zählt (0x455670 prüft das
+	# Modell des Kopf-Inventarplatzes +0x74); ohne Kopfgegenstand kein Helm – die Platzhalter-Helmform „stahlhelm“
+	# von spawn_enemy gab z. B. ARCTIC1 „metar“ (nur Uniform + P08) fälschlich einen Helm (Kopftreffer ×0,2 statt ×5)
+	if s.has_meta("orig_params") or s.has_meta("sas"):
+		return false
 	var hs: String = String(s.get("helmet_style")) if "helmet_style" in s else ""
 	return hs != "" and hs != "cap" and hs != "none"
 

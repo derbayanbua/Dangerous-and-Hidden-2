@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fmt_actors_items as fai  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CACHE = os.path.join(ROOT, "DangerousHidden2", "orig_cache")
+CACHE = os.environ.get("DH2_CACHE") or os.path.join(ROOT, "DangerousHidden2", "orig_cache")
 MAGIC = 0x7ED00109
 CAMPAIGN = ["ARCTIC1", "ARCTIC2", "ARCTIC3", "ARCTIC4", "AFRICA1", "AFRICA2", "AFRICA3", "AFRICA4",
             "AFRICA5", "AFRICA6", "NORWAY", "BURMA1", "BURMA2", "ALPS1", "ALPS2", "NORMANDY",

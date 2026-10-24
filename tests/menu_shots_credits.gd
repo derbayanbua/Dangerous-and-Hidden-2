@@ -27,7 +27,7 @@ func _run() -> void:
 	await shot("credits_0_start")
 	menu._close_credits()
 	# --- Munition unter der Waffe (Inventar-Auswahl) ---
-	menu._show_briefing("a1_blizzard")
+	menu._show_briefing("a1_blizzard", true)     # ohne Briefing-Film
 	menu._open_sas_screen("a1_blizzard")
 	var sas: SasScreen = menu.sas_screen
 	if sas.has_method("show_team"):

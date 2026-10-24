@@ -24,6 +24,16 @@ var _move_target := Vector3.INF
 var _repath := 0.0
 var _stuck_time := 0.0
 var _last_pos := Vector3.ZERO
+## Steht der Soldat abseits des Navigationsnetzes (z. B. ARCTIC1-Landeplatz: Netz 18 m tiefer), zeigt der Pfad
+## senkrecht nach unten und der Soldat tritt auf der Stelle → direkt aufs Ziel laufen (nur Trupp-KI, SquadBrain).
+var direct_when_off_mesh := false
+const OFF_MESH_DIST := 2.0
+const STUCK_SPEED := 0.25        ## m/s: darunter gilt der Soldat als festgefahren [E]
+var _off_mesh := false
+var _off_check := 0.0
+var _detour := 0.0
+var _detour_sign := 1.0
+var _human_tries := 0
 
 
 func setup(s: Soldier) -> void:
@@ -80,24 +90,76 @@ func update_movement(delta: float, face_move := true) -> void:
 	var next := agent.get_next_path_position()
 	var dir := next - soldier.global_position
 	dir.y = 0
-	if dir.length() < 0.05:
+	if direct_when_off_mesh:
+		_off_check -= delta
+		if _off_check <= 0.0:
+			_off_check = 0.5
+			var cp := NavigationServer3D.map_get_closest_point(agent.get_navigation_map(), soldier.global_position)
+			_off_mesh = cp.distance_to(soldier.global_position) > OFF_MESH_DIST
+	var direct := direct_when_off_mesh and _off_mesh
+	if dir.length() < 0.05 or direct:
 		# kein Pfad (z. B. Navigationsnetz noch nicht fertig): direkt laufen
 		dir = _move_target - soldier.global_position
 		dir.y = 0
 	dir = dir.normalized()
+	if _detour > 0.0:
+		# festgefahren (abseits des Netzes oder an einem stehenden Menschen): seitlich vorbei (Ersatz, kein Originalverhalten)
+		_detour -= delta
+		dir = dir.rotated(Vector3.UP, 1.2 * _detour_sign)
 	soldier.move_input = dir
 	_open_doors_ahead(delta, dir)
 	if face_move and dir.length() > 0.1:
 		_turn_towards_dir(dir, delta, 6.0)
 	# Feststecken erkennen
-	if soldier.global_position.distance_to(_last_pos) < 0.05 * delta * 60.0:
+	# Feststecken = praktisch kein Fortschritt (< 0,25 m/s). Vorher 0,05 m je Bild bei 60 Hz = 3 m/s: jedes Gehen
+	# (1,7 m/s) und jeder Hang galt als „fest“, nach 2,5 s brach die Bewegung ab (ALPS2 Agentin auf der Außentreppe).
+	if soldier.global_position.distance_to(_last_pos) < STUCK_SPEED * delta:
 		_stuck_time += delta
 	else:
 		_stuck_time = 0.0
 	_last_pos = soldier.global_position
+	if direct and _stuck_time > 1.5:
+		# Hindernis ohne Netz: hinübersteigen versuchen, sonst abwechselnd links/rechts ausweichen
+		_stuck_time = 0.0
+		soldier.jump_or_climb()
+		_detour_sign = -_detour_sign
+		_detour = 1.5
+		return
+	if _stuck_time > 1.0:
+		var blocker := _blocked_by_human()
+		if blocker:
+			# ein stehender Mensch versperrt den Weg (ALPS2: AL2_20 auf dem schmalen Treppenabsatz): erst seitlich
+			# ausweichen, nach zwei Versuchen kurz durch ihn hindurch (Kollisionsausnahme 3 s) [E, Ersatz]
+			_stuck_time = 0.0
+			_human_tries += 1
+			if _human_tries > 2 and not blocker.is_player_controlled:
+				_human_tries = 0
+				soldier.add_collision_exception_with(blocker)
+				soldier.get_tree().create_timer(3.0, false).timeout.connect(_end_pass_through.bind(soldier, blocker))
+			else:
+				_detour_sign = -_detour_sign
+				_detour = 1.0
+			return
 	if _stuck_time > 2.5:
 		_stuck_time = 0.0
 		stop_moving()
+
+
+func _end_pass_through(s: Soldier, other: Soldier) -> void:
+	if is_instance_valid(s) and is_instance_valid(other):
+		s.remove_collision_exception_with(other)
+
+
+func _blocked_by_human() -> Soldier:
+	for i in soldier.get_slide_collision_count():
+		var o := soldier.get_slide_collision(i).get_collider()
+		if o is Soldier:
+			return o as Soldier
+	var kc := KinematicCollision3D.new()
+	var fw := Vector3(soldier.move_input.x, 0.0, soldier.move_input.z)
+	if fw.length() > 0.1 and soldier.test_move(soldier.global_transform, fw.normalized() * 0.3, kc) and kc.get_collider() is Soldier:
+		return kc.get_collider() as Soldier
+	return null
 
 
 var _door_check := 0.0

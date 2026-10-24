@@ -98,14 +98,58 @@ func _ready() -> void:
 static var _startup_done := false
 
 
-## Filme abspielen (Menümusik pausiert), danach cb
+## Filme abspielen (Menümusik pausiert), danach cb.
+## Sonderfilme wie hd2.exe 0x688100 (Filmobjekt prüft den Namensanfang): „credits“ (credits.bik ist nicht installiert,
+## Videoknoten nach Czech6) = Mitwirkenden-Rolltext; „Outro2“ (Film ohne Tonspur) startet dazu die Musikgruppe 37
+## „Credits“ mit 2 s Einblendung (0x688259 ff.: Musik 0x25, 0x7D0 ms), die im Rolltext weiterläuft.
 func _play_videos(names: Array, cb: Callable) -> void:
+	var sp := -1
+	for i in names.size():
+		var low := String(names[i]).to_lower()
+		if low.begins_with("credits") or low.begins_with("outro2"):
+			sp = i
+			break
+	if sp >= 0:
+		var head := names.slice(0, sp)
+		var cont := _play_special_video.bind(String(names[sp]), names.slice(sp + 1), cb)
+		if MoviePlayerScript.any_available(head):
+			_music.stop()
+			MoviePlayerScript.play_list(self, head, cont)
+		else:
+			cont.call()
+		return
 	if not MoviePlayerScript.any_available(names):
 		if cb.is_valid():
 			cb.call()
 		return
 	_music.stop()
 	MoviePlayerScript.play_list(self, names, _after_videos.bind(cb))
+
+
+func _play_special_video(film: String, tail: Array, cb: Callable) -> void:
+	if film.to_lower().begins_with("credits"):
+		_show_credits(_play_videos.bind(tail, cb))
+		return
+	_play_credits_music(2.0)
+	if Game.movie_path(film) == "":
+		_play_videos(tail, cb)
+		return
+	MoviePlayerScript.play_list(self, [film], _play_videos.bind(tail, cb))
+
+
+## Musikgruppe 37 „Credits“ (credits.ogg); läuft sie schon, bleibt sie (0x6881a2: nur starten, wenn nicht 0x25)
+func _play_credits_music(fade_in := 0.0) -> void:
+	if _music.playing and _music.stream != null and _music.stream.has_meta("credits"):
+		return
+	var music := _load_ogg("credits.ogg")
+	if music == null:
+		return
+	music.set_meta("credits", true)
+	_music.stream = music
+	_music.play()
+	if fade_in > 0.0:
+		_music.volume_db = -40.0
+		create_tween().tween_property(_music, "volume_db", -6.0, fade_in)
 
 
 func _after_videos(cb: Callable) -> void:
@@ -850,6 +894,10 @@ func _page_display() -> void:
 	_yesno(y, "BEI INAKTIVEM FENSTER PAUSIEREN", Settings.pause_unfocused, func(v: bool): Settings.pause_unfocused = v)
 	y += 38
 	_yesno(y, "ZUSATZEFFEKTE (SSIL, SDFGI)", Settings.quality >= 3, func(v: bool): Settings.quality = 3 if v else 2)
+	y += 38
+	# BEWUSSTE ABWEICHUNG (Auftraggeber): dreistufig; „AUS“ = Original BLUTFLECKEN NEIN
+	_cycle(Rect2(67, y, 412, 32), "BLUT: " + Settings.BLOOD_NAMES[Settings.blood_level], func():
+		Settings.blood_level = (Settings.blood_level + 1) % 3, true, "bblood")
 	_cycle(Rect2(67, 670, 412, 33), text(2410), func(): options_page = "graphics")
 	_label(Rect2(67, 638, 412, 26), "Texturänderung wirkt beim nächsten Laden einer Mission.", 11, TEXT_COLOR)
 
@@ -956,8 +1004,9 @@ func _page_game() -> void:
 	# Ergänzungen (kein Original-Punkt): FPS-Anzeige (SP+MP), Namen/Trefferanzeige im Mehrspieler
 	_yesno(377, "FPS ANZEIGEN", Settings.show_fps, func(v: bool): Settings.show_fps = v)
 	_yesno(421, "NAMEN ÜBER SPIELERN (MP)", Settings.show_names, func(v: bool): Settings.show_names = v)
-	_yesno(465, "TREFFERANZEIGE (MP)", Settings.hit_feedback, func(v: bool): Settings.hit_feedback = v)
-	_yesno(509, "KILL-CAM (MP)", Settings.kill_cam, func(v: bool): Settings.kill_cam = v)
+	_yesno(465, "TREFFERANZEIGE SCHÜTZE (MP)", Settings.hit_feedback, func(v: bool): Settings.hit_feedback = v)
+	_yesno(509, "TREFFER-RICHTUNG GETROFFENER (MP)", Settings.hurt_feedback, func(v: bool): Settings.hurt_feedback = v)
+	_yesno(553, "KILL-CAM (MP)", Settings.kill_cam, func(v: bool): Settings.kill_cam = v)
 
 
 # --- Profile (Original change_profile.4ds) ---------------------------------------
@@ -1210,7 +1259,8 @@ static func rebuild_credits() -> Array:
 		{"style": "SM", "text": "NACHBAU"}, es,
 		{"style": "TI", "text": "Dangerous and Hidden 2 (unofficial)"},
 		{"style": "NA", "text": "neu erstellt mit Claude Opus"}, el,
-		{"style": "SM", "text": "Inoffizieller Fan-Nachbau mit der Godot Engine %s" % String(Engine.get_version_info()["string"])},
+		{"style": "SM", "text": "Inoffizieller Fan-Nachbau mit der Godot Engine %d.%d.%d" % [int(Engine.get_version_info()["major"]),
+			int(Engine.get_version_info()["minor"]), int(Engine.get_version_info()["patch"])]},
 		{"style": "SM", "text": "Nicht verbunden mit den Entwicklern, dem Publisher oder den Rechteinhabern des Originalspiels."},
 		{"style": "SM", "text": "Originaltexte, -grafiken, -klänge und -musik werden nur aus einer vorhandenen Originalinstallation geladen."},
 		el, el, el,
@@ -1219,8 +1269,12 @@ static func rebuild_credits() -> Array:
 	]
 
 
-func _show_credits() -> void:
+var _credits_after := Callable()     ## nach dem Rolltext (Kampagnenende: weitere Videoknoten/Abschluss)
+
+
+func _show_credits(after := Callable()) -> void:
 	_close_credits_view()
+	_credits_after = after
 	_credits_root = Control.new()
 	_credits_root.name = "Credits"
 	_credits_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1246,31 +1300,25 @@ func _show_credits() -> void:
 	credits_content.name = "CreditsText"
 	credits_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_credits_view.add_child(credits_content)
-	var bold := FontVariation.new()
-	bold.base_font = get_theme_font("font", "Label")
-	bold.variation_embolden = 0.9
 	var y := 0.0
 	for e in lines:
 		var st: Dictionary = CREDIT_STYLES[String(e["style"])]
 		var h: float = float(st["h"]) * REF.x
 		if e.has("cols"):
 			for i in 3:
-				_credit_label(String(e["cols"][i]), float(CREDIT_COLUMNS[i]) * REF.x, REF.x * 0.25, y, h, null)
+				_credit_label(String(e["cols"][i]), float(CREDIT_COLUMNS[i]) * REF.x, REF.x * 0.25, y, h, false)
 		elif String(e["text"]) != "":
-			_credit_label(String(e["text"]), REF.x * 0.5, REF.x, y, h, bold if bool(st["bold"]) else null)
+			_credit_label(String(e["text"]), REF.x * 0.5, REF.x, y, h, bool(st["bold"]))
 		y += h
 	credits_height = y
 	credits_content.position = Vector2(0, REF.y)
 	var tw := credits_content.create_tween()
 	tw.tween_property(credits_content, "position:y", -y, (REF.y + y) / float(parsed["speed"]))
 	tw.finished.connect(_close_credits)
-	var music := _load_ogg("credits.ogg")
-	if music:
-		_music.stream = music
-		_music.play()
+	_play_credits_music()
 
 
-func _credit_label(txt: String, cx: float, w: float, y: float, h: float, font: Font) -> void:
+func _credit_label(txt: String, cx: float, w: float, y: float, h: float, bold: bool) -> void:
 	var l := Label.new()
 	l.text = txt
 	l.position = Vector2(cx - w * 0.5, y)
@@ -1280,8 +1328,9 @@ func _credit_label(txt: String, cx: float, w: float, y: float, h: float, font: F
 	l.clip_text = true
 	l.add_theme_font_size_override("font_size", maxi(roundi(h * CREDITS_FONT_K), 8))
 	l.add_theme_color_override("font_color", Color.WHITE)
-	if font:
-		l.add_theme_font_override("font", font)
+	if bold:    # Schrift 2 (fett): weiße Kontur statt Embolden (Embolden erzeugt bei MSDF-Schrift Löcher)
+		l.add_theme_constant_override("outline_size", 2)
+		l.add_theme_color_override("font_outline_color", Color.WHITE)
 	credits_content.add_child(l)
 
 
@@ -1296,6 +1345,10 @@ func _close_credits_view() -> void:
 func _close_credits() -> void:
 	_close_credits_view()
 	_play_menu_music()
+	var after := _credits_after
+	_credits_after = Callable()
+	if after.is_valid():
+		after.call()
 
 
 func _unhandled_input(event: InputEvent) -> void:

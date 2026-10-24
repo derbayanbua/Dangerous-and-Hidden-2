@@ -61,7 +61,19 @@ func open(id: String) -> void:
 	if mode in ["select", "refill"]:
 		show_team()
 	else:
-		show_equipment()
+		_after_team()
+
+
+## Ausrüstungsbildschirm nur, wo das Original einen Typ-3/4-Knoten hat (Gamedata00.gdt; keiner vor AFRICA6, auch
+## nicht in der Einzelmission 0x6B9680 „entfällt für Ordinal 10“, re_notes_roster_inventory §2) – sonst direkt in den Einsatz
+func _after_team() -> void:
+	var inf := _info()
+	var eq = inf.get("equipment_screen", "equipment_new_storage")
+	if not inf.is_empty() and (eq == null or String(eq) == ""):
+		Game.save_campaign()
+		start_requested.emit.call_deferred()
+		return
+	show_equipment()
 
 
 func _t(id: int, fb: String) -> String:
@@ -149,7 +161,7 @@ func show_team() -> void:
 		team_remove(focus_idx) if Game.sas_team().has(focus_idx) else team_add(focus_idx), can_assign,
 		"Remove" if in_team else "Add")
 	orig_button("baccept and continue", _t(2654, "AUTOMATISCHE AUSWAHL"), auto_select, true, "Auto")
-	orig_button("bauto assign", _t(2653, "FORTSETZEN"), show_equipment, not team.is_empty(), "Continue")
+	orig_button("bauto assign", _t(2653, "FORTSETZEN"), _after_team, not team.is_empty(), "Continue")
 	orig_button("bback", _t(2655, "ZURÜCK"), func(): back_requested.emit(), true, "Back")
 
 
@@ -358,13 +370,13 @@ func _item_box(frame: String, id: int, shift := Vector2.ZERO, count := 0) -> voi
 
 
 ## Taschen + Rucksack als Original-Spalten (Anzeige; Logik = gemeinsames Inventar): Stapel der Reihe nach in die
-## Taschen (bis 12 Raumeinheiten), der Rest in den Rucksack. Reihenfolge ItemOrder: Munition direkt unter ihrer
-## Waffe (Munition der Waffen in Händen/Schulter oben), Munition ohne Waffe am Ende
+## Taschen (bis 12 Raumeinheiten), der Rest in den Rucksack. Reihenfolge ItemOrder: Aufnahmereihenfolge wie im
+## Original (0x6A3080/0x672280), Munition direkt unter ihrer Waffe in der Liste (Vorgabe Auftraggeber)
 func split_columns(inv: Dictionary) -> Array:
 	var pockets: Array = []
 	var pack: Array = []
 	var used := 0.0
-	for e in ItemOrder.order_entries(inv.get("items", []), ItemOrder.slot_weapons(inv)):
+	for e in ItemOrder.order_entries(inv.get("items", [])):
 		var sp := SAS.space(int(e[0])) * int(e[1])
 		if used + sp <= SAS.POCKET_SPACE + 0.001 or int(inv.get("back", -1)) < 0:
 			pockets.append(e)

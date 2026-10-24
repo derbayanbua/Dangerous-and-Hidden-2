@@ -8,7 +8,7 @@ import os
 import struct
 import sys
 
-dll = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "HD2_orig", "rw_data.dll")
+dll = os.path.join(os.environ.get("DH2_ORIG") or os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "HD2_orig"), "rw_data.dll")
 d = open(dll, "rb").read()
 pe = struct.unpack_from("<I", d, 0x3C)[0]
 nsec = struct.unpack_from("<H", d, pe + 6)[0]
@@ -34,4 +34,4 @@ for n in range(0, 7):
 print("Image-Basis 0x%X, Tabelle 1 in %s @0x%X" % (base, sname, to_off(va + 0x100)[0]))
 for n in range(7):
     print(n, tables[n][:12], "...", tables[n][-3:])
-json.dump(tables, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "wav_tables.json"), "w"))
+json.dump(tables, open(os.environ.get("DH2_WAV_TABLES") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "wav_tables.json"), "w"))

@@ -41,8 +41,27 @@ func _ready() -> void:
 	add_child(mi)
 
 
-func _on_first_contact(_body: Node) -> void:
+## Raketen-/Granatgeschoss (Aufschlagzünder) trifft ein Fahrzeug: Original hd2.exe 0x449290 – Direkttreffer
+## Damage(7, Explosionsstärke) am Treffpunkt, danach Explosion mit 0,1 × Stärke; Aufschlag in der Welt: 0,5 × Stärke
+## (Faktor im Nachbau nur für Fahrzeug-Schadensmodelle, docs/re_notes_ai.md §4) [B]
+var _veh_factor := 1.0
+var _last_vel := Vector3.ZERO
+
+
+func _on_first_contact(body: Node) -> void:
 	if impact:
+		var v: Node = body
+		for i in 3:
+			if v == null or v is Vehicle:
+				break
+			v = v.get_parent()
+		if v is Vehicle:
+			_veh_factor = 0.1
+			var dir := _last_vel.normalized() if _last_vel.length() > 0.1 else -global_basis.z
+			(v as Vehicle).projectile_hit(7, data.damage if data else 0.0, global_position, dir,
+				thrower if is_instance_valid(thrower) else null)
+		elif not (body is Soldier):
+			_veh_factor = 0.5
 		explode.call_deferred()
 		return
 	linear_damp = 3.5
@@ -65,6 +84,7 @@ func _in_water(p: Vector3) -> bool:
 func _physics_process(delta: float) -> void:
 	_t += delta
 	if impact:
+		_last_vel = linear_velocity
 		if _t > 8.0:
 			explode()      # Selbstzerlegung nach maximaler Flugzeit
 		return
@@ -102,5 +122,5 @@ func explode() -> void:
 		sol.apply_hit(dmg, &"torso", thrower if is_instance_valid(thrower) else null, (target - pos).normalized())
 	Net.hit_source = ""
 	# Fahrzeuge und Hunde (on_bullet_hit) nehmen Explosionsschaden ohne Deckungsprüfung
-	OrigInteractive.damage_objects(get_tree(), pos, radius, data.damage, thrower if is_instance_valid(thrower) else null)
+	OrigInteractive.damage_objects(get_tree(), pos, radius, data.damage, thrower if is_instance_valid(thrower) else null, _veh_factor)
 	queue_free()

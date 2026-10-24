@@ -41,6 +41,13 @@ func _run() -> void:
 	check(not menu._start_btn.disabled, "START nach Auswahl freigegeben")
 	menu._start_btn.pressed.emit()
 	await frames(3)
+	# Original-Videoknoten (Kampagnen-Intro, Briefing-Video) laufen vorher – wie ein Spieler überspringen
+	for i in 6:
+		var mp := menu.find_child("MoviePlayer", true, false)
+		if mp == null:
+			break
+		mp.skip()
+		await frames(3)
 	check(menu._brief_root != null and is_instance_valid(menu._brief_root), "START öffnet die Einsatzbesprechung")
 	var go := find_button("Team und Ausrüstung")
 	check(go != null, "Knopf „Team und Ausrüstung“ vorhanden (Originalkader)")

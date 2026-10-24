@@ -273,15 +273,28 @@ func _check_ammo_order(scr: SasScreen, _sold: int) -> void:
 	check(none_ammo, "ZUSÄTZLICHE AUSRÜSTUNG: keine Waffenmunition mehr dort", str(rows))
 	Game.campaign["storage"] = saved
 	scr.category = saved_cat
-	# Inventar des Soldaten: Sten in den Händen -> Sten-Magazin oben; Colt in der Tasche -> Colt-Munition direkt
-	# darunter; MP-40-Magazin ohne Waffe am Ende
+	# Inventar des Soldaten: Aufnahmereihenfolge wie im Original (hd2.exe 0x6A3080/0x672280, 0x7D7390/0x4A2010);
+	# Colt in der Tasche -> Colt-Munition direkt darunter; Sten-Magazin (Waffe in den Händen) und MP-40-Magazin
+	# (keine Waffe) bleiben an ihrer Aufnahmestelle, nichts wird nach oben oder ans Ende gezogen
 	var inv := {"hands": 21, "shoulder": -1, "head": -1, "uniform": -1, "back": 101,
 		"items": [[172, 2], [9, 1], [187, 1], [2, 1], [190, 3]]}
-	var want := [190, 9, 2, 172, 187]
+	var want := [9, 187, 2, 172, 190]
 	for cols in [scr.split_columns(inv), IngameInventory.split_columns(inv)]:
 		var seq: Array = []
 		for e in cols[0] + cols[1]:
 			seq.append(int(e[0]))
-		check(seq == want, "Taschen/Rucksack: Munition unter ihrer Waffe, ohne Waffe am Ende", str(seq))
+		check(seq == want, "Taschen/Rucksack: Aufnahmereihenfolge, Munition unter ihrer Waffe", str(seq))
+	# Original-Vorlage ice_rifle (presets.def 1): Garand-Munition zuerst eingefügt -> bleibt oben; Colt + Munition
+	var inv2 := {"hands": 10, "shoulder": -1, "head": -1, "uniform": -1, "back": -1,
+		"items": [[180, 5], [60, 1], [2, 1], [172, 1], [57, 1], [54, 1]]}
+	var seq2: Array = []
+	for e in ItemOrderT.order_entries(inv2["items"]):
+		seq2.append(int(e[0]))
+	check(seq2 == [180, 60, 2, 172, 57, 54], "Original-Vorlage ice_rifle: Reihenfolge unverändert", str(seq2))
+	# Vorlage dzo_bu1_silent (5): Colt-Munition zuletzt eingefügt (De Lisle in den Händen) -> bleibt unten
+	var seq3: Array = []
+	for e in ItemOrderT.order_entries([[62, 1], [57, 1], [54, 1], [172, 6]]):
+		seq3.append(int(e[0]))
+	check(seq3 == [62, 57, 54, 172], "Munition der Handwaffe wird nicht nach oben gezogen (dzo_bu1_silent)", str(seq3))
 	check(inv["items"][0][0] == 172, "Reihenfolge ist nur Anzeige (Inventar unverändert)")
 	await frames(1)

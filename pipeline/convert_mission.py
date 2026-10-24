@@ -25,8 +25,8 @@ import fmt_scene2  # noqa: E402
 from PIL import Image  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORIG = os.path.join(ROOT, "HD2_orig")
-CACHE = os.path.join(ROOT, "DangerousHidden2", "orig_cache")
+ORIG = os.environ.get("DH2_ORIG") or os.path.join(ROOT, "HD2_orig")
+CACHE = os.environ.get("DH2_CACHE") or os.path.join(ROOT, "DangerousHidden2", "orig_cache")
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 _archives = {}

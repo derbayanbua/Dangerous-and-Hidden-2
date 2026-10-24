@@ -20,6 +20,11 @@ var calls := {}                ## Statistik: Befehl -> Anzahl
 var log_calls := false
 var objective_map := {}        ## Original-Index -> Objective-ID
 var extras: OrigExtras         ## Lichter, Klangquellen, Spuren, Musik (extra.json)
+const LsAnimScript := preload("res://src/orig/ls_anim.gd")
+const MissionAreaScript := preload("res://src/orig/mission_area.gd")
+var object_models := {}        ## Szenenobjekt (groß) -> Modellname (klein), scene.json
+var area: Node                 ## Einsatzgebiet-Grenze (mission_area.gd), null ohne Grenzdreiecke/im Netzspiel
+var anim: Node = LsAnimScript.new()   ## Skriptanimationen *.i3d (src/orig/ls_anim.gd), Kind ab _ready
 
 
 func setup(m: Mission, level: OrigLevel) -> void:
@@ -38,8 +43,19 @@ func setup(m: Mission, level: OrigLevel) -> void:
 		wroot.add_child(n)
 		n.position = Vector3(p[0], p[1], p[2])
 		waypoints[String(wn).to_upper()] = n
+	for o in data.get("objects", []):
+		if String(o.get("model", "")) != "":
+			object_models[String(o.get("name", "")).to_upper()] = String(o["model"]).to_lower()
 	texts = _read_json(OrigLevel.cache_root() + "/texts_german.json")
 	Events.soldier_damaged.connect(_on_soldier_damaged)
+	# Einsatzgebiet-Grenze (Einzelspieler-Team, hd2.exe 0x45EF00; src/orig/mission_area.gd)
+	if not Net.is_online:
+		var ar: Node = MissionAreaScript.new()
+		if ar.setup(m, self, level.mission_dir):
+			add_child(ar)
+			area = ar
+		else:
+			ar.free()
 
 
 ## CSC_NoTeamDamage: Schaden zwischen Kameraden während der Sequenz zurücknehmen
@@ -77,6 +93,8 @@ func start_scripts(extra: Dictionary = {}) -> int:
 	var mapping: Dictionary = (data.get("scripts", {}) as Dictionary).duplicate()
 	mapping.merge(extra, true)      # z. B. Mehrspieler-Skripte (mpscripts.dta) aus mp.json
 	var n := 0
+	var spawn_vms: Array = []
+	var squad_members: Array = mission.squad.members if mission and mission.squad else []
 	for obj in mapping:
 		var owner := find_frame(obj)
 		if owner == null:
@@ -84,9 +102,25 @@ func start_scripts(extra: Dictionary = {}) -> int:
 			owner.name = String(obj).validate_node_name()
 			orig.root.add_child(owner)
 			register_actor(obj, owner)   # damit FRM_FindFrame es findet
-		if attach_script(owner, String(mapping[obj]).to_lower()):
+		elif owner is Soldier and squad_members.has(owner):
+			# Spielerstart-Akteur (Typ 10, Commando_N/Spawnsingle0N/Player0N): im Original ein eigener Akteur, der die
+			# Spielerfigur erzeugt (hd2.exe 0x41820B: Akteur+0x18 == 0xA → Figur = [[Akteur+0xA8]+0x20]). Sein Skript läuft
+			# getrennt von der Figur weiter (TUTORIAL Player_2.scr: ScriptAssign auf die Figur, danach SendSignal).
+			var sp := Node3D.new()
+			sp.name = ("SPAWN_" + String(obj)).validate_node_name()
+			sp.set_meta("spawn_of", owner)
+			owner.add_child(sp)
+			owner = sp
+		var nvm := attach_script(owner, String(mapping[obj]).to_lower())
+		if nvm:
 			n += 1
+			if owner.has_meta("spawn_of"):
+				spawn_vms.append(nvm)
 	_setup_hit_events()
+	# „Geburt“ der Spielerfigur: OnUse des Startakteurs (TUTORIAL Player_2.scr OnUse: Printf("Player 2 born"); Skripte
+	# player1assign.scr u. a. bestehen nur aus OnUse(){ ScriptAssign(player, …) }) [P: Auslösezeitpunkt per Skripttext]
+	for v in spawn_vms:
+		(v as LsVM).fire("ONUSE")
 	return n
 
 
@@ -233,6 +267,8 @@ func _players() -> Array:
 
 
 func _soldier(vm: LsVM) -> Soldier:
+	if is_instance_valid(vm.me) and vm.me.has_meta("spawn_of"):
+		return vm.me.get_meta("spawn_of") as Soldier     # Spielerstart-Akteur → seine Figur (HUMAN_CreateItemInStore u. a.)
 	return vm.me as Soldier
 
 
@@ -281,11 +317,23 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				elif fr is Soldier:
 					fr.set_physics_process(true)
 			return null
-		"FRM_TELEPORTNEARFRAME", "FRM_TELEPORTNEARFRAMEBACK":
+		"FRM_TELEPORTNEARFRAMEBACK":
+			# (Frame): macht ein früheres FRM_TeleportNearFrame(Frame, …) rückgängig – alle Originalaufrufe haben genau ein
+			# Argument, stets ein zuvor versetztes Objekt (ARCTIC1 R_Arc1A_Com1..4: padak; AFRICA1/3: duplicated_player,
+			# zbran) [P aus Skripten]. Früher als „eigenen Akteur zum Frame“ gedeutet → ARCTIC1: der Spieler (Skriptbesitzer)
+			# landete nach dem Intro beim Fallschirm im Flugzeug (y ≈ 391).
+			var back := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if back and back.has_meta("tnf_back"):
+				back.global_transform = back.get_meta("tnf_back")
+				back.remove_meta("tnf_back")
+			return null
+		"FRM_TELEPORTNEARFRAME":
 			# zwei Argumente (wer, wohin) oder eines (eigenen Akteur neben den Frame setzen)
 			var who := _frame_arg(vm, args[0]) if args.size() > 1 else vm.me as Node3D
 			var to := _frame_arg(vm, args[1] if args.size() > 1 else args[0])
 			if who and to:
+				if not who.has_meta("tnf_back"):
+					who.set_meta("tnf_back", who.global_transform)
 				who.global_position = to.global_position
 			return null
 		"SCRIPTASSIGN":
@@ -293,8 +341,29 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			var sn := _str(vm.value(args[1])).to_lower()
 			if not sn.ends_with(".scr"):
 				sn += ".scr"
-			if sf2:
-				attach_script(sf2, sn)
+			if sf2 == null and is_instance_valid(vm.me):
+				# Leerer Frame (uninitialisiertes „Frame player;“): hd2.exe 0x41820B – im Skript eines Spielerstart-Akteurs
+				# (Typ 10) gilt die von ihm erzeugte Spielerfigur [B]; im Skript der Figur selbst die Figur [P]
+				# (CZECH4 Commando_1 → R_Cz4_Com1 → ScriptAssign(player, "CUTplayer1_cz4a"))
+				if vm.me.has_meta("spawn_of"):
+					sf2 = vm.me.get_meta("spawn_of")
+				elif vm.me is Soldier and mission.squad and mission.squad.members.has(vm.me):
+					sf2 = vm.me
+			if sf2 and sn != ".scr":
+				var avm := attach_script(sf2, sn)
+				# Die erzeugte Figur erhält ihr „Geburts“-OnUse nach der Zuweisung durch den Startakteur (einmalig; nötig für
+				# die Kette Startakteur → R_Cz4_Com1 (nur OnUse) → CUTplayer1_cz4a) [P]
+				if avm and vm.me.has_meta("spawn_of") and sf2 == vm.me.get_meta("spawn_of") and not sf2.has_meta("born_use"):
+					sf2.set_meta("born_use", true)
+					avm.fire("ONUSE")
+			elif sf2 and sn == ".scr":
+				var ovm: LsVM = vm_of.get(sf2)
+				if ovm:
+					# ScriptAssign(frame, ""): Skript entfernen (TUTORIAL Player_2.scr vor erneuter Zuweisung)
+					ovm.ended = true
+					ovm.stack.clear()
+					vms.erase(ovm)
+					vm_of.erase(sf2)
 			return null
 		"SENDSIGNAL":
 			var target := _frame_arg(vm, args[0])
@@ -569,8 +638,7 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			if args.size() >= 4:
 				_fade.color = Color(float(vm.value(args[1])) / 255.0, float(vm.value(args[2])) / 255.0,
 					float(vm.value(args[3])) / 255.0, _fade.color.a)
-			var tw4 := create_tween()
-			tw4.tween_property(_fade, "color:a", 1.0 if fname == "CSC_FADEOUTTOCOLOR" else 0.0, maxf(ms2, 1.0) / 1000.0)
+			_fade_to(1.0 if fname == "CSC_FADEOUTTOCOLOR" else 0.0, maxf(ms2, 1.0) / 1000.0)
 			return null
 		"THUNDERSTORM_SETON":
 			# (an/aus, Lichtframe): Gewitter – Blitze schalten das Licht kurz ein (TUTORIAL)
@@ -597,8 +665,26 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				get_tree().create_timer((fpn as GPUParticles3D).lifetime + 0.5, false).timeout.connect(fpn.queue_free)
 			_indexed_particles.erase(fpi)
 			return null
-		"FRM_SETANIMATIONDELAYED", "FRM_STOPANIMATION", "FRM_SETSHIFTING":
-			return null    # *.i3d-Animationen / Texturverschiebung (Kette CZECH1): Daten nicht dekodiert, ohne Wirkung
+		"FRM_SETANIMATION", "FRM_SETANIMATIONDELAYED":
+			# (Frame, "name.i3d", Kanal): Skriptanimation MODELS\name.5DS – Opcode 0x5D/0x60, Handler hd2.exe 0x41BAA7
+			# (Kanal = 2. Argument von Frame->SetAnimation, vtbl +0x84); leerer Name leert den Kanal (ls_anim.gd)
+			var af3 := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if af3:
+				anim.set_animation(af3, _str(vm.value(args[1])) if args.size() > 1 else "",
+					int(vm.value(args[2])) if args.size() > 2 else 0)
+			return null
+		"FRM_STOPANIMATION", "FRM_RESETANIMATION":
+			# Opcode 0x63 (0x41B96E): Kanal anhalten; 0x61 (0x41B9F1): zusätzlich Ruhelage (vtbl +0x20)
+			var af4 := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if af4:
+				var ch4 := int(vm.value(args[1])) if args.size() > 1 else 0
+				if fname == "FRM_STOPANIMATION":
+					anim.stop_animation(af4, ch4)
+				else:
+					anim.reset_animation(af4, ch4)
+			return null
+		"FRM_SETSHIFTING":
+			return null    # Texturverschiebung (Kette CZECH1): ohne Wirkung
 		"_MP_ISITEMINTEAMINVENTORY":
 			# (Seite, Gegenstand, var): trägt ein Soldat der Seite (1 = Achse, 0 = Alliierte) den Gegenstand?
 			var team_mp := Soldier.TEAM_AXIS if args.size() > 0 and int(vm.value(args[0])) == 1 else Soldier.TEAM_ALLIED
@@ -866,6 +952,10 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"AIRATTACK_SETTARGET":
 			# Luftangriff auf ein Ziel (Original: Flugzeuge greifen an). Näherung: Einschläge in Zielnähe.
 			var at := _frame_arg(vm, args[0])
+			# Skript eines angreifenden Flugzeugs (Akteurtyp 36, OrigAirAttack, hd2.exe 0x5E7570): Ziel an das Flugzeug
+			if is_instance_valid(vm.me) and vm.me.has_method("set_air_target"):
+				vm.me.set_air_target(at, args.size() < 2 or LsVM._truthy(vm.value(args[1])))
+				return null
 			if at:
 				if args.size() < 2 or LsVM._truthy(vm.value(args[1])):
 					_air_targets[at] = 0.0
@@ -900,8 +990,15 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			if dl:
 				dl.lying = fname == "DOG_SETMODE_LIE"
 			return null
-		"CSC_SETCAMERAANIMATION", "FRM_SOUNDADJUSTDOPPLER":
-			return null    # Kameraanimationen (*.i3d) noch nicht dekodiert / Doppler-Feinabstimmung
+		"CSC_SETCAMERAANIMATION":
+			# (Kameraframe, "#name"): Opcode 0xA7, Handler hd2.exe 0x41CB37 → Sequenzobjekt vtbl +0xB0(Frame, Name);
+			# Kameraframe folgt dem Animationsobjekt in Weltlage (ls_anim.gd, re_notes_script_anims.md)
+			var cf3 := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if cf3:
+				anim.set_camera_animation(cf3, _str(vm.value(args[1])) if args.size() > 1 else "")
+			return null
+		"FRM_SOUNDADJUSTDOPPLER":
+			return null    # Doppler-Feinabstimmung
 		"SETNPCTEAMSTATUS":
 			# NPC kämpft als Teil des Teams (KI statt Skriptsteuerung), z. B. befreite Verbündete
 			var nf := _frame_arg(vm, args[0])
@@ -984,15 +1081,14 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			return null
 		"CSC_FADEOUT", "CSC_FADEIN":
 			var ms := float(vm.value(args[0])) if args.size() > 0 else 500.0
-			var tw2 := create_tween()
-			tw2.tween_property(_fade, "color:a", 1.0 if fname == "CSC_FADEOUT" else 0.0, ms / 1000.0)
+			_fade_to(1.0 if fname == "CSC_FADEOUT" else 0.0, ms / 1000.0)
 			return null
 		"WEATHER_SETON":
 			_set_snow(LsVM._truthy(vm.value(args[0])))
 			return null
 		"WEATHER_SETMODE", "WEATHER_SETCOUNT", "WEATHER_SETSPEED", "WEATHER_SETDIR", "WEATHER_SETSIZE", \
 				"WEATHER_SETSPACE", "WEATHER_SETCOLORIN", "WEATHER_SETCOLOROUT", "CSC_RUNCLOUDER", \
-				"FRM_RESETANIMATION", "__SETUPAUTOLOGGING":
+				"__SETUPAUTOLOGGING":
 			return null
 		# --- Sprache: Original-Aufnahme + Untertitel (Lippenbewegung: Platzhalter) ---
 		"FRM_MORPHSPEECH", "FRM_MORPHSPEECHDELAYED":
@@ -1174,7 +1270,16 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			if bl:
 				bl.set_look_around(int(vm.value(args[0])) if args.size() > 0 else 1)
 			return null
-		"FRM_SETANIMATION", "HUMAN_SETANIM", "HUMAN_SETOPTIMIZED", \
+		"HUMAN_SETANIM":
+			# ("%%name", Einblenden ms, Ausblenden ms, Schleife): Menschen-Dispatcher hd2.exe 0x421E66 → 0x5AF780 (nur in
+			# KI-Zustand 5 [B], Bedeutung des Zustands offen) → 0x591230(Name, a, b, Schleife≠0). Überblendzeiten ohne
+			# Wirkung [E]; Animation endet bei Bewegung/Kampf (ls_anim.gd) [E]
+			var hsa := _soldier(vm)
+			if hsa and hsa.alive and args.size() > 0:
+				anim.set_animation(hsa, _str(vm.value(args[0])), 100,
+					LsVM._truthy(vm.value(args[3])) if args.size() > 3 else false, true)
+			return null
+		"HUMAN_SETOPTIMIZED", \
 				"FRM_SWITCHFACETEXTURE", "FRM_SETLIGHTMAP", "FRM_SETGROUPLIGHTMAP", "CHECKPOINTJOIN", "CHECKPOINTSEPARATE":
 			return null    # Animation/Gesicht/Beleuchtung: vorerst ohne Wirkung (Original-Animationen: offen)
 		"HUMAN_ACTIVITY_SMOKE", "HUMAN_ACTIVITY_POINT", "HUMAN_ACTIVITY_SIT", "HUMAN_ACTIVITY_DRINKBOTTLE", \
@@ -1261,6 +1366,17 @@ func run_exit_handlers() -> void:
 			vm._run()
 
 
+static var _dmodel_cache = null
+
+
+## Modelle mit Schadensmodell d<Modell>.4ds (orig_cache/dmodels.json, tools/fmt_dmodels.py)
+static func _dmodels() -> Dictionary:
+	if _dmodel_cache == null:
+		var d = _read_json(OrigLevel.cache_root() + "/dmodels.json")
+		_dmodel_cache = d if d is Dictionary else {}
+	return _dmodel_cache
+
+
 ## OnHit: Treffer an Skriptobjekten (Soldaten über damaged, Fahrzeuge über Vehicle.hit, Objekte über Trefferflächen)
 func _setup_hit_events() -> void:
 	# Szenenobjekte mit OnDeath-Skript ohne eigenes Steuerobjekt (z. B. BURMA1 Kisten „Bedne_obj*“ mit Flugzeugteilen):
@@ -1275,8 +1391,42 @@ func _setup_hit_events() -> void:
 		var br := ScriptBreakable.new()
 		br.runtime = self
 		br.target = o2
+		# Zerstörbarer Frame des Originals: es gibt ein Schadensmodell MODELS\d<Modell>.4ds (hd2.exe 0x43CE40 „d%s“,
+		# Liste tools/fmt_dmodels.py → orig_cache/dmodels.json) → Geschosse/Explosionen ziehen HP ab (0x43B000), HP
+		# Standard 100 Originaleinheiten (Parameter „version“, 0x43CD20) [P]; sonst bisherige Explosionsschwelle [E]
+		var mdl: String = object_models.get(String(o2.name).to_upper(), "")
+		if mdl != "" and _dmodels().has(mdl):
+			br.hp = 100.0
 		o2.add_child(br)
 		o2.set_meta("script_breakable", br)
+		if br.hp > 0.0:
+			var bodies2 := o2.find_children("*", "CollisionObject3D", true, false)
+			for b2 in bodies2:
+				if not b2.has_meta("hit_proxy"):
+					b2.set_meta("hit_proxy", br)
+			if bodies2.is_empty():
+				# Zielscheiben ohne Kollision (TUTORIAL m_tut_panak*): Trefferfläche aus der Modellgröße (Ebene 3)
+				var box2 := OrigInteractive.world_aabb(o2)
+				var ar2 := Area3D.new()
+				ar2.collision_layer = Hitbox.LAYER
+				ar2.collision_mask = 0
+				ar2.monitoring = false
+				var cs2 := CollisionShape3D.new()
+				var bs2 := BoxShape3D.new()
+				bs2.size = box2.size.max(Vector3(0.2, 0.2, 0.2))
+				cs2.shape = bs2
+				ar2.add_child(cs2)
+				ar2.set_meta("hit_proxy", br)
+				o2.add_child(ar2)
+				ar2.global_position = box2.get_center()
+	# OnUse an Fahrzeugen (CZECH6 la_panther_ C5_obj01.scr „Tiger erobern“): Benutzen des Einstiegs [P Zeitpunkt]
+	for vm in vms:
+		if vm.code.handlers.has("ONUSE") and vm.me is Vehicle and not vm.me.has_meta("onuse_connected"):
+			var veh: Vehicle = vm.me
+			veh.set_meta("onuse_connected", true)
+			for ent in veh.find_children("*", "", true, false):
+				if ent is Interactable:
+					(ent as Interactable).used.connect(func(_by): notify(veh, "ONUSE"))
 	for vm in vms:
 		if not vm.code.handlers.has("ONHIT") or not is_instance_valid(vm.me):
 			continue
@@ -1317,20 +1467,38 @@ class ScriptBreakable extends Node3D:
 	var runtime
 	var target: Node3D
 	var destroyed := false
+	var hp := 0.0          ## > 0: zerstörbarer Frame mit Schadensmodell (Originaleinheiten), sonst Explosionsschwelle
 
 	func _ready() -> void:
 		add_to_group("destructibles")
 		global_position = OrigInteractive.world_aabb(target).get_center()
 
-	func on_bullet_hit(_d: float, _by: Node) -> void:
+	func on_bullet_hit(d: float, by: Node) -> void:
 		runtime.notify(target, "ONHIT")
+		if hp > 0.0:
+			_damage(d * 10.0, by)      # Spielschaden = Original/10 (WeaponDB)
 
-	func on_explosion(d: float, _by: Node) -> void:
+	func on_explosion(d: float, by: Node) -> void:
 		runtime.notify(target, "ONHIT")
+		if hp > 0.0:
+			_damage(d * 10.0, by)
+			return
 		if destroyed or d < 40.0:
 			return
+		_destroy()
+
+	## 0x43B000: HP > Schaden → HP −= Schaden, sonst zerstört (0x43CCA0 → OnDeath 0x41D920)
+	func _damage(amount: float, _by: Node) -> void:
+		if destroyed:
+			return
+		if hp > amount:
+			hp -= amount
+			return
+		_destroy()
+
+	func _destroy() -> void:
 		destroyed = true
-		print("Skriptobjekt %s zerstört (Explosion %.0f)" % [target.name, d])
+		print("Skriptobjekt %s zerstört" % target.name)
 		target.visible = false
 		target.set_meta("actor_state", 0)
 		for b in target.find_children("*", "CollisionObject3D", true, false):
@@ -1613,6 +1781,8 @@ var _cutscene_vms: Array = []   ## Skripte mit OnCutscene(n) der laufenden Seque
 
 
 func _ready() -> void:
+	anim.name = "LsAnim"
+	add_child(anim)
 	_cut_cam = Camera3D.new()
 	_cut_cam.far = 3000.0
 	add_child(_cut_cam)
@@ -1686,7 +1856,21 @@ func end_cutscene() -> void:
 		mission.hud.visible = true
 	mission.rig.camera.current = true
 	_skip_label.visible = false
-	create_tween().tween_property(_fade, "color:a", 0.0, 0.4)
+	# nach dem Schnelldurchlauf (Überspringen) Blende in jedem Fall öffnen: eine im Schnelldurchlauf gestartete lange
+	# Abblende (ARCTIC1: CSC_FadeOut(2000) vor CSC_EndCutscene) würde sonst als letzte enden → schwarzer Bildschirm
+	_fade_to(0.0, 0.4)
+
+
+var _fade_tw: Tween
+
+
+## Blende auf Deckkraft a in secs Sekunden; ersetzt eine laufende Blende (nur eine gleichzeitig, sonst gewinnt die
+## zuletzt endende – überlappende Tweens auf derselben Eigenschaft)
+func _fade_to(a: float, secs: float) -> void:
+	if _fade_tw and _fade_tw.is_valid():
+		_fade_tw.kill()
+	_fade_tw = create_tween()
+	_fade_tw.tween_property(_fade, "color:a", a, maxf(secs, 0.001))
 
 
 func _process(_delta: float) -> void:

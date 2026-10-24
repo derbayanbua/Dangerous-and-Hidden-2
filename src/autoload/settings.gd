@@ -32,7 +32,20 @@ var gamma := 1.0              ## Original „Gamma-Korrektur“ (0,6 … 1,6)
 var shadows := true           ## Original „SCHATTEN“
 var morphing := true          ## Original „MORPHING“ (Gesichtsanimation; im Nachbau noch ohne Wirkung)
 var decals := true            ## Original „FUSSSPUREN, DEKORATIONEN“ (Einschusslöcher/Spuren)
-var blood := true             ## Original „BLUTFLECKEN“
+var blood := true:            ## Original „BLUTFLECKEN“ (ja/nein); spiegelt blood_level > 0
+	set(v):
+		blood = v
+		if not v:
+			blood_level = 0
+		elif blood_level == 0:
+			blood_level = 2
+## BEWUSSTE ABWEICHUNG (Auftraggeber 23.10.2026): Blut 0 = AUS, 1 = ORIGINAL, 2 = MEHR (Standard)
+const BLOOD_NAMES := ["AUS", "ORIGINAL", "MEHR"]
+var blood_level := 2:
+	set(v):
+		blood_level = clampi(v, 0, 2)
+		if blood != (blood_level > 0):
+			blood = blood_level > 0
 var grass := true             ## Original „GRAS“ (Bodenvegetation der Originallevel)
 var dynamic_lights := true    ## Original „DYNAMIK“ (dynamische Lichter)
 var high_models := true       ## Original „MODELLE MIT HOHER AUFLÖSUNG“ (Detailstufen-Schwelle)
@@ -46,10 +59,10 @@ const DETAIL_PRESETS := [
 ## Wie im Original gehören die Menü-Optionen zum Profil (Options.bin im Profilordner); Setup-Werte
 ## (Auflösung, VSync, Kantenglättung …) sind rechnerweit wie beim Original-setup.exe.
 const PROFILE_KEYS := {
-	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "grass", "dynamic_lights", "high_models", "quality"],
+	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models", "quality"],
 	"audio": ["master_volume", "music_volume", "sfx_volume", "speech_volume"],
 	"controls": ["mouse_sensitivity", "invert_y"],
-	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "kill_cam"],
+	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam"],
 	"multiplayer": ["voice_enabled", "voice_volume", "connection_type"],
 }
 ## Original „MEHRSPIELER-SPIEL-EINSTELLUNGEN“ (T2409): Voice-Chat ermöglichen (T2431, Original-Standard aus),
@@ -69,6 +82,7 @@ var crosshair := true         ## Original v1.12 „FADENKREUZ ZULASSEN“
 var show_fps := false
 var show_names := true
 var hit_feedback := true
+var hurt_feedback := true     ## Treffer-Richtungsanzeige beim Getroffenen (Server-Regel hurtindicator)
 var kill_cam := true          ## Kill-Cam nach dem eigenen Tod (src/ui/kill_cam.gd; Server-Regel killcam)
 # --- aus dem Original-Setup (setup.exe, LS3D_setup), soweit heute sinnvoll ---
 ## VSync-Modus: 0 aus, 1 an, 2 adaptiv, 3 Dreifachpuffer (Original „Triple-Buffering“)
@@ -125,9 +139,9 @@ func load_settings() -> void:
 	shadows = _cfg.get_value("graphics", "shadows", shadows)
 	subtitles = _cfg.get_value("game", "subtitles", subtitles)
 	crosshair = _cfg.get_value("game", "crosshair", crosshair)
-	for k in ["show_fps", "show_names", "hit_feedback", "kill_cam"]:
+	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam"]:
 		set(k, _cfg.get_value("game", k, get(k)))
-	for k in ["morphing", "decals", "blood", "grass", "dynamic_lights", "high_models"]:
+	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		set(k, _cfg.get_value("graphics", k, get(k)))
 	for k in ["vsync_mode", "max_fps", "aa_mode", "texture_quality", "anisotropy", "pause_unfocused"]:
 		set(k, _cfg.get_value("setup", k, get(k)))
@@ -162,9 +176,9 @@ func save_settings() -> void:
 	_cfg.set_value("graphics", "shadows", shadows)
 	_cfg.set_value("game", "subtitles", subtitles)
 	_cfg.set_value("game", "crosshair", crosshair)
-	for k in ["show_fps", "show_names", "hit_feedback", "kill_cam"]:
+	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam"]:
 		_cfg.set_value("game", k, get(k))
-	for k in ["morphing", "decals", "blood", "grass", "dynamic_lights", "high_models"]:
+	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		_cfg.set_value("graphics", k, get(k))
 	for k in ["vsync_mode", "max_fps", "aa_mode", "texture_quality", "anisotropy", "pause_unfocused"]:
 		_cfg.set_value("setup", k, get(k))

@@ -23,7 +23,8 @@ var wait := 0.0
 var wait_until := Callable()
 var wait_timeout := 0.0
 var ended := false
-var terminated := false         ## EndScript(): Skript endgültig beendet (Ereignisse/Whenever wirkungslos)
+var death_revived := false      ## nach EndScript nur für OnDeath wieder aktiv (hd2.exe 0x41D920)
+var terminated := false        ## EndScript(): Skript endgültig beendet (Ereignisse/Whenever wirkungslos)
 var atomic := false
 var signals := {}              ## empfangene Signalnummern
 var signals_disabled := false
@@ -46,7 +47,16 @@ func _init(compiled: LsCompiler, owner: Node3D, runtime, script_name := "") -> v
 
 ## Ereignis auslösen (z. B. "ONSIGNAL:5", "ONALARM", "ONDEATH").
 func fire(key: String) -> bool:
-	if terminated:
+	# OnDeath läuft auch nach EndScript(): hd2.exe 0x41D920 setzt den Einsprung (+0xDC) und löscht das Ende-Flag +0xD4,
+	# das EndScript (0x41980B) setzt; OnUse 0x41D960 u. a. tun das nicht → bleiben nach EndScript wirkungslos [B]
+	if terminated and key == "ONDEATH" and code.handlers.has(key) and not death_revived:
+		terminated = false
+		ended = false
+		death_revived = true
+		events.clear()
+		events.append(key)
+		return true
+	if terminated or (death_revived and key != "ONDEATH"):
 		return false
 	if key.begins_with("ONSIGNAL:") and (signals_disabled or disabled_signal_ids.has(int(key.substr(9)))):
 		return false
@@ -87,7 +97,7 @@ func tick(delta: float) -> void:
 	# Ereignisse unterbrechen (nicht während Block{})
 	if not atomic and not events.is_empty():
 		_enter(code.handlers[events.pop_front()])
-	elif not atomic and not whenevers_disabled:
+	elif not atomic and not whenevers_disabled and not death_revived:
 		for w in code.whenevers:
 			if whenever_active.get(w, false) and _truthy(_eval(code.whenevers[w]["cond"])):
 				whenever_active[w] = false

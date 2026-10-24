@@ -19,6 +19,7 @@ surface.bin (Godot-Koordinaten, z gespiegelt): "HDSF", u32 Version 1, u32 n, dan
 Zusaetzlich collision.json (Flaechen-/Volumen-Links, versteckte Kollisionsersatz-Frames, siehe write_collision);
 nur diese Datei: fmt_klz.py --collision ARCTIC1 ARCTIC1_MP …
 """
+import json
 import os
 import struct
 import sys
@@ -92,7 +93,7 @@ def parse_klz(d):
         prop = struct.unpack_from("<I", d, q)[0]
         i0, l0, i1, _l1, i2, _l2 = struct.unpack_from("<6H", d, q + 4)
         n = struct.unpack_from("<4f", d, q + 16)
-        faces.append((prop >> 24, links[l0], (i0, i1, i2), n))
+        faces.append((prop >> 24, links[l0], (i0, i1, i2), n, prop))
     return links, faces
 
 
@@ -160,7 +161,15 @@ def write_collision(mission):
     _, objs = fmt_scene2.parse(s2)
     hidden = sorted({o.get("name", "") for o in objs if 0x4033 in o.get("chunks", {}) and o.get("name")})
     vl = volume_links(klz)
-    out = {"version": 2, "mission": mdir,
+    # Flaechen mit Eigenschaftsbit 0x100000 (Byte 2 Bit 4): nur Material Border/„Border - enemy filter“, Pletivo
+    # (Drahtgeflecht), Zeltplane, Trubky – durchlaessig fuer Sicht/Geschosse, sperren nur Bewegung [P, Datenlage;
+    # docs/re_notes_script_anims.md §6]. Liste der Links, deren Dreiecke ALLE dieses Bit tragen.
+    links, faces = parse_klz(klz)
+    allbit = {}
+    for f in faces:
+        allbit[f[1]] = allbit.get(f[1], True) and bool(f[4] & 0x100000)
+    out = {"version": 3, "mission": mdir,
+           "pass_through": sorted(n for n, v in allbit.items() if v),
            "faces": sorted(n for n, f in fl.items() if f & 1),
            "volumes": sorted(n for n, f in fl.items() if f & 2 and not f & 1),
            "boxes": sorted(vl["box"]),      # Kisten (XTOBB/AABB): z. B. Moebel, Balken – Kollision behalten
@@ -243,7 +252,10 @@ def build(mission):
     out = bytearray()
     kept = dropped = unresolved = 0
     vcache = {}
-    for mat, link, idx, n in faces:
+    # Einsatzgebiet-Grenze: Dreiecke mit Eigenschaftsbit 0x4000 (Warnung T7407) bzw. 0x2000 (verlassen -> Mission
+    # gescheitert T7408); hd2.exe 0x5A9720 liest (Bodendreieck des Soldaten)->Eigenschaften & 0x6000, Team 0x45EF00
+    area = []
+    for mat, link, idx, n, prop in faces:
         if link not in vcache:
             vcache[link] = (node_world(link), frame_verts(link))
         w, vs = vcache[link]
@@ -258,6 +270,12 @@ def build(mission):
         for p in pts:
             out += struct.pack("<3f", p[0], p[1], -p[2])     # LS3D -> Godot/glTF (z gespiegelt)
         kept += 1
+        if prop & 0x6000:
+            area.append([prop & 0x6000] + [round(float(v), 3) for p in pts for v in (p[0], p[1], -p[2])])
+    with open(os.path.join(cm.CACHE, mdir.lower(), "area.json"), "w", encoding="utf-8") as f:
+        json.dump({"source": "MISSIONS\\%s\\tree.klz" % mdir, "flags": "0x4000 Warnung, 0x2000 verlassen",
+                   "faces": area}, f, separators=(",", ":"))
+    print("%s area.json: %d Grenzdreiecke" % (mdir, len(area)))
     dst = os.path.join(cm.CACHE, mdir.lower(), "surface.bin")
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     with open(dst, "wb") as f:

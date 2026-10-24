@@ -27,3 +27,11 @@ CLAUDE.local.md
 docs/lokal/
 # eigene lokale Karte (alle Pfade mit diesem Namensteil, auch künftige)
 # Heldenfiguren
+
+# Nutzer-Werkzeuge (Python-Umgebung, ffmpeg, KI-Modelle, Protokolle – lokal erzeugt)
+werkzeuge/
+
+# Agenten-/Entwicklungsdokumentation nur lokal (Auftraggeber 24.10.2026)
+docs/*
+!docs/screenshots/
+CLAUDE.md

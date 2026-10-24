@@ -74,7 +74,11 @@ func _run() -> void:
 		rt.end_cutscene()
 	await seconds(2.0)
 	var finished := false
-	for rnd in 3:
+	# TUTORIAL: streng geordneter Parcours mit Fehlschlag beim Verlassen der Hindernisbahn -> eigener Stationsablauf
+	if mid == "training":
+		finished = await load("res://tests/orig_complete_training.gd").new().run(self)
+	# (TUTORIAL: keine allgemeinen Runden – sie töten den Beckenwächter, OnDeath → Ziel 7 verfehlt)
+	for rnd in (0 if finished or mid == "training" else 3):
 		stealth = rnd < 2
 		if await _round(rnd):
 			finished = true
@@ -306,6 +310,12 @@ func _follow_guides() -> bool:
 			# zuerst ansprechen (Annäherung), dann folgen
 			var behind: Vector3 = g.global_position + (g.global_position - last).normalized() * -2.5 if g.global_position.distance_to(last) > 0.05 \
 				else g.global_position + Vector3(1.4, 0.0, 0.0)
+			# nicht über die Einsatzgebiet-Grenze folgen (BURMA2: angreifender Verbündeter BU2_Allied04 läuft in die
+			# Warn-/Außenzone, der Trupp dahinter → „Einsatzgebiet verlassen“; ein Spieler folgt dort nicht)
+			var area: Node = m.find_child("MissionArea", true, false)
+			if area and area.has_method("flags_at") and int(area.flags_at(behind + Vector3(0, 0.3, 0))) != 0:
+				print("LOESER Führer %s: Grenze des Einsatzgebiets, nicht weiter gefolgt" % g.name)
+				break
 			_teleport_to_pos(behind)
 			if await _wait(1.0):
 				return true
@@ -412,6 +422,15 @@ func _teleport_squad(target: Node3D) -> void:
 	for b in _blasts:
 		if (b as Vector3).distance_to(target.global_position) < 30.0:
 			return
+	# Auslöser am Rand des Einsatzgebiets (Warn-/Außenzone, mission_area.gd) nicht per Teleport anlaufen: die
+	# nachrückenden Kameraden laufen sonst über die Grenze (NORMANDY2 24.10.2026: Teleport nach (40,67) = 0x4000,
+	# 1 s später ein Kamerad in 0x2000 → „Einsatzgebiet verlassen“)
+	var area := m.get_node_or_null("MissionArea")
+	if area == null:
+		area = m.find_child("MissionArea", true, false)
+	if area and int(area.flags_at(target.global_position + Vector3(0, 0.3, 0))) != 0:
+		print("LOESER Auslöser an der Einsatzgebiet-Grenze ausgelassen: ", target.name)
+		return
 	_teleport_to_pos(target.global_position)
 
 
@@ -660,6 +679,11 @@ func _vehicle_tour() -> bool:
 		for p in _trigger_points():
 			if not is_instance_valid(p):
 				continue
+			# Grenze des Einsatzgebiets wie _teleport_squad (NORMANDY2 24.10.2026: Fahrzeug samt Trupp nach
+			# (50.6, 1.0, 62.1) = 0x2000 versetzt → „Einsatzgebiet verlassen“)
+			var area := m.find_child("MissionArea", true, false)
+			if area and int(area.flags_at(p.global_position + Vector3(0, 0.3, 0))) != 0:
+				continue
 			veh.freeze = true
 			veh.global_position = p.global_position + Vector3.UP * 0.5
 			if await _wait(1.2):
@@ -718,6 +742,16 @@ func _report() -> void:
 				req_done += 1
 	for l in lines:
 		print(l)
+	# Diagnose: --dump_vms=teil1,teil2 → Zustand passender Skripte (empfangene Signale, Whenever, Variablen)
+	if Game.cli.has("dump_vms") and is_instance_valid(rt):
+		for part in String(Game.cli["dump_vms"]).to_lower().split(","):
+			for vm in rt.vms:
+				if String(vm.name).to_lower().contains(part):
+					var vs := {}
+					for k in vm.vars:
+						vs[k] = vm.vars[k] if not (vm.vars[k] is Object) else (vm.vars[k].name if is_instance_valid(vm.vars[k]) else "<frei>")
+					print("VMDUMP %s an %s: Signale %s Whenever %s ended %s term %s Var %s" % [vm.name,
+						vm.me.name if is_instance_valid(vm.me) else "?", vm.signals.keys(), vm.whenever_active, vm.ended, vm.terminated, vs])
 	var alive_n: Array = []
 	for n in get_tree().get_nodes_in_group("soldiers"):
 		var s := n as Soldier

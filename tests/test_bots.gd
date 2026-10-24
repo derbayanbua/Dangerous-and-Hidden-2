@@ -55,7 +55,9 @@ func _brain(s: Soldier) -> BotBrain:
 	return s.get_node_or_null("EnemyBrain") as BotBrain
 
 
-func _park(s: Soldier, i: int) -> void:
+func _park(s, i: int) -> void:
+	if not is_instance_valid(s):
+		return
 	var b := _brain(s)
 	if b:
 		b.enabled = false
@@ -254,6 +256,13 @@ func _platform(m: Node) -> Node3D:
 			_box(reg, Vector3(xi * 9.0, 0.6, zi * 9.0 + 4.5), Vector3(3.0, 1.2, 0.5))
 	reg.bake_navigation_mesh(false)
 	await frames(10)
+	# warten, bis die Navigationskarte das Testnetz übernommen hat (sonst liefert closest() einen Punkt der Karte darunter)
+	var probe := PLAT + Vector3(0, 0, -35)
+	for _i in 300:
+		var c := NavigationServer3D.map_get_closest_point(reg.get_navigation_map(), probe)
+		if c.distance_to(probe) < 1.0:
+			break
+		await frames(1)
 	return reg
 
 
@@ -357,7 +366,8 @@ func _tactic_spacing(grp: Array) -> void:
 		hold_d.append(snappedf(BotSquad.nearest_mate(b), 0.1))
 	print("ABSTAND Median %.1f m, Anteil < 3 m %.1f %%, Minimum %.1f m, am Ziel %s, Endabstände %s" % [med, frac * 100.0, min_after, arrived, hold_d])
 	metrics.append("Taktik Abstand: Median nächster Kamerad %.1f m, Anteil < 3 m %.1f %%, Minimum %.1f m, Endabstände %s" % [med, frac * 100.0, min_after, hold_d])
-	check(arrived, "Trupp erreicht das Ziel auf dem Gelände (Mauerraster)", str(lead.soldier.global_position - PLAT))
+	check(arrived, "Trupp erreicht das Ziel auf dem Gelände (Mauerraster)", "%s Ziel %s erreichbar %s" % [
+		str(lead.soldier.global_position - PLAT), str(lead.test_goal - PLAT), str(lead.nav.reachable)])
 	check(med >= 5.0 and frac <= 0.08, "KI-Soldaten halten Abstand (Median ≥ 5 m, < 3 m höchstens 8 %)", "Median %.1f, %.1f %%" % [med, frac * 100.0])
 	check(hold_d.all(func(d): return d >= 4.5), "Am Ziel getrennte Halteplätze (≥ 4,5 m)", str(hold_d))
 	lead.test_goal = Vector3.INF

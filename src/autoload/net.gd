@@ -46,7 +46,7 @@ const RULE_KEYS := {
 	# maxping [ms], maxfreq [Hz], maxinactivity [s] (intern ms, Ausgabe /1000), autorestart
 	"max_ping": "maxping", "max_freq": "maxfreq", "max_inactivity": "maxinactivity", "autorestart": "autorestart",
 	# Ergänzung (kein Original-Schlüssel): Namen über Spielern / Trefferanzeige erlauben (src/ui/mp_feedback.gd)
-	"show_names": "shownames", "hit_indicator": "hitindicator", "kill_cam": "killcam",
+	"show_names": "shownames", "hit_indicator": "hitindicator", "hurt_indicator": "hurtindicator", "kill_cam": "killcam",
 }
 ## Wertebereiche: Menü (0x629EE0) bzw. Konsole; bots = Ergänzung (KI-Soldaten je Team); 0 = „No limit“ (T2010)
 const RULE_RANGE := {
@@ -91,7 +91,8 @@ static func style_defaults(m: int) -> Dictionary:
 
 
 ## Ergänzung Trefferfeedback/Namen (alle Stile an; Spieler kann es zusätzlich in den Optionen abschalten)
-const FEEDBACK_DEFAULTS := {"show_names": true, "hit_indicator": true}
+## hit_indicator = Trefferanzeige für den Schützen (Hitmarker/Meldung/Klang), hurt_indicator = Richtungsbogen beim Getroffenen
+const FEEDBACK_DEFAULTS := {"show_names": true, "hit_indicator": true, "hurt_indicator": true}
 
 
 ## Launcher-Felder „Max ping/Max frequency/Max inactivity/Autorestart“: Standard „No limit“ bzw. aus (alle Stile)
@@ -1297,6 +1298,7 @@ func _client_ready() -> void:
 			_spawn.rpc_id(id, pid, String(players.get(pid, {}).get("name", "?")), int(players.get(pid, {}).get("team", 0)),
 				s.global_position, s.look_yaw, int(_gen.get(pid, 0)), players.get(pid, {}).get("kit", []))
 	_players.rpc_id(id, players)
+	_obj_states.rpc_id(id, _object_states())      # Türen: aktueller Stand für Spät-Beitretende
 	_server_spawn(id)
 
 
@@ -1657,8 +1659,42 @@ func _use(pid: String) -> void:
 		if (p != null and String(p) == pid) or String(n.get_path()) == pid:
 			if n is OrigInteractive.OrigLadder:
 				return       # Klettern ist Bewegung des Spielers selbst (kommt über den Zustandsabgleich)
+			if n.has_method("net_state") and not multiplayer.is_server():
+				return       # Türen: Server führt aus und meldet den Zustand (object_state), kein Umschalten je Rechner
 			n.interact(s)
 			return
+
+
+## Server: Zustand eines Weltobjekts mit net_state()/net_apply() (Türen/Schranken) an alle – auch nach KI-Öffnen,
+## Auto-Schließen, Skript (SetActorState/DOOR_Lock) und Schlossknacken. Vorher schaltete jeder Rechner beim Benutzen
+## nur um: Spät-Beitretende und KI-geöffnete Türen liefen auseinander (Tür offen gezeigt, beim Server zu).
+func object_state(it: Node) -> void:
+	if is_online and multiplayer.is_server() and not _ready_peers.is_empty():
+		_obj_state.rpc(String(it.get("persistent_id")), it.net_state())
+
+
+@rpc("authority", "call_remote", "reliable")
+func _obj_state(pid: String, st: Dictionary) -> void:
+	for n in get_tree().get_nodes_in_group("interactables"):
+		if n.has_method("net_apply") and String(n.get("persistent_id")) == pid:
+			n.net_apply(st, false)
+			return
+
+
+func _object_states() -> Dictionary:
+	var out := {}
+	for n in get_tree().get_nodes_in_group("interactables"):
+		if n.has_method("net_state") and String(n.get("persistent_id")) != "":
+			out[String(n.get("persistent_id"))] = n.net_state()
+	return out
+
+
+@rpc("authority", "call_remote", "reliable")
+func _obj_states(states: Dictionary) -> void:
+	for n in get_tree().get_nodes_in_group("interactables"):
+		var pid := String(n.get("persistent_id")) if n.get("persistent_id") != null else ""
+		if n.has_method("net_apply") and states.has(pid):
+			n.net_apply(states[pid], true)
 
 
 # --- Ingame-Inventar (FieldInventory): Aktion als Anfrage an den Server, Stand der Inventare an alle ----------
@@ -1952,7 +1988,7 @@ func on_soldier_died(s: Node, attacker: Node) -> void:
 	var tk := killer != 0 and killer != victim and team_mode() and players.has(killer) \
 		and int(players[killer]["team"]) == int(players.get(victim, {}).get("team", -1))
 	_killed.rpc(victim, killer, resp, String(s.get_meta("last_zone", "")) == "head", press,
-		String(s.get_meta("last_cause", "")), tk)
+		String(s.get_meta("last_cause", "")), tk, s.global_position)
 	if resp < 0.0 and players.has(victim) and victim > 0:
 		players[victim]["spectator"] = true         # Original 20312: schaltet zum Zuschauermodus
 	elif resp == 0.0:
@@ -2004,9 +2040,15 @@ func on_soldier_died(s: Node, attacker: Node) -> void:
 ## Abschussmeldung (Original 8860–8862) und eigener Wiedereinstieg (resp: s, 0 = Welle, < 0 = keiner;
 ## press: nach resp s Feuer drücken bzw. automatisch nach weiteren RESPAWN_AUTO_S s)
 @rpc("authority", "call_local", "reliable")
-func _killed(victim: int, killer: int, resp := -1.0, head := false, press := false, cause := "", tk := false) -> void:
+func _killed(victim: int, killer: int, resp := -1.0, head := false, press := false, cause := "", tk := false,
+		pos := Vector3.INF) -> void:
 	var s: Soldier = _soldiers.get(victim)
 	if is_instance_valid(s) and s.alive and not multiplayer.is_server():
+		# Leiche an der Server-Lage: Netzfiguren folgen dem Zustand nur, solange sie leben und ihre Physik läuft (vor
+		# nav_ready ruht sie) – sonst bliebe die Leiche z. B. am Spawnpunkt liegen und Durchsuchen schiene „außer Reichweite“
+		if s.net_puppet and pos.is_finite():
+			s.global_position = pos
+			s.net_target = pos
 		s.die(_soldiers.get(killer))
 	var vn := String(players.get(victim, {}).get("name", "?"))
 	var kn := String(players.get(killer, {}).get("name", ""))
@@ -2070,7 +2112,7 @@ func _on_soldier_damaged(s: Node, amount: float, zone: StringName, attacker: Nod
 		return
 	var victim := int(s.get_meta("net_peer"))
 	var shooter := int(attacker.get_meta("net_peer"))
-	if victim > 0:
+	if victim > 0 and bool(rule("hurt_indicator")):
 		_send_feedback(victim, "_hurt_from", [(attacker as Soldier).global_position])
 	if shooter > 0 and bool(rule("hit_indicator")):
 		var ff := team_mode() and (attacker as Soldier).team == (s as Soldier).team
@@ -2281,7 +2323,8 @@ func server_info() -> Dictionary:
 			"allow_respawn": bool(rule("allow_respawn")), "friendly_fire": bool(rule("friendly_fire")),
 			"team_balance": bool(rule("team_balance")), "third_person": bool(rule("third_person")),
 			"spawn_protect_s": int(rule("spawn_protect_s")), "kill_cam": bool(rule("kill_cam")),
-			"show_names": bool(rule("show_names")), "hit_indicator": bool(rule("hit_indicator"))},
+			"show_names": bool(rule("show_names")), "hit_indicator": bool(rule("hit_indicator")),
+			"hurt_indicator": bool(rule("hurt_indicator"))},
 		# Spiel-Info (gameinfo.4ds): Version (Filter „Selbe Version“ T2579), Team-/Spieler-Status, Runde
 		"ver": String(ProjectSettings.get_setting("application/config/version")), "ts": [int(team_score[0]), int(team_score[1])],
 		"w": team_wins, "rn": round_no, "st": game_state, "plist": _info_players()}
@@ -2869,6 +2912,7 @@ func _apply_inventory(s: Soldier, inv: Dictionary) -> void:
 	s.mines = int(lo["mines"])
 	s.has_binoculars = bool(lo["binoculars"])
 	s.set_meta("orig_items", lo["items"])
+	FieldInventory.set_start_order(s, inv)      # Ingame-Inventar (I) in der Reihenfolge der Ausrüstung
 	s.set_meta("mp_loadout", inv.duplicate(true))
 	s.set_meta("mp_uniform", int(inv.get("uniform", -1)))  # gewählte Uniform → Figur (_attach_figure)
 	s.set_meta("mp_class", tx(2535, "Soldaten-Ausrüstung:").trim_suffix(":"))
@@ -3681,6 +3725,8 @@ func _use_by(id: int, pid: String) -> void:
 	for n in get_tree().get_nodes_in_group("interactables"):
 		var p = n.get("persistent_id")
 		if (p != null and String(p) == pid) or String(n.get_path()) == pid:
+			if n.has_method("net_state"):
+				return       # Türen: Zustand kommt über object_state
 			n.interact(s)
 			return
 

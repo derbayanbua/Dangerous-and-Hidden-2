@@ -231,13 +231,13 @@ func _side(side: String, node: Node) -> void:
 	_scroll(side, 1, f["b_scroll"], (cols[1] as Array).size())
 
 
-## Reihenfolge ItemOrder (Vorgabe Auftraggeber): Munition direkt unter ihrer Waffe (Munition der Waffen in
-## Händen/Schulter oben), Munition ohne Waffe am Ende – gilt für das eigene und das durchsuchte Inventar
+## Reihenfolge ItemOrder: Aufnahmereihenfolge wie im Original (0x7D7390/0x4A2010), Munition direkt unter ihrer
+## Waffe in der Liste (Vorgabe Auftraggeber) – gilt für das eigene und das durchsuchte Inventar
 static func split_columns(inv: Dictionary) -> Array:
 	var pockets: Array = []
 	var pack: Array = []
 	var used := 0.0
-	for e in ItemOrder.order_entries(inv.get("items", []), ItemOrder.slot_weapons(inv)):
+	for e in ItemOrder.order_entries(inv.get("items", [])):
 		var sp := SAS.space(int(e[0])) * int(e[1])
 		if used + sp <= SAS.POCKET_SPACE + 0.001 or int(inv.get("back", -1)) < 0:
 			pockets.append(e)

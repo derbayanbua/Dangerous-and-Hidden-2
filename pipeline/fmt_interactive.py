@@ -27,8 +27,8 @@ import fmt_scene2  # noqa: E402
 import fmt_actors_items as fai  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORIG = os.path.join(ROOT, "HD2_orig")
-CACHE = os.path.join(ROOT, "DangerousHidden2", "orig_cache")
+ORIG = os.environ.get("DH2_ORIG") or os.path.join(ROOT, "HD2_orig")
+CACHE = os.environ.get("DH2_CACHE") or os.path.join(ROOT, "DangerousHidden2", "orig_cache")
 
 # Klassenname je Typ: Rueckgabe der Fabrik-Methode (+4) der Erzeuger bei 0x839460[typ] (hd2.exe) [B]
 CLASS_NAMES = {

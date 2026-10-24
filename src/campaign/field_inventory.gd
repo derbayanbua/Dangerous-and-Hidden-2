@@ -129,7 +129,40 @@ static func _soldier_view(s: Soldier) -> Dictionary:
 			if SAS.remove_item(inv, u, 1) <= 0:
 				pass
 			inv["uniform"] = u
+	_keep_order(s, inv)
 	return inv
+
+
+## Taschen/Rucksack in Aufnahmereihenfolge wie im Original (Behälter vtable 0x8171A0, docs/re_notes_roster_inventory.md
+## §4a): Meta „inv_order“ = Gegenstandsnummern der Gruppen in Reihenfolge. Missionsstart (0x59EB60) übernimmt die
+## Reihenfolge des Ausrüstungsbildschirms (set_start_order); vorhandene Sorte bleibt an ihrer Stelle, neue Sorte
+## kommt ans Ende (Einfügen 0x7D7390, Liste lückenlos), leere Gruppen fallen weg, der Rest rückt auf (0x7D7470).
+## Die abgeleitete Ansicht wird danach sortiert und die Reihenfolge fortgeschrieben.
+static func _keep_order(s: Soldier, inv: Dictionary) -> void:
+	var order: Array = s.get_meta("inv_order", [])
+	var items: Array = inv["items"]
+	var by_id := {}
+	for e in items:
+		by_id[int(e[0])] = e
+	var out: Array = []
+	for id in order:
+		if by_id.has(int(id)):
+			out.append(by_id[int(id)])
+			by_id.erase(int(id))
+	for e in items:
+		if by_id.has(int(e[0])):
+			out.append(e)
+	inv["items"] = out
+	s.set_meta("inv_order", out.map(func(e): return int(e[0])))
+
+
+## Startreihenfolge (Missionsstart 0x59EB60 / MP-Ausrüstung): Taschen/Rucksack des Ausrüstungsbildschirms
+static func set_start_order(s: Soldier, inv: Dictionary) -> void:
+	var order: Array = []
+	for e in inv.get("items", []):
+		if not order.has(int(e[0])):
+			order.append(int(e[0]))
+	s.set_meta("inv_order", order)
 
 
 static func _tool(inv: Dictionary, id: int, n: int, in_hand: bool) -> void:
@@ -360,6 +393,7 @@ static func apply(n: Node, inv: Dictionary, pool: Array) -> void:
 	s.set_meta("inv_extra", ex)
 	s.set_meta("inv_layout", {"head": int(inv["head"]), "uniform": int(inv["uniform"]), "back": int(inv["back"])})
 	s.set_meta("orig_items", flatten(inv))
+	set_start_order(s, inv)       # Reihenfolge nach der Aktion (angehängt/aufgerückt wie 0x7D7390/0x7D7470)
 	if captured:
 		s.set_meta("surrendered_weapons", surrendered)
 	s.weapons.clear()
@@ -705,7 +739,7 @@ static func server_execute(me: Soldier, op: Dictionary) -> String:
 		# Lage des Spielers: gemeldete Position (net_target), die Netzfigur folgt ihr verzögert
 		var mp: Vector3 = me.net_target if me.net_puppet else me.global_position
 		if (other as Node3D).global_position.distance_to(mp) > REACH * 1.5:
-			print("INVENTAR: außer Reichweite (%.1f m)" % (other as Node3D).global_position.distance_to(mp))
+			print("INVENTAR: außer Reichweite (%.1f m; Spieler %s, Ziel %s)" % [(other as Node3D).global_position.distance_to(mp), mp, (other as Node3D).global_position])
 			return "?"
 	var piles_before := {}
 	for p in (Engine.get_main_loop() as SceneTree).get_nodes_in_group("field_piles"):
@@ -743,7 +777,7 @@ static func export_state(n: Node) -> Dictionary:
 		surr.append([String((w as Weapon).data.id), (w as Weapon).in_mag, (w as Weapon).reserve])
 	return {"w": w_out, "cur": s.current_slot, "tool": s.tool, "med": s.medkits, "bin": s.has_binoculars,
 		"exp": s.explosives, "mine": s.mines, "orig": s.get_meta("orig_items", []), "extra": s.get_meta("inv_extra", []),
-		"layout": s.get_meta("inv_layout", {}), "surr": surr}
+		"layout": s.get_meta("inv_layout", {}), "surr": surr, "order": s.get_meta("inv_order", [])}
 
 
 ## Stand übernehmen (Client: vom Server; Server: Munitionsstand des anfragenden Spielers)
@@ -800,6 +834,8 @@ static func import_state(n: Node, d: Dictionary, ammo_only := false) -> void:
 	s.set_meta("orig_items", (d.get("orig", []) as Array).duplicate())
 	s.set_meta("inv_extra", (d.get("extra", []) as Array).duplicate(true))
 	s.set_meta("inv_layout", (d.get("layout", {}) as Dictionary).duplicate())
+	if d.has("order"):
+		s.set_meta("inv_order", (d["order"] as Array).duplicate())
 	s.current_slot = clampi(int(d.get("cur", s.current_slot)), 0, WeaponData.SLOT_COUNT - 1)
 	s.tool = String(d.get("tool", ""))
 	if s.alive and (s.current_weapon() != old_w or not s.net_puppet):

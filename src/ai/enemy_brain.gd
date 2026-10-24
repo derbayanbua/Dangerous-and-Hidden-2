@@ -94,8 +94,6 @@ var _surrender_check := 0.0
 var _surrender_delay := -1.0   ## Original: Hände hoch nach 300 ms (Zustand 0x2000002, Zähler 0x12C)
 var _captor: Soldier
 var capture_action: Node      ## EnemyBrain.CaptureAction (Interactable am Soldaten)
-var _mount_target: Node       ## Waffenstellung, die die KI besetzen will
-var _mount_check := 0.0
 var look_around := 0          ## HUMAN_LookAround(n), 0 = aus
 var _look_around_t := 0.0
 var _look_around_base := 0.0
@@ -370,10 +368,8 @@ func _find_flank(tpos: Vector3, threat_eye: Vector3) -> Vector3:
 
 func _combat(delta: float) -> void:
 	perception.forget_dead()
-	if _try_autonomous_mount(delta):
-		return
 	# Panik (Moral < 20) ohne Standhaftigkeit und Feind ≥ 15 m: Flucht (Original-Zustand 0x4000002) [B]; Fluchtweg 25 m [E]
-	if morale < 20.0 and morale_initial < 90.0 and not (is_armed() and morale_initial >= 75.0) \
+	if ((morale < 20.0 and morale_initial < 90.0) or not is_armed()) and not (is_armed() and morale_initial >= 75.0) \
 			and is_instance_valid(target) and target.alive and distance_to(target.global_position) >= SURRENDER_DIST:
 		if not has_move_target() or arrived(1.5):
 			var away := soldier.global_position - target.global_position
@@ -618,12 +614,10 @@ func _on_corpse(c: Soldier) -> void:
 	set_state(State.INVESTIGATE)
 
 
-func _on_damaged(amount: float, _zone: StringName) -> void:
+func _on_damaged(_amount: float, _zone: StringName) -> void:
 	if not soldier.alive:
 		return
 	var a := soldier.last_attacker as Soldier
-	# Moral sinkt mit Verwundungen (ANNAHME: −0,25 je Schadenspunkt, Originalformel nicht belegt)
-	morale = maxf(morale - amount * 0.25, 0.0)
 	if surrendered and not captured:
 		# Original: Beschuss eines Ergebenen (Ereignis 0x40000010/15) -> Flucht bzw. Gegenwehr [P 0x54B820]
 		_end_surrender(a)
@@ -672,11 +666,9 @@ func _shout(pos: Vector3) -> void:
 func _on_any_death(s: Node, attacker: Node) -> void:
 	if attacker == soldier and s != soldier and soldier.alive:
 		OrigAudio.speak_event(soldier, OrigAudio.EV_E_KILLED, 3.0)
-	# Todesschrei eines Kameraden in Hörweite (Alarmart 128); Moral sinkt (ANNAHME −15 je Kamerad in 30 m)
+	# Todesschrei eines Kameraden in Hörweite (Alarmart 128); die Moral bleibt unverändert (Original, re_notes_ai §1)
 	if s is Soldier and s != soldier and soldier.alive and (s as Soldier).team == soldier.team:
 		var d := distance_to((s as Soldier).global_position)
-		if d < 30.0:
-			morale = maxf(morale - 15.0, 0.0)
 		if d < perception.hear_range * 0.5 and not surrendered and not captured:
 			_stimulus = AL_DEATHCRY
 			if script_control:
@@ -747,22 +739,19 @@ func _check_surrender() -> void:
 		return
 	if _surrender_delay >= 0.0:
 		return
-	var t := _threat_aiming()
-	if t == null:
-		# Original ohne Zielen: in Panik (Moral < 20 bzw. unbewaffnet) und erkannter Feind unter 15 m -> ergeben
-		if ((morale < 20.0 and morale_initial < 90.0) or not is_armed()) and not (is_armed() and morale_initial >= 75.0):
-			var v := perception.best_target()
-			if v and v.team == Soldier.TEAM_ALLIED and distance_to(v.global_position) < SURRENDER_DIST:
-				t = v
-		if t == null:
-			return
-	var surprised := script_control or state in [State.GUARD, State.PATROL, State.INVESTIGATE]
-	var m := morale - (70.0 if surprised else 0.0)
-	var panic := (m < 20.0 and morale_initial < 90.0) or not is_armed()
+	# Original (re_notes_ai §1, Nachtrag 23.10.2026): die Moral ändert sich im Einsatz nicht (einzige Schreibzugriffe
+	# auf Mensch +0xF8: Laden/Schwierigkeit 0x59EA90/0x59EDC0 und +100 über 0x5A64F0 aus 0x547D80) [B]. Panik daher nur
+	# bei Moral < 20 ohne Flag 1 oder ohne Waffe (0x548610/0x54B730); in Panik mit gesehenem Feind: bewaffnet + Flag 2
+	# -> kämpfen, sonst nächster Feind < 15 m -> ergeben, sonst Flucht (_combat) [B 0x54B8F0]. Die früheren Annahmen
+	# (Anvisieren −70, Verwundung, Kameradentod) sind entfernt.
+	var panic := (morale < 20.0 and morale_initial < 90.0) or not is_armed()
 	if not panic:
 		return
-	if is_armed() and morale_initial >= 75.0 and not surprised:
+	if is_armed() and morale_initial >= 75.0:
 		return     # Original: bewaffnet und standhaft -> kämpft weiter (Zustand 0x8000001)
+	var t := perception.best_target()
+	if t == null or t.team != Soldier.TEAM_ALLIED or distance_to(t.global_position) >= SURRENDER_DIST:
+		return
 	_captor = t
 	_surrender_delay = 0.3
 	cease_fire()
@@ -971,29 +960,10 @@ func _script_tick_stance_only() -> void:
 	_move_target = Vector3.INF
 
 
-## ANNAHME: Ein Gegner, dessen Ausgangsposition höchstens 3 m neben einer freien Waffenstellung liegt (vom Leveldesign
-## als Bedienung platziert), besetzt sie, sobald er kämpft. Skriptgesteuert: HUMAN_BoardVehicle(Stellung, 1, 0).
-func _try_autonomous_mount(delta: float) -> bool:
-	_mount_check -= delta
-	if _mount_check > 0.0 or soldier.mounted != null or soldier.vehicle != null or Net.is_online:
-		return false
-	_mount_check = 1.0
-	if _mount_target == null:
-		for n in get_tree().get_nodes_in_group("emplacements"):
-			if n.has_method("can_ai_mount") and n.can_ai_mount(soldier) and (n as Node3D).global_position.distance_to(home_pos) < 3.0:
-				_mount_target = n
-				break
-	if _mount_target == null or not is_instance_valid(_mount_target) or not _mount_target.can_ai_mount(soldier):
-		_mount_target = null
-		return false
-	var spot: Vector3 = _mount_target.gunner_spot()
-	if distance_to(spot) < 2.5:
-		stop_moving()
-		_mount_target.mount(soldier)
-		_mount_target = null
-		return true
-	move_to(spot, Soldier.MoveMode.RUN)
-	return true
+## Waffenstellungen besetzt die Gegner-KI nur über das Originalskript (HUMAN_BoardVehicle(Stellung, 1, Sitz)): die
+## Gegner-KI von hd2.exe sucht keine Stellungen selbst (keine Typ-21-Abfrage im KI-Code 0x540000–0x55FFFF; Typ-21-
+## Prüfungen nur in 0x45B890 Schaden, 0x4B0920 Zielanzeige, 0x74A690) [P, re_notes_ai §3]. Die frühere Annahme
+## (Ausgangsposition ≤ 3 m neben einer Stellung → im Kampf besetzen) ist entfernt.
 
 
 func serialize() -> Dictionary:

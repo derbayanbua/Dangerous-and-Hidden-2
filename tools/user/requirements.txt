@@ -1,0 +1,4 @@
+# Pakete für den Export der Spieldaten (Menüpunkt 2 installiert sie nur in werkzeuge\)
+numpy>=1.26
+pillow>=10.0
+pefile>=2023.2.7

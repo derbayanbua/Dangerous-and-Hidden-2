@@ -45,6 +45,7 @@ func setup(s: Soldier) -> void:
 	super.setup(s)
 	reaction_time = 0.5
 	accuracy_skill = 0.6
+	direct_when_off_mesh = true     # Befehle auch abseits des Navigationsnetzes ausführen (Ersatz, kein Originalverhalten)
 	hold_pos = s.global_position
 	perception.target_detected.connect(_on_detected)
 	s.damaged.connect(func(_a, _z): _under_fire = 4.0)

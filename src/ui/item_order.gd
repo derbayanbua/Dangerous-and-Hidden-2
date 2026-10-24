@@ -4,7 +4,10 @@ extends RefCounted
 ## SAS.weapon_of_ammo; Raketen der Werfer über WeaponDB.LAUNCHER_AMMO).
 ## - Nutzen mehrere Waffen derselben Liste dieselbe Munition (z. B. Sten / Sten + Schalldämpfer, Colt 1911 /
 ##   De Lisle), steht sie nur unter der ersten davon.
-## - Munition ohne vorhandene Waffe steht am Ende (Lager: am Ende der Kategorie ihrer Waffe).
+## - Taschen/Rucksack: sonst gilt die Original-Ordnung = Aufnahmereihenfolge (Belege unten bei order_entries).
+##   Munition, deren Waffe nicht in derselben Liste liegt (Waffe in Händen/Schulter oder gar keine), bleibt an
+##   ihrer Aufnahmestelle – sie wird weder nach oben noch ans Ende gezogen.
+## - Lager: Munition ohne Waffe in der Kategorie steht am Ende der Kategorie ihrer Waffe.
 ## Genutzt von SasScreen (Lagerliste, Taschen/Rucksack) und IngameInventory (eigenes und durchsuchtes Inventar).
 ## Reine Anzeige-Reihenfolge: Inhalt und Mengen der Inventare bleiben unverändert.
 
@@ -40,28 +43,41 @@ static func by_category_label(a: int, b: int) -> bool:
 	return SAS.item_label(a) < SAS.item_label(b)
 
 
-## Inventareinträge [[id, anzahl], ...] in Anzeige-Reihenfolge. `lead` = Waffen auf festen Plätzen (Hände,
-## Schulter): deren Munition steht oben in der Liste, direkt neben/unter diesen Plätzen. Danach die übrigen
-## Gegenstände in ihrer bisherigen Reihenfolge, jede Waffe gefolgt von ihrer Munition; Munition ohne Waffe am Ende.
-static func order_entries(entries: Array, lead: Array = []) -> Array:
+## Inventareinträge [[id, anzahl], ...] in Anzeige-Reihenfolge: Aufnahmereihenfolge wie im Original, jede Waffe
+## gefolgt von ihrer Munition (Vorgabe Auftraggeber). Nur Munition, deren Waffe in derselben Liste liegt, wird
+## dorthin verschoben; alle anderen Einträge (auch Munition der Hand-/Schulterwaffe) behalten ihre Stelle.
+## Original hd2.exe v1.12 (docs/re_notes_roster_inventory.md §4a), keine Sortierung nach ID/Kategorie/Munition:
+## - Ausrüstungsbildschirm: Taschen = Vektor Team-Mitglied +0x70, Rucksackinhalt +0x80 (6-Byte-Sätze). Einfügen
+##   0x6A3080 (Fall 0x20/0x40): gleiche Sorte → Anzahl +1 im vorhandenen Satz, sonst neuer Satz am ENDE
+##   (0x5AAC90 an +0x74). Entfernen 0x6A3BC0: Satz mit Anzahl 0 wird gelöscht, Rest rückt auf. Anzeige 0x672280:
+##   Felder item00–03 = Satz[Bildlauf + i] in Vektorreihenfolge.
+## - Ingame (Taste I): Behälter vtable 0x8171A0 (Taschen 14, Rucksack 32 Gruppen). Einfügen 0x7D7390: zur Gruppe
+##   derselben Sorte, sonst erste leere Gruppe; Entfernen 0x7D7470 rückt leere Gruppen ans Ende; Anzeige 0x4A2010 in
+##   Gruppenreihenfolge. Missionsstart 0x59EB60 und -ende 0x5A8B50 übertragen in dieser Reihenfolge.
+## - Munition der Handwaffe steht nur oben, wenn sie zuerst aufgenommen wurde: presets.def-Taschenlisten werden in
+##   Dateireihenfolge eingefügt (0x677D00; dort meist, aber nicht immer zuerst, z. B. Vorlagen 5, 8, 13, 15, 36, 40,
+##   42, 43, 49, 52–58), AUTOMATISCHES AUFFÜLLEN 0x6777A0 hängt Hand-, dann Schultermunition hinten an.
+static func order_entries(entries: Array) -> Array:
 	var ammo_e := {}
 	for e in entries:
-		if is_ammo(int(e[0])):
-			ammo_e[int(e[0])] = e
+		var w := ammo_for(int(e[0]))
+		if w >= 0:
+			ammo_e[w] = null
+	for e in entries:
+		var id := int(e[0])
+		if ammo_e.has(id) and is_ammo(id):
+			ammo_e[id] = e
+	for k in ammo_e.keys():
+		if ammo_e[k] == null:
+			ammo_e.erase(k)
 	var out: Array = []
 	var used := {}
-	for w in lead:
-		_take(ammo_for(int(w)), ammo_e, used, out)
 	for e in entries:
 		var id := int(e[0])
 		if ammo_e.has(id):
 			continue
 		out.append(e)
 		_take(ammo_for(id), ammo_e, used, out)
-	for e in entries:
-		var id := int(e[0])
-		if ammo_e.has(id) and not used.has(id):
-			out.append(e)
 	return out
 
 
@@ -69,13 +85,3 @@ static func _take(am: int, ammo_e: Dictionary, used: Dictionary, out: Array) -> 
 	if am >= 0 and ammo_e.has(am) and not used.has(am):
 		used[am] = true
 		out.append(ammo_e[am])
-
-
-## Waffen eines Inventars auf festen Plätzen (für `lead`)
-static func slot_weapons(inv: Dictionary) -> Array:
-	var out: Array = []
-	for slot in ["hands", "shoulder"]:
-		var id := int(inv.get(slot, -1))
-		if id >= 0 and SAS.item_kind(id) == "weapon":
-			out.append(id)
-	return out

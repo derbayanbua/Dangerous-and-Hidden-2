@@ -26,8 +26,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fmt_scene2 import chunks, cstr, parse  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ORIG = os.path.join(ROOT, "HD2_orig")
-CACHE = os.path.join(ROOT, "DangerousHidden2", "orig_cache")
+ORIG = os.environ.get("DH2_ORIG") or os.path.join(ROOT, "HD2_orig")
+CACHE = os.environ.get("DH2_CACHE") or os.path.join(ROOT, "DangerousHidden2", "orig_cache")
 
 LIGHT_TYPES = {1: "point", 2: "spot", 3: "directional", 4: "ambient", 5: "fog",
                6: "point_ambient", 8: "layered_fog"}   # 6/8 aus Mafia-LS3D, in ARCTIC1 nicht vorhanden

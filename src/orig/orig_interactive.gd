@@ -120,10 +120,15 @@ func allowed(s: Soldier, item: int) -> bool:
 
 
 ## Explosionsschaden an zerstörbaren Objekten, Fahrzeugen, Hunden (MakeExplosion, Sprengplätze, Granaten)
-static func damage_objects(tree: SceneTree, pos: Vector3, radius: float, damage: float, by: Node = null) -> void:
+## vehicle_factor: Raketen-Explosionsstärke je Aufschlagziel (hd2.exe 0x449290: Fahrzeug 0,1, Welt 0,5, Mensch 1,0) –
+## im Nachbau nur für Fahrzeug-Schadensmodelle angewandt (Vehicle.explosion_at), Menschen unverändert
+static func damage_objects(tree: SceneTree, pos: Vector3, radius: float, damage: float, by: Node = null, vehicle_factor := 1.0) -> void:
 	for n in tree.get_nodes_in_group("destructibles") + tree.get_nodes_in_group("vehicles") + tree.get_nodes_in_group("dogs"):
 		var n3 := n as Node3D
 		if n3 == null or not n3.has_method("on_bullet_hit"):
+			continue
+		# Originalfahrzeug mit Schadensmodell (DM<Modell>.4ds): Explosion trifft die nächste Zone (Vehicle.explosion_at)
+		if n.has_method("explosion_at") and n.explosion_at(pos, radius, damage * vehicle_factor, by):
 			continue
 		var r := radius + 1.5
 		var dv := pos.distance_to(n3.global_position + Vector3.UP * 0.5)
@@ -172,6 +177,7 @@ class OrigDoor extends Interactable:
 	var _picker: Soldier
 	var _pick_from := Vector3.ZERO
 	var _move_snd: AudioStreamPlayer3D
+	var floor_y := 0.0         ## Unterkante des Flügels (Stockwerk der Tür)
 	var is_open: bool:
 		get:
 			return state == 1 or state == 2
@@ -211,21 +217,94 @@ class OrigDoor extends Interactable:
 		base = frame.transform
 		var box := OrigInteractive.world_aabb(frame)
 		global_position = box.get_center()
-		# Drehsinn (nicht belegt): so wählen, dass der Flügel in die gespeicherte Öffnungsrichtung schwenkt
-		var od: Array = p.get("open_dir_gltf", [])
-		if not slide and od.size() == 3:
-			var dir_w := frame.global_basis * Vector3(od[0], od[1], od[2])
-			var c := frame.global_transform.affine_inverse() * box.get_center()
-			var moved := frame.global_basis * (Basis(axis, 0.3) * c - c)
-			if dir_w.length() > 0.01 and moved.dot(dir_w) < 0.0:
-				sgn = -1.0
+		floor_y = box.position.y
+		# Drehsinn wie hd2.exe 0x5FF700: Lage = quat(Achse +0x210, Betrag +0x264) ⊗ Ausgangslage, Betrag 0…open_amount,
+		# also fester Drehsinn um die Datenachse (kein open_dir). In glTF: +Betrag um axis_gltf im Frame-Raum. Gegenprobe
+		# tests/probe_door_swing.gd (Flügel geöffnet in statischer Geometrie, 204 Drehtüren auf 4 Karten): +Betrag 44,
+		# −Betrag 112; die frühere open_dir-Annahme drehte z. B. auf NORMANDY2 11 von 18 Türen in die Wand.
+		sgn = 1.0
+		_ensure_collision()
 		if int(p.get("initial_state", 0)) == 1:
-			amount = open_amount
+			# Original 0x600CC0: Betrag beginnt bei 0, Startzustand offen → Öffnen-Befehl (0x5FF4B0 Modus 2, stumm hier)
 			target = open_amount
-			state = 1
-			_apply()
+			state = 2
 		frame.set_meta("actor_state", state)
 		_update_prompt()
+
+	var _ignore: Array[RID] = []
+	var _ignore_ready := false
+	var _blocked_wait := 0.0
+
+	## Original 0x600CC0: die Tür legt ihr Kollisionsvolumen selbst aus dem Frame-Kasten an (0x6EF3E0), unabhängig von
+	## tree.klz. Hat der Flügel keinen Körper (z. B. NORMANDY2 H38_123: liegt im versteckten Treppen-Ersatzkörper und
+	## verlor dadurch seine Kollision), bekommt er hier einen Kasten aus seinem Mesh (Ebene 1 wie die Welt).
+	func _ensure_collision() -> void:
+		if not frame.find_children("*", "CollisionObject3D", true, false).is_empty():
+			return
+		var list: Array = frame.find_children("*", "MeshInstance3D", true, false)
+		if frame is MeshInstance3D:
+			list.append(frame)
+		for mi in list:
+			var me := mi as MeshInstance3D
+			if me.mesh == null:
+				continue
+			var bb := me.get_aabb()
+			var body := StaticBody3D.new()
+			body.name = "DoorBody"
+			body.collision_layer = 1
+			body.collision_mask = 0
+			var cs := CollisionShape3D.new()
+			var box := BoxShape3D.new()
+			box.size = bb.size.max(Vector3(0.03, 0.03, 0.03))
+			cs.shape = box
+			cs.position = bb.get_center()
+			body.add_child(cs)
+			me.add_child(body)
+			print("TÜR: Kollisionskasten ergänzt für %s" % String(frame.name))
+
+	## Beim ersten Physikschritt: eigene Kollisionskörper des Flügels zählen nicht als Hindernis
+	func _prepare_ignore() -> void:
+		_ignore_ready = true
+		_ignore = _own_rids()
+
+	func _own_rids() -> Array[RID]:
+		var out: Array[RID] = []
+		for b in frame.find_children("*", "CollisionObject3D", true, false):
+			out.append((b as CollisionObject3D).get_rid())
+		return out
+
+	## Flügelvolumen (je Mesh ein Kasten, 6 cm/15 cm geschrumpft) gegen Welt (Ebene 1) und Soldaten (Ebene 2)
+	func _overlaps(exclude: Array[RID], chars := true, only_chars := false) -> Array[RID]:
+		var out: Array[RID] = []
+		if not is_inside_tree():
+			return out
+		var space := frame.get_world_3d().direct_space_state
+		var list: Array = frame.find_children("*", "MeshInstance3D", true, false)
+		if frame is MeshInstance3D:
+			list.append(frame)
+		for mi in list:
+			var me := mi as MeshInstance3D
+			if me.mesh == null:
+				continue
+			var bb := me.get_aabb()
+			var box := BoxShape3D.new()
+			box.size = (bb.size - Vector3(0.12, 0.3, 0.12)).max(Vector3(0.01, 0.01, 0.01))
+			var q := PhysicsShapeQueryParameters3D.new()
+			q.shape = box
+			q.transform = me.global_transform * Transform3D(Basis(), bb.get_center())
+			q.collision_mask = 2 if only_chars else ((1 | 2) if chars else 1)
+			q.exclude = exclude
+			for r in space.intersect_shape(q, 8):
+				var c = r.get("collider")
+				if c is Node and not (c is CharacterBody3D) and String((c as Node).get_path()).contains("/Dynamic/"):
+					continue           # andere Türen/Objekte unter dynamic_root
+				out.append(r["rid"])
+		return out
+
+	## Nur Türen im eigenen Stockwerk: Die Benutzen-Auswahl misst waagrecht – in mehrstöckigen Häusern (NORMANDY2
+	## H38: H38_92 unter H38_154, H38_75 unter H38_123, 3,16 m übereinander) griff sonst die Tür darüber/darunter.
+	func can_interact(s: Soldier) -> bool:
+		return enabled and s.global_position.y > floor_y - 1.0 and s.global_position.y < floor_y + 1.6
 
 	func _update_prompt() -> void:
 		if _pick_left > 0.0:
@@ -283,9 +362,11 @@ class OrigDoor extends Interactable:
 		if partner_name != "":
 			var other = host.controls.get(partner_name.to_upper())
 			if other is OrigDoor and other != self and other.is_open != o:
+				var keep: String = other.partner_name
 				other.partner_name = ""      # kein Ping-Pong
 				other.set_open(o)
-				other.partner_name = String(p["partner_door"]) if p.get("partner_door") != null else ""
+				other.partner_name = keep
+		_net()
 
 	func set_actor_state(n: int) -> void:
 		set_open(n != 0)
@@ -296,6 +377,33 @@ class OrigDoor extends Interactable:
 		if b != locked and is_inside_tree():
 			_snd("lock" if b else "unlock")
 		locked = b
+		_update_prompt()
+		_net()
+
+	## Mehrspieler: der Server ist maßgeblich und meldet jede Zustandsänderung (Net.object_state); Clients übernehmen
+	## sie mit net_apply (Spät-Beitritt: sofort, sonst mit Bewegung/Klang).
+	func _net() -> void:
+		if Net.is_online and is_inside_tree():
+			Net.object_state(self)
+
+	func net_state() -> Dictionary:
+		return {"open": target > 0.0, "locked": locked, "amount": amount}
+
+	func net_apply(st: Dictionary, snap: bool) -> void:
+		locked = bool(st.get("locked", locked))
+		var o := bool(st.get("open", target > 0.0))
+		if snap:
+			_stop_move_snd()
+			target = open_amount if o else 0.0
+			amount = clampf(float(st.get("amount", target)), 0.0, open_amount)
+			state = (1 if o else 0) if is_equal_approx(amount, target) else (2 if o else 3)
+			_apply()
+			frame.set_meta("actor_state", state)
+		elif o != (target > 0.0):
+			var keep := partner_name
+			partner_name = ""                # Partnerflügel meldet der Server selbst
+			set_open(o)
+			partner_name = keep
 		_update_prompt()
 
 	func _physics_process(delta: float) -> void:
@@ -310,6 +418,7 @@ class OrigDoor extends Interactable:
 					_picker.train("locks")
 					Events.say("Schloss geknackt.", 2.0)
 					_update_prompt()
+					_net()
 		if _close_in > 0.0:
 			_close_in -= delta
 			if _close_in <= 0.0 and is_open:
@@ -320,10 +429,25 @@ class OrigDoor extends Interactable:
 					_close_in = 2.0
 				else:
 					set_open(false)
-		if not is_equal_approx(amount, target):
-			amount = move_toward(amount, target, speed * delta)
+		if not _ignore_ready:
+			_prepare_ignore()
+		if _blocked_wait > 0.0:
+			_blocked_wait -= delta
+		elif not is_equal_approx(amount, target):
+			var prev := amount
+			var step := speed * delta
+			amount = move_toward(prev, target, step)
 			_apply()
-			if is_equal_approx(amount, target):
+			# Original 0x5FF700/0x6F78F0: Flügelvolumen gegen Hindernisse – bei Kollision letzten Schritt zurücknehmen,
+			# 200 ms warten, dann erneut (Zustand bleibt „öffnet/schließt“). Hier nur gegen Soldaten (Ebene 2): welche
+			# Kollisionsklasse das Original prüft (Maske 2), ist nicht belegt; gegen die Levelgeometrie blieben Flügel mit
+			# knapp bemessenem Datenwinkel an Wand-/Zargenflächen hängen (NORMANDY2-Bank).
+			if not slide and not _overlaps(_ignore, true, true).is_empty():
+				amount = prev
+				_apply()
+				_blocked_wait = 0.2
+				_stop_move_snd()
+			if _blocked_wait <= 0.0 and is_equal_approx(amount, target):
 				state = 1 if target > 0.0 else 0
 				frame.set_meta("actor_state", state)
 				_update_prompt()
@@ -876,8 +1000,10 @@ static func weapon_for_ammo(ammo: int) -> int:
 
 ## Bordwaffen und Geschütze aus items.sav: Schusswaffen über WeaponDB.from_orig(…, mounted); Werfer (Flak, Kanonen,
 ## Pak) als Geschoss mit Aufschlagzünder: Feuerintervall interval_ms, Nachladen reload_ms, Geschwindigkeit velocity,
-## Magazin = Schuss je Munitionsgegenstand [O]; Splitterradius f15 (mind. 3 m) [O, Deutung P]; Schaden damage_f3/10,
-## bei Kanonen (Platzhalterwert 99/300) 300 [E – Kanonenschaden im Original nicht dekodiert]
+## Magazin = Schuss je Munitionsgegenstand [O]; Explosionsstärke und -radius des Geschosses = Werfer-Verhalten
+## Laufzeit +0x5C/+0x60 (items.json „strength“/„blast_radius“, Datensatz +0xDC/+0xE0; hd2.exe 0x449290: Direkttreffer
+## Fahrzeug = Damage(7, Stärke), Explosion 0x451990) [B] – z. B. KwK 40 4000/5,5 m, KwK 36 3250/6 m, Flak 38 1400/3 m;
+## Schaden im Nachbau zotti/10 wie WeaponDB. Ohne diese Felder (alter Cache): bisherige Annahme damage_f3/10 bzw. 300 [E]
 static func heavy_weapon(item: int) -> WeaponData:
 	if item < 0:
 		return null
@@ -896,11 +1022,18 @@ static func heavy_weapon(item: int) -> WeaponData:
 	var cannon := interval >= 1.0
 	var rounds := int(item_info(int(info.get("ammo_item", -1))).get("rounds", 1.0))
 	var dmg := float(b.get("damage_f3", 99.0))
+	var strength := float(b.get("strength", -1.0))
+	var radius := float(b.get("blast_radius", -1.0))
+	var damage := 300.0 if cannon or dmg <= 99.0 else dmg / 10.0
+	if strength > 0.0:
+		damage = strength / 10.0
+	if radius <= 0.0:
+		radius = maxf(float(b.get("f15", 0.0)), 3.0 if not cannon else 4.0)
 	return WeaponDB._make({id = gid, display_name = String(info.get("name", gid)), slot = WeaponData.Slot.PRIMARY,
 		action = WeaponData.Action.ROCKET, magazine_size = maxi(rounds, 1), start_magazines = 6,
 		rpm = 60.0 / interval, reload_time = float(b.get("reload_ms", 3000.0)) / 1000.0,
 		muzzle_velocity = clampf(float(b.get("velocity", 250.0)), 40.0, 1000.0),
-		damage = 300.0 if cannon or dmg <= 99.0 else dmg / 10.0, blast_radius = maxf(float(b.get("f15", 0.0)), 3.0 if not cannon else 4.0),
+		damage = damage, blast_radius = radius,
 		spread_hip = 0.6, spread_aim = 0.3, recoil_pitch = 2.0 if cannon else 0.8, recoil_yaw = 0.3, spread_per_shot = 0.1,
 		noise_radius = 400.0 if cannon else 250.0, weight = float(info.get("weight_kg", 500.0)), model_length = 2.0, aim_fov = 30.0})
 
@@ -973,6 +1106,20 @@ static func rig_params(path: String) -> Dictionary:
 					continue
 				# Sitz-Frame „SEAT<Ziffern>“: erste Ziffer = Haltung des Bedieners (1 sitzend, 2 stehend, 3 hockend,
 				# 6 liegend; Daten aller Stellungsmodelle, Bit 8 = Geschütz, re_notes_ju88 §2.5) [B Daten, P Deutung]
+				# Klänge am Seitenrichtungs-Frame HORT00: SOUNDM Bewegung (Schleife), SOUNDS Stopp; Kat. 3 (0x4C6E50) [B]
+				if nm.begins_with("HORT") and not out.has("soundm"):
+					var hp := String(ex.get("params", "")).to_upper()
+					for key in ["SOUNDM", "SOUNDS"]:
+						var at := hp.find(key)
+						if at >= 0:
+							var digits := ""
+							var q: int = at + String(key).length()
+							while q < hp.length() and hp[q].is_valid_int():
+								digits += hp[q]
+								q += 1
+							if digits != "":
+								out[key.to_lower()] = int(digits)
+					continue
 				if nm.begins_with("SEAT") and not out.has("seat"):
 					var sp := String(ex.get("params", "")).to_upper()
 					if sp.begins_with("SEAT") and sp.length() > 4 and sp.substr(4, 1).is_valid_int():
@@ -1013,6 +1160,8 @@ class OrigEmplacement extends Interactable:
 		for k in ["up", "down", "left", "right"]:
 			if rig.has(k):
 				lim[k] = float(rig[k])
+		snd_m = int(rig.get("soundm", -1))
+		snd_s = int(rig.get("sounds", -1))
 		for n in frame.find_children("*", "Node3D", true, false):
 			var nm := String(n.name).to_upper()
 			if hort == null and nm.begins_with("HORT"):
@@ -1054,6 +1203,7 @@ class OrigEmplacement extends Interactable:
 		var pit := clampf(gunner.look_pitch, -deg_to_rad(lim["down"]), deg_to_rad(lim["up"]))
 		gunner.look_yaw = base_yaw + rel
 		gunner.look_pitch = pit
+		_rig_sound(absf(rel - aim_yaw) + absf(pit - aim_pitch) > 0.0005, get_physics_process_delta_time())
 		aim_yaw = rel
 		aim_pitch = pit
 		if hort:
@@ -1064,6 +1214,35 @@ class OrigEmplacement extends Interactable:
 				b = Basis(Vector3.UP, rel) * b
 			# Rückstoß: Rohr fährt beim Schuss bis 3 cm zurück (lokal +Z), Hände folgen den Griffen [E]
 			vert.transform = Transform3D(b, base_v.origin + b * Vector3(0, 0, 0.03 * _kick))
+
+	## Richtklänge wie Fahrzeugtürme (Vehicle._turret_sound, hd2.exe 0x4C2580): Bewegung → SOUNDM-Schleife (z. B. 60
+	## „All Cannons work“, 78 „All Machingun work“), > 300 ms Stillstand → Schleife aus, SOUNDS (z. B. 79) [B]
+	var snd_m := -1
+	var snd_s := -1
+	var _snd_on := false
+	var _snd_still := 0.0
+	var _snd_loop: Node
+	var _snd_stop: Node
+
+	func _rig_sound(moving: bool, delta: float) -> void:
+		if snd_m < 0:
+			return
+		var src: Node3D = hort if hort else (vert if vert else frame)
+		if moving:
+			_snd_still = 0.0
+			if not _snd_on:
+				_snd_on = true
+				if is_instance_valid(_snd_stop):
+					_snd_stop.queue_free()
+				_snd_loop = OrigAudio.play_group(3, snd_m, src.global_position, src, 1.0, true)
+			return
+		_snd_still += delta * 1000.0
+		if _snd_on and _snd_still > 300.0:
+			_snd_on = false
+			if is_instance_valid(_snd_loop):
+				_snd_loop.queue_free()
+			if snd_s >= 0:
+				_snd_stop = OrigAudio.play_group(3, snd_s, src.global_position, src)
 
 	## Rohrrichtung in Weltkoordinaten (Modelle: Lauf entlang −Z)
 	func barrel_dir() -> Vector3:
@@ -1475,6 +1654,13 @@ func item_in_range(id: int, pos: Vector3, r: float) -> bool:
 	for n in get_tree().get_nodes_in_group("world_items"):
 		var wi := n as OrigWorldItem
 		if wi and wi.item == id and wi.visible and wi.enabled and wi.global_position.distance_to(pos) <= r:
+			return true
+	# abgelegte Gegenstände (Ablagestapel FieldInventory.Pile, Original: fallen gelassener Gegenstand liegt wieder frei;
+	# TUTORIAL: Tauchgerät muss am Becken zurückbleiben, t_dummy_bubly _ItemInRange(231, 20))
+	for n in get_tree().get_nodes_in_group("field_piles"):
+		var pile := n as Node3D
+		if pile and pile.global_position.distance_to(pos) <= r \
+				and FieldInventory.count_at(FieldInventory.view(pile), "items", id) > 0:
 			return true
 	if mission.squad:
 		for m in mission.squad.members:

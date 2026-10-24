@@ -26,6 +26,14 @@ Tarnung, Fahrzeuge, Original-Missionsabläufe.
 - Texturen und Sounds sind aus dem Original und müssen manuel exportiert und Importiert werden
 - LAN Modus mit BOTs ist implementiert
 
+## Screenshots (v0.9.3)
+
+| Hauptmenü | Im Einsatz |
+|---|---|
+| ![Hauptmenü](docs/screenshots/01_hauptmenue.png) | ![Im Einsatz](docs/screenshots/02_ingame.png) |
+| **Gefecht** | **LAN-Mehrspieler** |
+| ![Gefecht](docs/screenshots/03_kampf.png) | ![LAN-Menü](docs/screenshots/04_lan.png) |
+
 ## Keine Originaldaten im Repository
 
 Dieses Repository enthält **keine Dateien des Originalspiels** – keine Modelle, Texturen, Klänge, Texte oder
@@ -53,6 +61,27 @@ Dieses Projekt steht in keiner Verbindung zu ihnen und wird von ihnen weder unte
 - Eine Installation von *Hidden & Dangerous 2* (z. B. von GOG)
 - Python 3 mit Pillow und numpy für die Konvertierung (Skripte in `pipeline/`)
 
+## Installation / Spieldaten exportieren / Texturen hochskalieren
+
+Für Spieler gibt es ein einfaches Konsolen-Menü – keine Programmierkenntnisse nötig:
+
+1. Paket entpacken bzw. Repository herunterladen und **`HD2-Werkzeuge.cmd` doppelklicken**.
+2. **1) Original-Installation suchen** – findet *Hidden & Dangerous 2* über Registry, GOG, Steam oder übliche
+   Ordner; alternativ den Ordner mit `hd2.exe` selbst eingeben. Die Installation wird nur gelesen, nie verändert.
+3. **2) Werkzeuge einrichten** – legt eine eigene Python-Umgebung im Ordner `werkzeuge\` neben dem Spiel an
+   (nichts wird ohne Rückfrage systemweit installiert) und auf Wunsch ffmpeg für die Filme.
+4. **3) Spieldaten exportieren** – Missionen, Mehrspielerkarten, Figuren, Waffen, Klänge, Musik, Menüs, HUD,
+   Texte und Animationen landen in `orig_cache\`. Dauert je nach PC etwa 30–90 Minuten, ist jederzeit
+   abbrechbar und setzt beim nächsten Start fort. Protokolle stehen in `werkzeuge\protokolle\`.
+5. **4) Filme konvertieren** (optional, benötigt ffmpeg).
+6. **5) Texturen hochskalieren** (optional) – KI-Hochskalierung auf HD bzw. 4K. Lädt nach Rückfrage PyTorch
+   und die Real-ESRGAN-Modelle; auf der CPU dauert das viele Stunden, mit NVIDIA-GPU deutlich weniger.
+   Fortsetzbar; das Spiel nutzt die hochskalierten Texturen automatisch.
+7. **6) Status** zeigt, was vorhanden ist und was fehlt; **7) Spiel starten**.
+
+Alle Schritte gehen auch ohne Menü, z. B.
+`powershell -ExecutionPolicy Bypass -File tools\user\hd2_menu.ps1 -Aktion Export -Orig "C:\Spiele\Hidden & Dangerous 2"`.
+Die erzeugten Daten stammen aus dem eigenen Spiel und dürfen nicht weitergegeben werden.
 ## Schnellstart
 
 1. **Originaldaten konvertieren** (einmalig, aus der eigenen Installation):
