@@ -99,17 +99,15 @@ Die erzeugten Daten stammen aus dem eigenen Spiel und dürfen nicht weitergegebe
 
 ## Stand
 
-In aktiver Entwicklung. Die Arktis-Kampagne läuft mit Originaldaten durchgehend, weitere Kampagnen sind
-konvertiert und werden Schritt für Schritt spielbar gemacht. Bekannte Lücken und Annahmen sind in `docs/` und
-`CLAUDE.md` dokumentiert; die Erkenntnisse über die Originalformate stehen in `docs/RE_FINDINGS.md` und den
-`docs/re_notes_*.md`.
-- Es gibt noch diverse BUGS!
+In aktiver Entwicklung. Die Arktis-Kampagne läuft mit Originaldaten teilweise, weitere Kampagnen sind
+konvertiert und werden Schritt für Schritt spielbar gemacht.
+- Es gibt noch diverse BUGS! -> 
 
 ## Steuerung (Standard)
 
 WASD bewegen · Shift sprinten · C hocken · Z/Y liegen · Leertaste springen/klettern · Q/E lehnen ·
 LMT feuern · RMT zielen · R nachladen · Mausrad Ausrüstungswahl (oder 1-9) · G Granate · F benutzen ·
-V 1./3. Person · F1–F4 Soldat wählen · M taktische Karte · F5/F9 Schnellspeichern/-laden · Esc Pause, NUM 0-4 Soldaten befehle
+V 1./3. Person · F1–F4 Soldat wählen · M taktische Karte · F5/F9 Schnellspeichern/-laden · Esc Pause, NUM 0-4 Soldaten befehle [funktionieren nur teilweise]
 
 ---
 
