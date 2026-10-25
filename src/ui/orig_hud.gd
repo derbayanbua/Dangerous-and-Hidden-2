@@ -538,6 +538,9 @@ static func weapon_item(w: Weapon, team: int = -1) -> int:
 
 ## Gegenstand auf der Schulter: die lange Waffe, die nicht in der Hand ist (Primärwaffe, sonst Raketenwerfer).
 static func shoulder_weapon(s: Soldier) -> Weapon:
+	var bw := FieldInventory.back_weapon(s)      # B-018: zweite Langwaffe gleicher Art auf dem Rücken
+	if bw:
+		return bw
 	var w: Weapon = s.current_weapon() if s.tool == "" else null
 	for slot in [WeaponData.Slot.PRIMARY, WeaponData.Slot.LAUNCHER]:
 		var wp: Weapon = s.weapons[slot] if slot < s.weapons.size() else null

@@ -25,7 +25,11 @@ const BOX_FROM := 0.35
 ## 76 „G helm zelena“ (Achse), 79 „A helm sesitkou“ (Alliierte) [P Zuordnung]
 const DEFAULT_AXIS := 76
 const DEFAULT_ALLIED := 79
-const FLY_SPEED := 3.2          ## m/s in Schussrichtung [D]
+## B-018 [B]: Lage des Kopfgegenstands relativ zum Kopfgelenk (+0x7C des Halterungsobjekts), hd2.exe 0x7D1B60 Fall 1:
+## SetDir(0,0,1) + SetPos(DAT_0098AFB0) = (0,0167346; 0,138342; −0,0175083) im LS3D-Raum, gesetzt in 0x7CFE12 ff.
+## Nachbau-Raum: z gespiegelt (Konverter LS3D → glTF, vgl. Helmwurzel z +0,018 im glb).
+const MOUNT_POS := Vector3(0.0167346, 0.138342, 0.0175083)
+const FLY_SPEED := 3.2         ## m/s in Schussrichtung [D]
 const FLY_UP := 2.4             ## m/s nach oben [D]
 const REST_TIMEOUT := 4.0       ## s bis zur Ablage, falls der Körper nicht einschläft [D]
 
@@ -126,6 +130,18 @@ static func model_of(item: int) -> Node3D:
 	for c in n.find_children("shadow*", "", true, false):
 		(c as Node).queue_free()        # Schattenkarte des Originals (Dummy) nicht anzeigen
 	return n
+
+
+## Lage des Helmmodells unter dem Kopfgelenk: die Modellwurzel (erstes Kind mit der Original-Rahmenlage) kommt auf
+## MOUNT_POS ohne Drehung (B-018, 0x7D1B60 Fall 1)
+static func mount_transform(vis: Node3D) -> Transform3D:
+	var frame: Node3D = null
+	for c in vis.get_children():
+		if c is Node3D and not String(c.name).to_lower().begins_with("shadow"):
+			frame = c
+			break
+	var inner := frame.transform if frame else Transform3D.IDENTITY
+	return Transform3D(Basis.IDENTITY, MOUNT_POS) * Transform3D(Basis.IDENTITY, inner.origin).affine_inverse()
 
 
 ## Hüllkiste aller Meshes im Raum der Wurzel

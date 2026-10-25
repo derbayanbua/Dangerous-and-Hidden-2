@@ -946,6 +946,7 @@ func apply_sas(s: Soldier, pid: String) -> void:
 	s.has_binoculars = bool(lo["binoculars"])
 	s.set_meta("orig_items", lo["items"])
 	FieldInventory.set_start_order(s, sas_inventory(idx))   # Missionsstart 0x59EB60: Reihenfolge des Ausrüstungsbildschirms
+	FieldInventory.settle_back.call_deferred(s)            # B-018: zweite Langwaffe auf den Rücken
 	s.set_meta("sas", idx)
 	s.set_meta("lockpick", float(stats.get("lockpick", 50)))
 	# Feinduniform im Inventar (z. B. ALPS2 „Uniform GE03“): von Beginn an getarnt (Original:

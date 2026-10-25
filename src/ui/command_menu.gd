@@ -29,15 +29,34 @@ const MENUS := {
 }
 const QUIET_MENUS := [54, 55, 56]   ## Schl. Beweg., Stiller Angriff, Stille Aktion
 
-## Untermenü „Aktion“: Aktion = 100 + Original-Aktionsnummer (Bauer 0x4BF640 addiert 0x64)
+## Untermenü „Aktion“: Aktion = 100 + Original-Aktionsnummer (Bauer 0x4BF640 addiert 0x64; 0x32 → ausgegraut).
+## Vollständige Tabelle nach Akteurtyp des Ziels: hd2.exe 0x4BF670 (B-019, re_notes_commands.md §4).
+const ACT_LOCK := 100         ## 7019 Abschließen (Schlüssel)
+const ACT_UNLOCK := 101       ## 7020 Aufschließen (Schlüssel)
+const ACT_DISARM := 102       ## 7021 Entschärfen (Mine, Typ 2)
 const ACT_USE := 103          ## 7022 Benutzen
 const ACT_PLANT := 104        ## 7047 Sprengstoff anbringen
-const ACT_AMMO := 106         ## 7053 Munition nehmen
+const ACT_STOP := 105         ## 7024 Beenden
+const ACT_AMMO := 106         ## 7053 Munition nehmen / 7025 Nehmen
 const ACT_PICK := 114         ## 7033 Schloss aufbrechen
 const ACT_HEAL := 115         ## 7034 Erste Hilfe
+const ACT_CUTTER := 116       ## 7035 Benutze Drahtschneider
+const ACT_GREN_ROOM := 118    ## 7037 Granate in den Raum
+const ACT_CAPTURE := 119      ## 7038 Gefangennehmen
+const ACT_CLEAR := 121        ## 7040 Hineing. & räumen
+const ACT_DESTROY := 122      ## 7042 Zerstören
+const ACT_SEARCH := 123       ## 7043 Suchen & Mun. sammeln
+const ACT_UNIFORM := 124      ## 7044 Uniform benutzen
+const ACT_KILL := 125         ## 7045 Töten
+const ACT_SILENT_KILL := 126  ## 7046 Leise töten
 const ACT_OPEN := 127         ## 7023 Öffnen
 const ACT_CLOSE := 128        ## 7041 Schließen
-const ACT_DEFUSE := 138       ## 7021 Entschärfen
+const ACT_ITEMS := 133        ## 7050 Gegenstände nehmen
+const ACT_ITEM_USE := 134     ## Gegenstand am Objekt benutzen (Typ 23, Text aus dem Akteur)
+const ACT_DEFUSE := 138       ## 7021 Entschärfen (Sprengplatz, Typ 22)
+const ACT_PHOTO := 103        ## 7018 Foto machen = Aktion 3 (wie Benutzen)
+const ITEM_CAMERA := 229      ## Fotoapparat (0x4BF670 Fall 0xF: Gegenstand 0xE5)
+const ITEM_CUTTER := -1       ## Drahtschneider: Gegenstand im Original über 0x5A7ED0 geprüft [P]
 
 ## Befehlscode -> Sprach-Ereignis in speech.set (Zuordnung über die Satznamen, s. re_notes_commands.md)
 const SPEECH_EVENT := {
@@ -45,7 +64,8 @@ const SPEECH_EVENT := {
 	12: 10, 13: 11, 14: 12, 15: 13, 16: 14, 17: 15, 18: 16, 19: 18, 20: 20,
 	21: 22, 22: 24, 23: 26, 24: 28, 25: 30, 26: 32, 27: 34, 28: 36, 29: 38, 30: 40, 31: 42, 32: 44,
 	ACT_USE: 0x34, ACT_PLANT: 0x36, ACT_AMMO: 0x3A, ACT_PICK: 0x40, ACT_HEAL: 0x42,
-	ACT_OPEN: 0x58, ACT_CLOSE: 0x5A, ACT_DEFUSE: 0x32,
+	ACT_OPEN: 0x58, ACT_CLOSE: 0x5A, ACT_DEFUSE: 0x32, ACT_DISARM: 0x32, ACT_UNLOCK: 0x30,
+	ACT_SEARCH: 0x3A, ACT_ITEMS: 0x3A,
 }
 const EV_ACK := 0x7F          ## „Klar doch!“ / „Verlass dich auf mich!“ / „O. K.!“ (leise +1)
 const EV_NEGATIVE := 0x68     ## „Negativ“ / „Das kann ich nicht“ … (leise +1)
@@ -71,6 +91,9 @@ const FALLBACK := {
 	7274: "Schließen", 7275: "Zurück", 7276: "Ganzer Trupp", 7018: "Fotografieren", 7021: "Entschärfen",
 	7022: "Benutzen", 7023: "Öffnen", 7033: "Schloss knacken", 7034: "Verband anlegen", 7037: "Granate hinein",
 	7040: "Raum säubern", 7041: "Schließen", 7047: "Ladung anbringen", 7053: "Munition",
+	7019: "Abschließen", 7020: "Aufschließen", 7024: "Beenden", 7025: "Nehmen", 7035: "Drahtschere",
+	7038: "Gefangen nehmen", 7042: "Zerstören", 7043: "Durchsuchen", 7044: "Uniform", 7045: "Töten",
+	7046: "Leise töten", 7050: "Gegenstände",
 }
 
 static var _texts := {}
@@ -259,6 +282,9 @@ func _rebuild() -> void:
 	match menu_id:
 		MAIN:
 			context = find_context()
+			# 0x4C10F0 Fall 3: ein Mensch ist kein Ziel für sich selbst (Befehl an genau diesen Soldaten)
+			if context is Soldier and target_index >= 0 and rec.has(context as Soldier):
+				context = null
 			if context == null:
 				_grey(2)
 				_grey(5)
@@ -298,9 +324,10 @@ func _rebuild() -> void:
 				SquadManager.Formation.WEDGE: _grey(0)
 				SquadManager.Formation.LINE: _grey(1)
 				SquadManager.Formation.COLUMN: _grey(2)
-			if sq.spacing <= SquadManager.SPACING_MIN + 0.01:
+			# 0x4BFFE0 Fall 0x39: kleinste Stufe → „Enge Formation“ grau, sonst größte → „Formation ausweiten“ grau
+			if sq.at_min_spacing():
 				_grey(3)
-			if sq.spacing >= SquadManager.SPACING_MAX - 0.01:
+			elif sq.at_max_spacing():
 				_grey(4)
 	highlight = -1
 	for i in 10:
@@ -319,36 +346,112 @@ func _put(i: int, txt: int, action: int, enabled := true) -> void:
 	entries[i] = [txt, action if enabled else A_GREY]
 
 
-## Untermenü „Aktion“ nach dem Ziel unter dem Fadenkreuz (Original-Bauer 0x4BF670, Einträge/Plätze wie dort).
+## Untermenü „Aktion“ nach dem Ziel unter dem Fadenkreuz (Original-Bauer 0x4BF670, Einträge/Plätze/Bedingungen wie dort;
+## „an einen“ prüft Gegenstände beim Empfänger 0x5A78F0, „an alle“ im ganzen Trupp 0x45E9A0).
 func _fill_actions() -> void:
 	var ctx := context
 	var lead := controller.active
 	if not is_instance_valid(ctx):
 		return
+	var single := target_index >= 0
 	if ctx is Soldier:
 		var s := ctx as Soldier
-		_put(0, 7034, ACT_HEAL, s.alive and s.health < s.max_health - 1.0 and s.team == lead.team)
+		var eb := _enemy_brain(s)
+		if not s.alive:
+			# Fall 3, Leiche: Nehmen (Tragen – im Nachbau nicht vorhanden, ausgegraut [D]), Suchen & Mun. sammeln,
+			# Uniform benutzen grau (Original), Gegenstände nehmen
+			_put(0, 7025, ACT_AMMO, false)
+			_put(1, 7043, ACT_SEARCH, _loot_of(s) != null)
+			_put(2, 7044, ACT_UNIFORM, false)
+			_put(3, 7050, ACT_ITEMS, _loot_of(s) != null)
+		elif eb and eb.captured:
+			# 0x5A6380 = gefangen: Töten, Suchen, Uniform (grau nach Abgabe +0x1A5), Gegenstände nehmen
+			_put(0, 7045, ACT_KILL)
+			_put(1, 7043, ACT_SEARCH)
+			_put(2, 7044, ACT_UNIFORM, not eb.uniform_taken)
+			_put(3, 7050, ACT_ITEMS)
+		elif s.team != lead.team:
+			# Gegner: Töten, Leise töten, Gefangennehmen nur wenn er sich ergibt (0x5A6450)
+			_put(0, 7045, ACT_KILL)
+			_put(1, 7046, ACT_SILENT_KILL)
+			_put(2, 7038, ACT_CAPTURE, eb != null and eb.surrendered)
+		else:
+			# Kamerad: Erste Hilfe (Verbandskasten beim Empfänger bzw. im Trupp), Gegenstände nehmen
+			var med := false
+			for r in recipients():
+				if r != s and r.medkits > 0:
+					med = true
+			_put(0, 7034, ACT_HEAL, med)
+			_put(1, 7050, ACT_ITEMS)
+	elif ctx is Dog:
+		_put(0, 7045, ACT_KILL)                        # Fall 0x1E
 	elif ctx is Door or ctx is OrigInteractive.OrigDoor:
-		var open := bool(ctx.get("is_open"))
-		var locked: bool = bool(ctx.get("locked")) if ctx is OrigInteractive.OrigDoor else false
-		_put(0, 7023, ACT_OPEN, not locked and not open)
-		_put(1, 7041, ACT_CLOSE, not locked and open)
-		_put(2, 7040, -1, false)      # Hineingehen & räumen: nicht umgesetzt (ausgegraut)
-		_put(3, 7037, -1, false)      # Granate in den Raum: nicht umgesetzt (ausgegraut)
-		if locked:
+		var locked: bool = ctx.get("locked") == true
+		var key: int = int(ctx.get("key_item")) if ctx is OrigInteractive.OrigDoor else -1
+		if not locked:
+			# Fall 6, offen/zu ist im Original keine Bedingung
+			_put(0, 7023, ACT_OPEN)
+			_put(1, 7041, ACT_CLOSE)
+			_put(2, 7040, ACT_CLEAR)
+			_put(3, 7037, ACT_GREN_ROOM, _any_rec(func(r): return _has_grenade(r)))
+			_put(4, 7019, ACT_LOCK, key >= 0 and not bool(ctx.get("is_open")) and _any_rec(func(r): return OrigInteractive.has_item(r, key)))
+		else:
+			_put(0, 7023, ACT_OPEN, false)
+			_put(1, 7041, ACT_CLOSE, false)
+			_put(2, 7040, ACT_CLEAR, false)
+			_put(3, 7037, ACT_GREN_ROOM, false)
 			_put(4, 7033, ACT_PICK, bool(ctx.get("lockpickable")))
+			_put(5, 7020, ACT_UNLOCK, key >= 0 and _any_rec(func(r): return OrigInteractive.has_item(r, key)))
 	elif ctx is OrigInteractive.OrigExplosive:
+		# Fall 0x16: Zustand 0 frei → Anbringen (mit Gegenstand), 1 platziert → Entschärfen, sonst beide grau
 		var st := int(ctx.get("state"))
-		var ok := (ctx as Interactable).can_interact(lead)
-		_put(0, 7047, ACT_PLANT, st == 0 and ok)
-		_put(1, 7021, ACT_DEFUSE, st == 1 and ok)
-	elif ctx is OrigInteractive.OrigCrate:
-		_put(0, 7053, ACT_AMMO, (ctx as Interactable).can_interact(lead))
+		var e := ctx as OrigInteractive.OrigExplosive
+		_put(0, 7047, ACT_PLANT, st == 0 and _any_rec(func(r): return e.host.allowed(r, e.required_item)))
+		_put(1, 7021, ACT_DEFUSE, st == 1)
+	elif ctx is PlacedCharge.DefuseSpot:
+		_put(0, 7021, ACT_DISARM, (ctx as Interactable).enabled)   # Fall 2 (Mine): Entschärfen
+		_put(1, 7042, ACT_DESTROY)
+	elif ctx is OrigInteractive.OrigCrate or ctx is Pickups.AmmoCrate:
+		_put(0, 7053, ACT_AMMO, _any_rec(func(r): return (ctx as Interactable).can_interact(r)))   # Fall 9
+	elif ctx is OrigInteractive.OrigPlace:
+		var pl := ctx as OrigInteractive.OrigPlace
+		if pl.consume:
+			_put(0, 7051, ACT_USE, pl.state == 0 and _any_rec(func(r): return pl.host.allowed(r, pl.item)))
+		else:
+			_put(0, 7018, ACT_PHOTO, pl.state == 0 and _any_rec(func(r): return pl.host.allowed(r, ITEM_CAMERA)))   # Fall 0xF
+	elif ctx is OrigInteractive.OrigWorldItem or ctx is Pickups.Item:
+		_put(0, 7025, ACT_AMMO, (ctx as Interactable).enabled)     # Fall 0xB: Nehmen
+	elif ctx is OrigInteractive.OrigDestructible:
+		_put(0, 7042, ACT_DESTROY, not bool(ctx.get("destroyed")))  # Fall 0x19
 	elif ctx is Interactable:
-		_put(0, 7022, ACT_USE, (ctx as Interactable).can_interact(lead))
+		_put(0, 7022, ACT_USE, _any_rec(func(r): return (ctx as Interactable).can_interact(r)))   # Fall 7/8/0xD/0x1C
 
 
-## Ziel für „Aktion“: Objekt bzw. verwundeter Kamerad am Fadenkreuzpunkt (≤ 60 m, Fangradius 2 m).
+## Trifft die Bedingung auf einen Empfänger zu („an einen“: der Soldat, „an alle“: irgendwer im Trupp)?
+func _any_rec(f: Callable) -> bool:
+	for r in recipients():
+		if f.call(r):
+			return true
+	return false
+
+
+func _enemy_brain(s: Soldier) -> EnemyBrain:
+	for c in s.get_children():
+		if c is EnemyBrain:
+			return c
+	return null
+
+
+## Durchsuchbare Leiche (Pickups.Loot am Toten)
+func _loot_of(s: Soldier) -> Interactable:
+	for n in get_tree().get_nodes_in_group("interactables"):
+		if n is Pickups.Loot and (n as Pickups.Loot).corpse == s and (n as Interactable).can_interact(s if s.alive else controller.active):
+			return n
+	return null
+
+
+## Ziel für „Aktion“ (Original 0x4C10F0: Akteurtypen 2/6/7/8/9/0xB/0xD/0xF/0x14–0x17/0x1C/0x1E/0x23 immer, Menschen außer dem
+## Empfänger selbst, Fahrzeuge/Zerstörbares je nach Zustand): Objekt bzw. Mensch/Hund am Fadenkreuzpunkt (≤ 60 m).
 func find_context() -> Node3D:
 	if is_instance_valid(context_override):
 		return context_override
@@ -361,16 +464,33 @@ func find_context() -> Node3D:
 		var it := n as Interactable
 		if it == null or not it.enabled or not it.is_visible_in_tree():
 			continue
+		if it is Pickups.Loot or it is EnemyBrain.CaptureAction:
+			continue        # gehören zum Menschen (unten)
 		var d := it.global_position.distance_to(p)
 		if d < best_d:
 			best_d = d
 			best = it
-	for m in _squad().alive_members():
-		if m != controller.active and m.health < m.max_health - 1.0:
-			var d2 := (m.global_position + Vector3.UP).distance_to(p)
-			if d2 < best_d:
-				best_d = d2
-				best = m
+	for n in get_tree().get_nodes_in_group("destructibles"):
+		if n is OrigInteractive.OrigDestructible and not bool(n.get("destroyed")):
+			var dd := (n as Node3D).global_position.distance_to(p)
+			if dd < best_d:
+				best_d = dd
+				best = n
+	# Menschen (lebend oder tot) und Hunde: Abstand des Punkts zur Körperachse; Mensch geht vor (Fangradius 1 m)
+	var body_best := 1.0
+	var body: Node3D = null
+	for n in get_tree().get_nodes_in_group("soldiers") + get_tree().get_nodes_in_group("dogs"):
+		var b := n as Node3D
+		if b == null or b == controller.active or not b.is_visible_in_tree():
+			continue
+		var feet := b.global_position
+		var top := feet + Vector3.UP * (1.7 if (b is Soldier and (b as Soldier).alive) else 0.5)
+		var dist := Geometry3D.get_closest_point_to_segment(p, feet, top).distance_to(p)
+		if dist < body_best:
+			body_best = dist
+			body = b
+	if body:
+		return body
 	return best
 
 
@@ -386,6 +506,14 @@ func execute(code: int, quiet: bool) -> void:
 	var sq := _squad()
 	var lead := controller.active
 	var rec := recipients()
+	# Original 0x456020: Befehle 0…20 und 26 gehen nur an Empfänger ohne Taktik-Plan (0x5A5F00 = 0),
+	# Taktik-Befehle 27…32 nur an Empfänger mit Plan; Formation 21…25 gilt für das Team.
+	if code <= 20 or code == 26:
+		var free: Array[Soldier] = []
+		for s in rec:
+			if not sq.has_plan(s):
+				free.append(s)
+		rec = free
 	last_command = code
 	var ok := not rec.is_empty()
 	var responder: Soldier = rec[0] if not rec.is_empty() else null
@@ -551,6 +679,13 @@ func _start_action(code: int, rec: Array[Soldier], quiet: bool) -> Soldier:
 	for s in rec:
 		if s == context:
 			continue
+		# nur wer die Aktion auch ausführen kann (Verbandskasten, Granate, Schlüssel)
+		if code == ACT_HEAL and s.medkits <= 0:
+			continue
+		if code == ACT_GREN_ROOM and not _has_grenade(s):
+			continue
+		if (code == ACT_LOCK or code == ACT_UNLOCK) and not OrigInteractive.has_item(s, int(context.get("key_item"))):
+			continue
 		var d := s.global_position.distance_to(context.global_position)
 		if d < best:
 			best = d
@@ -563,19 +698,24 @@ func _start_action(code: int, rec: Array[Soldier], quiet: bool) -> Soldier:
 		b.set_order(SquadBrain.Order.HOLD, Vector3.ZERO, quiet)    # danach dort bleiben [E]
 	b.quiet = quiet
 	b.action_target = context
-	match code:
-		ACT_HEAL:
-			if who.medkits <= 0:
-				b.action_target = null
-				return null
-			b.action_kind = "heal"
-		ACT_OPEN:
-			b.action_kind = "open"
-		ACT_CLOSE:
-			b.action_kind = "close"
-		_:
-			b.action_kind = "use"
+	b.action_kind = ACTION_KIND.get(code, "use")
+	if code == ACT_DESTROY:
+		# Zerstören: Feuer auf das Ziel (Ersatz [E]; Original-Ausführung nicht disassembliert)
+		b.action_target = null
+		b.action_kind = ""
+		b.suppress_point = context.global_position
+		b.suppress_time = SUPPRESS_TIME
 	return who
+
+
+## Befehlscode der Aktion -> Ausführungsart in SquadBrain._do_action
+const ACTION_KIND := {
+	ACT_HEAL: "heal", ACT_OPEN: "open", ACT_CLOSE: "close", ACT_LOCK: "lock", ACT_UNLOCK: "unlock",
+	ACT_PICK: "use", ACT_PLANT: "use", ACT_DEFUSE: "use", ACT_DISARM: "use", ACT_AMMO: "use", ACT_USE: "use",
+	ACT_CAPTURE: "capture", ACT_SEARCH: "search", ACT_UNIFORM: "uniform", ACT_ITEMS: "items",
+	ACT_KILL: "kill", ACT_SILENT_KILL: "silent_kill", ACT_GREN_ROOM: "grenade_room", ACT_CLEAR: "clear_room",
+	ACT_CUTTER: "use", ACT_ITEM_USE: "use",
+}
 
 
 # --- Sprachausgabe ---------------------------------------------------------------
@@ -623,16 +763,44 @@ func speak(s: Soldier, event: int, fallback_text: String) -> float:
 
 # --- Anzeige (Original 0x4C0370: Titel, „N. Text“, ausgegraut/markiert) ----------
 
-func title() -> String:
+## Kopfzeile (Stil 0x2F/0x30): Hauptmenü „Befehle“ (7270), Untermenü „Befehle - “ (7271) + Name des Untermenüs.
+func header() -> String:
 	if menu_id != MAIN:
 		var parent := -1
 		for e in MENUS[MAIN]:
 			if int(e[1]) == menu_id:
 				parent = int(e[0])
 		return text(7271) + text(parent)
-	if target_index >= 0:
-		return "%s – %s" % [text(7270), _squad().members[target_index].soldier_name]
-	return "%s – %s" % [text(7270), text(7276)]
+	return text(7270)
+
+
+## Zweite Zeile (Stil 0x31): Aktion/Stille Aktion = Name des Ziels (Akteur vtable +4), sonst Soldatenname bzw.
+## „Alle Soldaten“ (7276) – 0x4C0370.
+func target_line() -> String:
+	if (menu_id == 53 or menu_id == 56) and is_instance_valid(context):
+		return _context_name(context)
+	if target_index >= 0 and target_index < _squad().members.size():
+		return _squad().members[target_index].soldier_name
+	return text(7276)
+
+
+func _context_name(n: Node) -> String:
+	if n is Soldier:
+		return (n as Soldier).soldier_name
+	for key in ["label"]:
+		var v = n.get(key)
+		if v is String and v != "":
+			return v
+	if n is Interactable:
+		var pr := String((n as Interactable).prompt)
+		return pr.get_slice(":", 0) if pr != "" else String(n.name)
+	return String(n.name)
+
+
+func title() -> String:
+	if menu_id != MAIN:
+		return header()
+	return "%s – %s" % [header(), target_line()]
 
 
 func lines() -> PackedStringArray:
@@ -643,23 +811,74 @@ func lines() -> PackedStringArray:
 	return out
 
 
+## Original-Frame „rollmenu“ (gameinterface.4ds, hud_spec: Rechteck x 0,000–0,226 / y 0,603–0,887 im 4:3-Bild,
+## Textur x_mo2, Formate „%d. “/„0. “ – hd2.exe 0x4C0370). Breitbild wie die Truppleiste am linken Rand (B-014).
+## Schrift: Projekt-Schrift (die Original-Bitmapschriften Text\Fonts werden nicht konvertiert); Farben der Stile
+## 0x33 normal / 0x35 markiert / 0x34 ausgegraut sind nicht dekodiert [E].
+const ROLLMENU_RECT := [0.00001, 0.60292, 0.22584, 0.88692]   ## Fallback, wenn hud_spec fehlt
+var rollmenu_rect: Array = ROLLMENU_RECT
+var rollmenu_tex: Texture2D = null
+var _bg: TextureRect
+
+
+func _load_rollmenu() -> void:
+	var dir := OrigLevel.cache_root() + "/ui/hud"
+	var spec = LsRuntime._read_json(dir + "/hud_spec.json")
+	if typeof(spec) != TYPE_DICTIONARY:
+		return
+	for e in spec.get("elements", []):
+		if String(e.get("name", "")) == "rollmenu":
+			if e.get("rect") is Array:
+				rollmenu_rect = e["rect"]
+			var tf := String(e.get("texture", ""))
+			if tf != "" and FileAccess.file_exists(dir + "/" + tf):
+				var img := Image.load_from_file(dir + "/" + tf)
+				if img:
+					rollmenu_tex = ImageTexture.create_from_image(img)
+			break
+
+
+## Bildschirmrechteck des Menüs (4:3-Rahmen auf voller Höhe, links verankert).
+func menu_rect() -> Rect2:
+	var vs := get_viewport().get_visible_rect().size
+	var fw := vs.y * 4.0 / 3.0
+	var r := rollmenu_rect
+	return Rect2(r[0] * fw, r[1] * vs.y, (r[2] - r[0]) * fw, (r[3] - r[1]) * vs.y)
+
+
 func _redraw() -> void:
 	if _panel == null:
+		_load_rollmenu()
 		_panel = PanelContainer.new()
+		_panel.name = "RollMenu"
 		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color(0.06, 0.07, 0.05, 0.72)
-		sb.set_content_margin_all(10)
+		sb.bg_color = Color(0.06, 0.07, 0.05, 0.0 if rollmenu_tex else 0.72)
+		sb.set_content_margin_all(6)
 		_panel.add_theme_stylebox_override("panel", sb)
-		_panel.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-		_panel.position = Vector2(24, -170)
-		_panel.custom_minimum_size = Vector2(300, 0)
 		_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		add_child(_panel)
+		_bg = TextureRect.new()
+		_bg.name = "RollMenuTexture"
+		_bg.texture = rollmenu_tex
+		_bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_bg.stretch_mode = TextureRect.STRETCH_SCALE
+		_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_bg.show_behind_parent = true
+		_panel.add_child(_bg)
 		_box = VBoxContainer.new()
+		_box.add_theme_constant_override("separation", 0)
 		_panel.add_child(_box)
+	var mr := menu_rect()
+	_panel.position = mr.position
+	_panel.size = mr.size
+	_panel.custom_minimum_size = mr.size
+	var fs := maxi(9, int(mr.size.y / 17.0))
 	for c in _box.get_children():
 		c.queue_free()
-	_box.add_child(_mk_label(title(), 17, Color(0.95, 0.9, 0.7)))
+	_box.add_child(_mk_label(header(), fs + 1, Color(0.95, 0.9, 0.7)))
+	var tl := _mk_label(target_line(), fs, Color(0.85, 0.8, 0.62))
+	tl.name = "TargetLine"
+	_box.add_child(tl)
 	var ls := lines()
 	for i in 10:
 		var a: int = entries[i][1]
@@ -668,7 +887,7 @@ func _redraw() -> void:
 			col = Color(0.55, 0.55, 0.55)
 		elif i == highlight:
 			col = Color(1.0, 0.85, 0.35)
-		var l := _mk_label(ls[i], 16, col)
+		var l := _mk_label(ls[i], fs, col)
 		l.name = "Item%d" % i
 		_box.add_child(l)
 	_panel.visible = is_open

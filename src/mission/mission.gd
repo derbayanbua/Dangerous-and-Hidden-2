@@ -1019,7 +1019,7 @@ func serialize() -> Dictionary:
 	for o in objectives:
 		obj[String(o.id)] = o.state
 	return {
-		"squad": sq, "active": squad.active_index, "formation": squad.formation,
+		"squad": sq, "active": squad.active_index, "formation": squad.formation, "spacing_level": squad.spacing_level,
 		"enemies": en, "interactables": inter, "objectives": obj, "extra": _serialize_extra(),
 		"alarm": alarm_raised, "elapsed": elapsed, "stats": stats,
 	}
@@ -1063,7 +1063,8 @@ func deserialize(d: Dictionary) -> void:
 	alarm_raised = d.get("alarm", false)
 	elapsed = d.get("elapsed", 0.0)
 	stats = d.get("stats", stats)
-	squad.formation = int(d.get("formation", 0))
+	squad.formation = int(d.get("formation", SquadManager.Formation.WEDGE))
+	squad.spacing_level = int(d.get("spacing_level", 3))
 	var act := int(d.get("active", 0))
 	if not squad.set_active(act):
 		squad.cycle_active()

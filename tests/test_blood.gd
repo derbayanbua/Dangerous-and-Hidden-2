@@ -1,6 +1,7 @@
 extends "res://tests/test_gameplay.gd"
 ## Bluteffekte (src/combat/blood_fx.gd): Spritzer, Strahl, Wand-/Bodendecals, wachsende Lachen (Leiche, bereits
-## liegende Leiche), Obergrenzen, Stufen AUS/ORIGINAL/MEHR, echter Projektiltreffer.
+## liegende Leiche), Obergrenzen, Stufen AUS/ORIGINAL/MEHR, echter Projektiltreffer; Kleidungsblut am Knochen,
+## Messer-/Splittertreffer, Blutspur Verwundeter, Bildschirmrand.
 ##   tools\godot.cmd --headless -- --mission=m01_funkfeuer --autoplay=test_blood --profiles_dir=user://blut
 
 
@@ -80,6 +81,26 @@ func _run() -> void:
 	var head_amount: int = fx.sprays[fx.sprays.size() - 2].amount
 	check(head_amount > leg_amount, "Kopf spritzt stärker als Bein", "%d > %d" % [head_amount, leg_amount])
 
+	# --- Blut auf der Kleidung (Decal am Knochen) ---
+	var w_head: Decal = null
+	for w in fx.wounds:
+		if is_instance_valid(w) and w.get_meta("owner_soldier", 0) == e0.get_instance_id():
+			if w_head == null or w.global_position.y > w_head.global_position.y:
+				w_head = w
+	check(fx.stats["wounds"] - st0["wounds"] >= 2 and w_head != null, "Treffer: Blut auf der Kleidung (Ein- und Austritt)",
+		str(fx.stats["wounds"] - st0["wounds"]))
+	var has_skel := e0.find_children("*", "Skeleton3D", true, false).size() > 0
+	if w_head:
+		check(w_head.cull_mask == fx.WOUND_LAYER, "Kleidungs-Decal trifft nur Figurenmeshes (Renderebene 20)")
+		check(not has_skel or w_head.get_parent() is BoneAttachment3D, "Kleidungs-Decal hängt am Knochen",
+			w_head.get_parent().get_class())
+		var marked := false
+		for mi in e0.find_children("*", "MeshInstance3D", true, false):
+			if (mi as MeshInstance3D).is_visible_in_tree() and (mi as MeshInstance3D).layers & fx.WOUND_LAYER:
+				marked = true
+		check(marked, "Figurenmeshes empfangen Kleidungsblut")
+	var wy0: float = w_head.global_position.y if w_head else 0.0
+
 	# --- Lache unter der Leiche, wächst ---
 	var p0: int = fx.stats["pools"]
 	e0.die(s, fwd)
@@ -91,6 +112,10 @@ func _run() -> void:
 	var sz2: float = pool.size.x if pool and is_instance_valid(pool) else 0.0
 	check(sz2 > sz1 + 0.1, "Lache wächst", "%.2f → %.2f" % [sz1, sz2])
 	check(pool != null and pool.global_basis.y.dot(Vector3.UP) > 0.7, "Lache auf den Boden ausgerichtet")
+	check(w_head != null and is_instance_valid(w_head) and w_head.global_position.y < wy0 - 0.4,
+		"Kleidungsblut folgt der fallenden Leiche (Knochen statt fester Position)",
+		"%.2f → %.2f" % [wy0, w_head.global_position.y] if w_head and is_instance_valid(w_head) else "-")
+	check(pool != null and pool.has_meta("follow_until"), "Lache folgt der Körpermitte während sie wächst")
 	# --- bereits liegende Leiche (z. B. aus Spielstand) ---
 	var e1: Soldier = es[1]
 	e1.alive = false
@@ -106,6 +131,47 @@ func _run() -> void:
 	await seconds(0.4)
 	print("Projektil: e2 alive=%s health=%.0f hits=%d" % [e2.alive, e2.health, Ballistics.hits])
 	check(fx.stats["sprays"] > sp0, "Echter Projektiltreffer erzeugt Blutspritzer", str(fx.stats["sprays"] - sp0))
+	check(fx.stats["extra_hits"] == st0["extra_hits"], "Projektiltreffer wird nicht doppelt (ohne Ersatzblut)",
+		str(fx.stats["extra_hits"] - st0["extra_hits"]))
+
+	# --- Messer/Splitter: Treffer ohne Projektil ---
+	var e3: Soldier = es[3]
+	var x0: Dictionary = fx.stats.duplicate()
+	e3.apply_hit(5.0, &"torso", s, fwd)
+	await frames(3)
+	check(fx.stats["extra_hits"] == x0["extra_hits"] + 1 and fx.stats["sprays"] > x0["sprays"] and fx.stats["wounds"] > x0["wounds"],
+		"Messer-/Splittertreffer erzeugt Blut (Spritzer + Kleidung)", str(fx.stats["extra_hits"] - x0["extra_hits"]))
+
+	# --- Blutspur eines laufenden Verwundeten ---
+	e3.health = e3.max_health * 0.3
+	var t0: int = fx.stats["trails"]
+	for i in 6:
+		e3.global_position += side * 1.3
+		await seconds(0.35)
+	check(fx.stats["trails"] - t0 >= 3, "Verwundeter hinterlässt beim Laufen eine Blutspur", str(fx.stats["trails"] - t0))
+	e3.health = e3.max_health
+	t0 = fx.stats["trails"]
+	for i in 4:
+		e3.global_position -= side * 1.3
+		await seconds(0.35)
+	check(fx.stats["trails"] == t0, "Unverletzter läuft ohne Spur")
+
+	# --- Treffer-Feedback am Bildschirmrand (aktiver Soldat) ---
+	var active = m.controller.active if m.get("controller") else null
+	check(active == s, "Testsoldat ist der aktive Soldat", str(active))
+	var ed0: int = fx.stats["edge"]
+	s.apply_hit(4.0, &"torso", e3, -fwd)
+	await frames(3)
+	check(fx.stats["edge"] == ed0 + 1 and fx.edge_layer != null and fx.edge_layer.visible and fx.edge_alpha > 0.2,
+		"Treffer am Spieler: roter Bildschirmrand mit Spritzern", "%d %.2f" % [fx.stats["edge"] - ed0, fx.edge_alpha])
+	var vis_splats := 0
+	for sp in fx._edge_splats:
+		if sp.visible and sp.texture != null:
+			vis_splats += 1
+	check(vis_splats >= 2, "Randspritzer mit Blut-Textur", str(vis_splats))
+	await seconds(1.6)
+	check(fx.edge_alpha < 0.1, "Bildschirmrand klingt ab", "%.2f" % fx.edge_alpha)
+	s.health = s.max_health
 
 	# --- Obergrenzen ---
 	for i in 120:
@@ -119,7 +185,38 @@ func _run() -> void:
 		fx._pool_for(e1, 1.0, 0.0)
 	await frames(2)
 	check(fx.pools.size() <= fx.MAX_POOLS, "Lachen begrenzt", str(fx.pools.size()))
+	var e2w := 0
+	for w in fx.wounds:
+		if is_instance_valid(w) and w.get_meta("owner_soldier", 0) == e2.get_instance_id():
+			e2w += 1
+	check(fx.wounds.size() <= fx.MAX_WOUNDS and e2w <= fx.MAX_WOUNDS_PER, "Kleidungsblut begrenzt (gesamt/je Figur)",
+		"%d/%d" % [fx.wounds.size(), e2w])
+	check(fx.trails.size() <= fx.MAX_TRAILS, "Blutspur begrenzt", str(fx.trails.size()))
 	await seconds(2.0)
+
+	# --- Kleidungsblut an einem Skelett (Original-Figuren/Ragdoll): eigene BoneAttachment3D am nächsten Knochen ---
+	var fig := Node3D.new()
+	m.add_child(fig)
+	fig.global_position = s.global_position + side * 10.0
+	var sk := Skeleton3D.new()
+	fig.add_child(sk)
+	sk.add_bone("becken")
+	sk.add_bone("kopf")
+	sk.set_bone_parent(1, 0)
+	sk.set_bone_rest(0, Transform3D(Basis(), Vector3(0, 1.0, 0)))
+	sk.set_bone_rest(1, Transform3D(Basis(), Vector3(0, 0.6, 0)))
+	sk.reset_bone_poses()
+	await frames(2)
+	var wk: Decal = fx.wound(fig, fig.global_position + Vector3(0, 1.55, 0.1), Vector3.BACK, 0.2)
+	var ba := wk.get_parent() as BoneAttachment3D if wk else null
+	check(ba != null and ba.bone_name == "kopf", "Skelett: Kleidungsblut an BoneAttachment3D des nächsten Knochens",
+		ba.bone_name if ba else "-")
+	var wp0: Vector3 = wk.global_position if wk else Vector3.ZERO
+	sk.set_bone_pose_position(1, Vector3(0.5, 0.6, 0))   # Knochen bewegt sich (Animation/Ragdoll)
+	await frames(3)
+	check(wk != null and wk.global_position.distance_to(wp0 + Vector3(0.5, 0, 0)) < 0.05, "Skelett: Kleidungsblut folgt dem Knochen",
+		str(wk.global_position - wp0) if wk else "-")
+	fig.queue_free()
 
 	# --- ORIGINAL ---
 	Settings.blood_level = 1
@@ -134,10 +231,18 @@ func _run() -> void:
 	check(Settings.blood_level == 0, "Original-Schalter BLUTFLECKEN nein = Blut AUS")
 	var a0: Dictionary = fx.stats.duplicate()
 	Effects.blood(head, -fwd, fwd, &"head", e2)
-	var e3: Soldier = es[3]
+	check(fx.wound(e2, head, -fwd, 0.2) == null, "AUS: kein Kleidungsblut")
+	e3.health = e3.max_health * 0.3
+	e3.apply_hit(3.0, &"torso", s, fwd)          # Messer-/Splittertreffer
+	s.apply_hit(2.0, &"torso", e3, -fwd)         # Spielertreffer → Rand
+	for i in 3:
+		e3.global_position += side * 1.3       # laufender Verwundeter
+		await seconds(0.35)
+	check(fx.edge_layer == null or not fx.edge_layer.visible, "AUS: kein Bildschirmrand")
+	s.health = s.max_health
 	e3.die(s, fwd)
 	await seconds(2.0)
-	check(fx.stats == a0, "AUS: keine Partikel, Decals, Strahlen oder Lachen", str(fx.stats))
+	check(fx.stats == a0, "AUS: keine Partikel, Decals, Strahlen, Lachen, Spuren, Kleidungsblut, Rand", str(fx.stats))
 	check(_pool_near(fx, fx.body_center(e3)) == null, "AUS: Leiche ohne Lache", "meta %s" % e3.has_meta("_blood_pool"))
 	Settings.blood = true
 	check(Settings.blood_level == 2, "BLUTFLECKEN ja = Standard MEHR")

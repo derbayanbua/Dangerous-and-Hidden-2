@@ -1,19 +1,43 @@
 class_name SquadManager
 extends Node
 ## Verwaltet den Spielertrupp: Mitglieder, aktiven (gesteuerten) Soldaten,
-## Formation und Befehle. Belegte Formationen im Original:
-## Column, Line, Quad2X3, ArrowSharp (Keil), ArrowInvert, Quad3X2.
+## Formation und Befehle. Formationen wie im Original (B-019, docs/re_notes_commands.md §7):
+## Platztabellen hd2.exe 0x8AB1D0 (je Typ 6 Plätze, Platz 0 = Anführer, Einheitsabstände; Initialisierung 0x596760 ff.,
+## Kopie 0x5971E0, gesetzt von 0x597420), Maßstab = Abstandsstufe 0…7 × 0,75 + 1,5 m (0x4563F0, Start 3 → 3,75 m),
+## neue Formation bei Truppbildung = Pfeil (0x5A91A0). Befehle 21/22/23 → Linie (Typ 0) / Kolonne (1) / Pfeil (3),
+## 24/25 → Stufe −1/+1 (0x456020). Trennung: Zielpunkte < 1,2 m auseinander werden auf 1,2 m geschoben (0x598550),
+## Platz an begehbaren Boden ≤ 5 m geheftet (0x59B7B0).
 
 enum Formation { COLUMN, LINE, WEDGE, QUAD }
-const FORMATION_NAMES := ["Kolonne", "Linie", "Keil", "Block 2×2"]
+const FORMATION_NAMES := ["Kolonne", "Linie", "Pfeil", "Block 2×3"]
+## Remake-Formation -> Original-Formationstyp (0 Linie, 1 Kolonne, 2 Quad2X3, 3 Pfeil)
+const ORIG_TYPE := {Formation.COLUMN: 1, Formation.LINE: 0, Formation.WEDGE: 3, Formation.QUAD: 2}
+## Original-Plätze je Typ (LS3D: x rechts, z vorn; Einheit = Formationsmaßstab) [B 0x596760]
+const ORIG_SLOTS := {
+	0: [Vector2(0, 0), Vector2(-1, 0), Vector2(-2, 0), Vector2(-3, 0), Vector2(-4, 0), Vector2(-5, 0)],
+	1: [Vector2(0, 0), Vector2(0, -1), Vector2(0, -2), Vector2(0, -3), Vector2(0, -4), Vector2(0, -5)],
+	2: [Vector2(0, 0), Vector2(1, 0), Vector2(0, -1), Vector2(1, -1), Vector2(0, -2), Vector2(1, -2)],
+	3: [Vector2(0, 0), Vector2(-1, -1), Vector2(1, -1), Vector2(-2, -2), Vector2(-1, -2.5), Vector2(1, -2.5)],
+}
+## Blickrichtung je Platz (nur Pfeil weicht ab; sonst geradeaus) [B]
+const ORIG_DIRS := {3: [Vector2(0, 1), Vector2(-0.5, 1), Vector2(0.5, 1), Vector2(-1, 1), Vector2(1, 1), Vector2(0, 1)]}
+const SEPARATION := 1.2          ## Mindestabstand der Zielpunkte [B 0x80FAD0]
+const SNAP_RADIUS := 5.0         ## Platz an begehbaren Boden heften [B 0x59B7B0: 5,0]
 
 signal active_changed(soldier: Soldier)
 signal orders_changed
 
 var members: Array[Soldier] = []
 var active_index := 0
-var formation: int = Formation.COLUMN
-var spacing := 3.0
+var formation: int = Formation.WEDGE
+## Abstandsstufe 0…7 (Original Team +0x120, Start 3)
+var spacing_level := 3
+## Formationsmaßstab in m (= Stufe × 0,75 + 1,5); Setzen rundet auf die nächste Stufe
+var spacing: float:
+	get:
+		return SPACING_MIN + SPACING_STEP * spacing_level
+	set(v):
+		spacing_level = clampi(int(round((v - SPACING_MIN) / SPACING_STEP)), 0, SPACING_LEVELS)
 
 
 func add_member(s: Soldier) -> void:
@@ -125,44 +149,103 @@ func cycle_active() -> void:
 			return
 
 
-## Formationsplatz für Mitglied s relativ zum Anführer (Weltkoordinaten).
-func formation_slot(s: Soldier, lead: Soldier) -> Vector3:
+## Folgende Kameraden in Platzreihenfolge (Platz 1…5; Original: Beitrittsreihenfolge, Anführer auf Platz 0).
+func _followers(lead: Soldier) -> Array[Soldier]:
 	var others: Array[Soldier] = []
 	for m in members:
 		if m != lead and m.alive:
 			others.append(m)
-	var idx := others.find(s)
-	if idx < 0:
-		return s.global_position
-	var off := Vector3.ZERO
-	var sp := spacing
-	match formation:
-		Formation.COLUMN:
-			off = Vector3(0, 0, sp * (idx + 1))
-		Formation.LINE:
-			var side := 1.0 if idx % 2 == 0 else -1.0
-			off = Vector3(side * sp * (idx / 2 + 1), 0, 0.5)
-		Formation.WEDGE:
-			var side2 := 1.0 if idx % 2 == 0 else -1.0
-			var row := idx / 2 + 1
-			off = Vector3(side2 * sp * row * 0.8, 0, sp * row * 0.8)
-		Formation.QUAD:
-			var grid := [Vector3(sp, 0, 0), Vector3(0, 0, sp), Vector3(sp, 0, sp), Vector3(-sp, 0, sp)]
-			off = grid[idx % grid.size()]
-	var basis := Basis(Vector3.UP, lead.look_yaw)
-	return lead.global_position + basis * off
+	return others
 
 
-## Blickrichtung (Yaw-Offset) für Rundumsicherung im Stand.
+## Rohplatz (ohne Trennung/Heften) für Platzindex i ≥ 1 relativ zum Anführer, Weltkoordinaten.
+func _raw_slot(i: int, lead: Soldier) -> Vector3:
+	var tbl: Array = ORIG_SLOTS[ORIG_TYPE.get(formation, 3)]
+	var v: Vector2
+	if i < tbl.size():
+		v = tbl[i]
+	else:
+		# mehr als 6 (nur eigene Übungseinsätze): hinter dem letzten Platz fortsetzen [E]
+		v = Vector2(tbl[tbl.size() - 1]) + (Vector2(tbl[tbl.size() - 1]) - Vector2(tbl[tbl.size() - 2])) * (i - tbl.size() + 1)
+	# LS3D (x rechts, z vorn) -> Godot (x rechts, −z vorn)
+	var off := Vector3(v.x, 0.0, -v.y) * spacing
+	return lead.global_position + Basis(Vector3.UP, lead.look_yaw) * off
+
+
+## Formationsplätze aller Folgenden (Weltkoordinaten), mit Trennung 1,2 m (0x598550) und Heften an den Boden
+## (Navigationsnetz ≤ 5 m, 0x59B7B0). Schlüssel = Soldat.
+func formation_slots(lead: Soldier) -> Dictionary:
+	var out := {}
+	var pts: Array[Vector3] = [lead.global_position]
+	var map := _nav_map(lead)
+	var i := 1
+	for m in _followers(lead):
+		var p := _raw_slot(i, lead)
+		p = _snap(p, map)
+		for q in pts:
+			var d := p - q
+			d.y = 0.0
+			if d.length() < SEPARATION:
+				var dir := d.normalized() if d.length() > 0.01 else (Basis(Vector3.UP, lead.look_yaw) * Vector3(1, 0, 0))
+				p = Vector3(q.x, p.y, q.z) + dir * SEPARATION
+				break
+		pts.append(p)
+		out[m] = p
+		i += 1
+	return out
+
+
+func _nav_map(lead: Soldier) -> RID:
+	var w := lead.get_world_3d() if lead.is_inside_tree() else null
+	if w == null:
+		return RID()
+	var map := w.navigation_map
+	if NavigationServer3D.map_get_iteration_id(map) <= 0:
+		return RID()
+	return map
+
+
+func _snap(p: Vector3, map: RID) -> Vector3:
+	if not map.is_valid():
+		return p
+	var cp := NavigationServer3D.map_get_closest_point(map, p)
+	if cp.is_finite() and cp != Vector3.ZERO and cp.distance_to(p) <= SNAP_RADIUS:
+		# Netzhöhe liegt eine Zellhöhe über dem Boden → Höhe nur bei anderem Stockwerk übernehmen
+		return Vector3(cp.x, cp.y if absf(cp.y - p.y) > 1.5 else p.y, cp.z)
+	return p
+
+
+## Formationsplatz für Mitglied s relativ zum Anführer (Weltkoordinaten).
+func formation_slot(s: Soldier, lead: Soldier) -> Vector3:
+	var f := Engine.get_physics_frames() * 1000 + formation * 10 + spacing_level
+	if f != _slot_frame or lead != _slot_lead:
+		_slot_frame = f
+		_slot_lead = lead
+		_slot_cache = formation_slots(lead)
+	return _slot_cache.get(s, s.global_position)
+
+
+var _slot_frame := -1
+var _slot_lead: Soldier = null
+var _slot_cache := {}
+
+
+## Blickrichtung (Yaw-Offset zur Blickrichtung des Anführers) des Platzes – Original-Platzrichtungen (Pfeil fächert auf).
 func slot_watch_offset(s: Soldier) -> float:
-	var idx := members.find(s)
-	return [0.0, 0.6, -0.6, PI][idx % 4]
+	var lead := leader()
+	var i := _followers(lead).find(s) + 1 if lead else 0
+	var dirs: Array = ORIG_DIRS.get(ORIG_TYPE.get(formation, 3), [])
+	if i <= 0 or i >= dirs.size():
+		return 0.0
+	var d: Vector2 = dirs[i]
+	return -atan2(d.x, d.y)
 
 
-## Befehlsmenü „Formation“ (Original 7250–7254): Formation setzen, enger/weiter (Abstände = Annahme).
-const SPACING_MIN := 1.5
-const SPACING_MAX := 6.0
-const SPACING_STEP := 1.0
+## Befehlsmenü „Formation“ (Original 7250–7255): Formation setzen, enger/weiter in Stufen (0x456020 Fall 0x18/0x19).
+const SPACING_MIN := 1.5         ## Stufe 0 [B 0x80FA98]
+const SPACING_STEP := 0.75       ## je Stufe [B 0x80F900]
+const SPACING_LEVELS := 7        ## höchste Stufe [B 0x456020: < 7]
+const SPACING_MAX := SPACING_MIN + SPACING_STEP * SPACING_LEVELS   ## 6,75 m
 
 
 func set_formation(f: int) -> void:
@@ -170,13 +253,23 @@ func set_formation(f: int) -> void:
 	orders_changed.emit()
 
 
+## Abstand ändern: d < 0 = eine Stufe enger, d > 0 = eine Stufe weiter. false am Rand.
 func change_spacing(d: float) -> bool:
-	var ns := clampf(spacing + d, SPACING_MIN, SPACING_MAX)
-	if is_equal_approx(ns, spacing):
+	var nl := clampi(spacing_level + (1 if d > 0.0 else -1), 0, SPACING_LEVELS)
+	if nl == spacing_level:
 		return false
-	spacing = ns
+	spacing_level = nl
 	orders_changed.emit()
 	return true
+
+
+## Original vtable +0x40 / +0x3C (0x4595D0/0x4595C0): kleinste bzw. größte Stufe erreicht.
+func at_min_spacing() -> bool:
+	return spacing_level == 0
+
+
+func at_max_spacing() -> bool:
+	return spacing_level == SPACING_LEVELS
 
 
 ## Hat der Soldat einen Taktik-Plan (Bewegungsbefehl aus der taktischen Karte)?
@@ -185,8 +278,11 @@ func has_plan(s: Soldier) -> bool:
 	return b != null and s.alive and b.plan and b.order == SquadBrain.Order.MOVE
 
 
+## Direkttaste L (Zusatz, nicht im Original): durch die drei Menüformationen Pfeil → Linie → Kolonne blättern.
 func cycle_formation() -> String:
-	formation = (formation + 1) % FORMATION_NAMES.size()
+	var order := [Formation.WEDGE, Formation.LINE, Formation.COLUMN]
+	var i := order.find(formation)
+	formation = order[(i + 1) % order.size()]
 	orders_changed.emit()
 	return FORMATION_NAMES[formation]
 

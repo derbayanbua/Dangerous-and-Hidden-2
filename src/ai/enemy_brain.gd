@@ -160,6 +160,56 @@ func script_attack(t: Soldier) -> void:
 	set_state(State.COMBAT)
 
 
+## HUMAN_SETAIMODE_Defensive/Aggressive nach Zombie (B-020): Typisch ist OnAlarm → HUMAN_SETAIMODE_Defensive → EndScript
+## (ARCTIC1 r_arc1a_walker*.scr). Die eigene KI übernimmt den anstehenden Alarm: gesehener Feind → Kampf, sonst zum Ort
+## des Alarmreizes (HUMAN_MoveToAlarm-Ziel). Posten = aktuelle Stelle (der Skriptweg hat ihn verlegt). Vorher blieb der
+## Soldat in „Wache“ und lief zum Spawnpunkt zurück, bis ihn ein neuer Reiz traf [E Übergabe; Original-KI nicht dekodiert].
+func leave_script_control() -> void:
+	if not script_control:
+		return
+	script_control = false
+	look_around = 0
+	script_look_at = Vector3.INF
+	home_pos = soldier.global_position
+	home_yaw = soldier.look_yaw
+	if not _alarm_notified:
+		return
+	alert_level = 1.0
+	if is_instance_valid(target) and target.alive and perception.awareness.get(target, 0.0) >= 1.0:
+		perception.last_known[target] = target.global_position
+		set_state(State.COMBAT)
+	elif alarm_pos.is_finite():
+		investigate_pos = alarm_pos
+		set_state(State.SEARCH)
+		move_to(_leash_clamp(alarm_pos), Soldier.MoveMode.RUN)
+
+
+## Aktionsradius um den Posten (hd2.exe 0x5478C0 speichert die Startlage in KI +0x180; Radius KI +0x1A4) [B Werte]:
+## Aggressiv (Flag 0x100, 0x547AD0) 100000 = unbegrenzt; Defensiv (0x200, Standard ohne Modus, 0x547AF0)
+## min(Sichtweite/2, 50) m; dritter Modus (0x400, 0x547BF0) min(Sichtweite/3, 25) m. Deutung „Leine um den Posten“ [P].
+func leash_radius() -> float:
+	# nur Originalmissionen (LsRuntime); eigene Übungseinsätze und MP-Bots behalten ihr bisheriges Verhalten
+	if ai_mode == Mode.AGGRESSIVE or runtime == null or Net.is_online:
+		return INF
+	var sight := float(soldier.get_meta("orig_params", {}).get("sight_range", _base_sight))
+	return minf(sight * 0.5, 50.0)
+
+
+func _in_leash(p: Vector3) -> bool:
+	var r := leash_radius()
+	return r == INF or Vector2(p.x - home_pos.x, p.z - home_pos.z).length() <= r
+
+
+## Punkt auf den Aktionsradius zurückholen
+func _leash_clamp(p: Vector3) -> Vector3:
+	var r := leash_radius()
+	var d := Vector2(p.x - home_pos.x, p.z - home_pos.z)
+	if r == INF or d.length() <= r:
+		return p
+	d = d.normalized() * r
+	return Vector3(home_pos.x + d.x, p.y, home_pos.z + d.y)
+
+
 func calm_down() -> void:
 	alert_level = 0.0
 	set_state(_calm_state())
@@ -195,6 +245,7 @@ func _script_tick(delta: float) -> void:
 			return
 	update_movement(delta, true)
 var flank_origin := Vector3.INF   ## Position bei der Flankenentscheidung
+var _search_limit := -1.0
 
 
 func setup(s: Soldier) -> void:
@@ -226,6 +277,10 @@ func _physics_process(delta: float) -> void:
 		_surrender_tick(delta)
 		return
 	if suspended:
+		# B-020: HUMAN_Suspend friert den Akteur ein. Vorher blieb die letzte Laufabsicht stehen – ARCTIC1 Kanisternik lief
+		# als „ruhender“ Akteur geradeaus weiter, den Hang hinunter und aus der Karte.
+		soldier.move_input = Vector3.ZERO
+		soldier.trigger = false
 		return
 	_surrender_check -= delta
 	if _surrender_check <= 0.0:
@@ -333,7 +388,7 @@ func _investigate(delta: float) -> void:
 		look_at_point(investigate_pos + Vector3.UP, delta, 3.0)
 		return
 	if distance_to(investigate_pos) > 2.0:
-		move_to(investigate_pos, Soldier.MoveMode.WALK)
+		move_to(_leash_clamp(investigate_pos), Soldier.MoveMode.WALK)
 	else:
 		stop_moving()
 		if _corpse_to_check and is_instance_valid(_corpse_to_check):
@@ -412,7 +467,7 @@ func _combat(delta: float) -> void:
 	if _cover_pos == Vector3.INF and _state_time > 0.2:
 		var bias := 0.6 if ai_mode == Mode.AGGRESSIVE else 0.0
 		_cover_pos = find_cover(threat_eye, 14.0 if ai_mode == Mode.AGGRESSIVE else 9.0, bias)
-		if _cover_pos.is_finite():
+		if _cover_pos.is_finite() and _in_leash(_cover_pos):
 			move_to(_cover_pos, Soldier.MoveMode.RUN)
 		else:
 			_cover_pos = soldier.global_position   # keine Deckung: vor Ort hinknien
@@ -440,7 +495,7 @@ func _combat(delta: float) -> void:
 	_flank_retry = maxf(_flank_retry - delta, 0.0)
 	if ai_mode == Mode.AGGRESSIVE and not stationary and not _flanked and _engaged_time > 8.0 and _flank_retry <= 0.0:
 		var flank := _find_flank(tpos, threat_eye)
-		if flank.is_finite():
+		if flank.is_finite() and _in_leash(flank):
 			_flanked = true
 			_cover_pos = flank
 			flank_target = flank
@@ -490,8 +545,12 @@ func _search(delta: float) -> void:
 			_look_timer = 0.0
 			# zufälliger Punkt um die letzte bekannte Position (HUMAN_MoveRandomRadius)
 			var p := investigate_pos + Vector3(randf_range(-10, 10), 0, randf_range(-10, 10))
-			move_to(p, Soldier.MoveMode.WALK)
-	if _state_time > 40.0:
+			move_to(_leash_clamp(p), Soldier.MoveMode.WALK)
+	# Suchdauer: Originalmissionen defensiv 20–30 s (KI +0x194 = rand·10 + 20, 0x547AF0) [B Wert, P Deutung], sonst 40 s
+	if _search_limit < 0.0:
+		_search_limit = randf_range(20.0, 30.0) if leash_radius() != INF else 40.0
+	if _state_time > _search_limit:
+		_search_limit = -1.0
 		search_time = 0.0
 		set_state(_calm_state())
 
@@ -590,12 +649,12 @@ func _on_heard(pos: Vector3, kind: StringName, source: Node) -> void:
 		investigate_pos = pos
 		alert_level = 1.0
 		set_state(State.SEARCH)
-		move_to(pos, Soldier.MoveMode.RUN)
+		move_to(_leash_clamp(pos), Soldier.MoveMode.RUN)
 	elif kind == &"gunshot" or kind == &"explosion" or kind == &"impact":
 		alert_level = 1.0
 		investigate_pos = pos
 		set_state(State.SEARCH)
-		move_to(pos, Soldier.MoveMode.RUN)
+		move_to(_leash_clamp(pos), Soldier.MoveMode.RUN)
 
 
 func _on_corpse(c: Soldier) -> void:
@@ -624,6 +683,10 @@ func _on_damaged(_amount: float, _zone: StringName) -> void:
 		return
 	if captured:
 		return
+	# Original 0x5484B0: aggressiv (0x100) und Gesundheit < 50 % (0x5A5FF0 = Gesundheit·100/Höchstwert) → defensiv (0x200) [B]
+	if ai_mode == Mode.AGGRESSIVE and runtime != null and not Net.is_online \
+			and soldier.health * 100.0 / maxf(soldier.max_health, 0.001) < 50.0:
+		ai_mode = Mode.DEFENSIVE
 	if a and is_instance_valid(a):
 		var same := a.team == soldier.team
 		_stimulus = AL_FRIENDLY if same else AL_HURT
@@ -649,7 +712,7 @@ func _on_alarm(pos: Vector3, _by: Node) -> void:
 	perception.sight_range = maxf(_base_sight, 150.0)
 	investigate_pos = pos
 	set_state(State.SEARCH)
-	move_to(pos + Vector3(randf_range(-8, 8), 0, randf_range(-8, 8)), Soldier.MoveMode.RUN)
+	move_to(_leash_clamp(pos + Vector3(randf_range(-8, 8), 0, randf_range(-8, 8))), Soldier.MoveMode.RUN)
 
 
 func _shout(pos: Vector3) -> void:

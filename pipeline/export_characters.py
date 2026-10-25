@@ -89,10 +89,47 @@ def export(models):
     print("Fehler:", failed)
 
 
+# Hund (Akteurtyp 30, Modell "(pes"): Animationstabelle TABLES\dog_anim.sav (B-020) = 22 Einträge à 24 Byte ab 0x10
+# (u32 0, u32 Überblendung 250 ms, char[16] 5DS-Name) [B Daten]. Bedeutung nach den tschechischen Namen [P]:
+# 1 couvani = schnüffeln, 2 chuze = gehen, 3 beh = rennen, 4/5 utok = Angriff/Biss, 6/7 lehstatic2 = liegt,
+# 8 static = steht, 12/13 smrtleh = Tod im Liegen, 14–16 smrt1 = Tod, 17 stekot2a = bellen, 19 zraneni2 = Treffer,
+# 20 lehni2 = hinlegen, 21 vstanleh = aufstehen (Eintrag 0 „(kriplchuze1“ ist eine Menschenanimation).
+DOG_MODELS = ["(pes"]
+DOG_ANIMS = {
+    "idle": "(pesstatic", "walk": "(peschuze", "run": "(pesbeh", "sniff": "(pescouvani", "attack": "(pesutok",
+    "attack2": "(pesutok2", "lie": "(peslehstatic2", "lie_down": "(peslehni2", "stand_up": "(pesvstanleh",
+    "bark": "(pesstekot2a", "death": "(pessmrt1", "death_lie": "(pessmrtleh", "hurt": "(zraneni2",
+}
+
+
+def export_dogs():
+    out_dir = os.path.join(cm.CACHE, "characters")
+    os.makedirs(out_dir, exist_ok=True)
+    anims = {}
+    for k, v in DOG_ANIMS.items():
+        d = cm.read_file("models/%s.5ds" % v, ["patch.dta", "MODELS.DTA"])
+        if d is not None:
+            anims[k] = d
+        else:
+            print("Hundeanimation fehlt:", k, v)
+    tex = cm.Textures(os.path.join(cm.CACHE, "textures"))
+    for m in DOG_MODELS:
+        data = cm.read_file("models/%s.4ds" % m, ["patch.dta", "MODELS.DTA"])
+        if data is None:
+            print("Hundemodell fehlt:", m)
+            continue
+        info = skinned_gltf.export_character(data, anims, tex, "../textures/", os.path.join(out_dir, m + ".glb"))
+        print("Hund:", m, len(info["skins"]), "Skins", sorted(info["animations"]))
+
+
 def main(mission):
+    if mission == "--dogs":
+        export_dogs()
+        return
     if mission == "--all":
         cdir = os.path.join(cm.CACHE, "characters")
-        export([f[:-4] for f in os.listdir(cdir) if f.lower().endswith(".glb")])
+        export([f[:-4] for f in os.listdir(cdir) if f.lower().endswith(".glb") and not f.startswith("(")])
+        export_dogs()
         return
     mdir = os.path.join(cm.CACHE, mission.lower())
     scene = json.load(open(os.path.join(mdir, "scene.json"), encoding="utf-8"))

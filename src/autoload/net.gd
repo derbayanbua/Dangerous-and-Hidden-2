@@ -1309,6 +1309,15 @@ func _client_ready() -> void:
 		if is_instance_valid(s) and s.alive:
 			_spawn.rpc_id(id, pid, String(players.get(pid, {}).get("name", "?")), int(players.get(pid, {}).get("team", 0)),
 				s.global_position, s.look_yaw, int(_gen.get(pid, 0)), players.get(pid, {}).get("kit", []))
+	# B-016: Leichen für Spät-Beitretende (Figur erscheinen lassen, dann als Leiche mit der Server-Endpose)
+	for pid in _soldiers:
+		var c: Soldier = _soldiers[pid]
+		if is_instance_valid(c) and not c.alive:
+			_spawn.rpc_id(id, pid, String(players.get(pid, {}).get("name", "?")), int(players.get(pid, {}).get("team", 0)),
+				c.global_position, c.look_yaw, int(_gen.get(pid, 0)), players.get(pid, {}).get("kit", []))
+			var cp: Dictionary = _corpse_poses.get(pid, {})
+			var pose: PackedFloat32Array = cp.get("pose", PackedFloat32Array()) if int(cp.get("gen", -1)) == int(_gen.get(pid, 0)) else PackedFloat32Array()
+			_corpse_pose.rpc_id(id, pid, int(_gen.get(pid, 0)), pose, c.global_position)
 	_players.rpc_id(id, players)
 	_obj_states.rpc_id(id, _object_states())      # Türen: aktueller Stand für Spät-Beitretende
 	if is_instance_valid(support):
@@ -1469,6 +1478,7 @@ func _spawn(id: int, pname: String, team: int, pos: Vector3, yaw: float, gen: in
 		else Color.from_hsv(fmod(float(team) * 0.17, 1.0), 0.35, 0.45))
 	var s: Soldier = m.spawn_soldier(pos, yaw, team, pname, lo, col, "brodie" if allied else "stahlhelm", "P%d_%d" % [id, gen])
 	s.set_meta("net_peer", id)
+	s.set_meta("net_gen", gen)           # B-016: Endpose nur für diese Generation (_corpse_pose)
 	m._default_kit(s)
 	var own_inv = players.get(id, {}).get("loadout", {})
 	if kit.is_empty() and own_inv is Dictionary and not (own_inv as Dictionary).is_empty():
@@ -2114,6 +2124,44 @@ func _killed(victim: int, killer: int, resp := -1.0, head := false, press := fal
 			respawn_at = 0
 			Events.say(tx(20312, "Wartet auf Respawn - schaltet zum Zuschauermodus"), 4.0)
 		killed_me.emit(killer, cause)        # Kill-Cam (src/ui/kill_cam.gd) entscheidet selbst
+
+
+# --- B-016 Ragdoll-Leichen: der Server bestimmt die Endlage ---------------------------------------------------
+## Server: Peer-ID → {"gen", "pose"} der zuletzt eingefrorenen Leiche (für Spät-Beitretende)
+var _corpse_poses := {}
+
+
+## Server (Ragdoll.freeze): Endpose an alle; Clients haben lokal zur Anzeige simuliert und übernehmen sie
+func corpse_settled(s: Node, pose: PackedFloat32Array) -> void:
+	if not is_online or not multiplayer.is_server() or not is_instance_valid(s) or not s.has_meta("net_peer"):
+		return
+	var pid := int(s.get_meta("net_peer"))
+	if _soldiers.get(pid) != s:
+		return
+	var gen := int(_gen.get(pid, 0))
+	_corpse_poses[pid] = {"gen": gen, "pose": pose}
+	_corpse_pose.rpc(pid, gen, pose, (s as Node3D).global_position)
+
+
+## Client: Leiche festlegen. Lebt die Figur hier noch (Spät-Beitritt), wird sie ohne Todesablauf zur Leiche;
+## leere Pose = Server simuliert noch (Original-Todesbild bis zur Endpose) bzw. ohne Ragdoll.
+@rpc("authority", "call_remote", "reliable")
+func _corpse_pose(pid: int, gen: int, pose: PackedFloat32Array, origin := Vector3.INF) -> void:
+	var s: Soldier = _soldiers.get(pid)
+	if not is_instance_valid(s) or int(s.get_meta("net_gen", gen)) != gen:
+		return
+	if s.alive:
+		if origin.is_finite():
+			s.global_position = origin
+			s.net_target = origin
+		s.become_corpse()
+	if not pose.is_empty() and s.model and s.model.apply_corpse_pose(pose):
+		corpse_pose_log.append(pid)
+	elif origin.is_finite():
+		s.pin_corpse(origin)           # ohne passendes Skelett/Ragdoll: wenigstens der Leichenort des Servers
+
+
+var corpse_pose_log: Array = []      ## Client: empfangene Endposen (Tests)
 
 
 var kill_feed: Array = []        ## Einträge (Dictionary, s. _killed), neueste hinten
@@ -2947,6 +2995,7 @@ func _apply_inventory(s: Soldier, inv: Dictionary) -> void:
 	s.has_binoculars = bool(lo["binoculars"])
 	s.set_meta("orig_items", lo["items"])
 	FieldInventory.set_start_order(s, inv)      # Ingame-Inventar (I) in der Reihenfolge der Ausrüstung
+	FieldInventory.settle_back.call_deferred(s)  # B-018: zweite Langwaffe auf den Rücken
 	s.set_meta("mp_loadout", inv.duplicate(true))
 	s.set_meta("mp_uniform", int(inv.get("uniform", -1)))  # gewählte Uniform → Figur (_attach_figure)
 	s.set_meta("mp_class", tx(2535, "Soldaten-Ausrüstung:").trim_suffix(":"))

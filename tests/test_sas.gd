@@ -62,6 +62,28 @@ func _run() -> void:
 	heavy["back"] = 101           # backpack EN: nur 30 kg
 	check(heavy_ok and SAS.pack_weight(heavy) > 30.0 and not SAS.fits(heavy),
 		"B-014: Rucksackinhalt über dem Höchstgewicht des Rucksacks (EN 30 kg) passt nicht", "%d Bren, %.1f kg" % [n_bren, SAS.pack_weight(heavy)])
+	# B-018: Munition/Granaten liegen bei angelegtem Rucksack zuerst im Rucksack und belasten die Taschen nicht
+	var cons := SAS.new_inventory()
+	cons["back"] = 101
+	var am29 := SAS.ammo_of(29)
+	SAS.add_item(cons, 9, 10)              # 10 Kompasse (Taschen)
+	SAS.add_item(cons, am29, 6)            # Bren-Magazine
+	var nade := -1
+	for id in range(1, 300):
+		if SAS.item_kind(id) == "weapon" and WeaponDB.from_orig(id) and WeaponDB.from_orig(id).slot == WeaponData.Slot.GRENADE:
+			nade = id
+			break
+	if nade >= 0:
+		SAS.add_item(cons, nade, 4)
+	var ccols := SAS.split_items(cons)
+	var pocket_ids: Array = (ccols[0] as Array).map(func(e): return int(e[0]))
+	var pack_ids: Array = (ccols[1] as Array).map(func(e): return int(e[0]))
+	check(am29 >= 0 and pack_ids.has(am29) and not pocket_ids.has(am29) and (nade < 0 or pack_ids.has(nade)) and pocket_ids.has(9),
+		"B-018: Magazine/Granaten im Rucksack, Taschen-Auslastung ohne Munition", "Taschen %s Rucksack %s" % [pocket_ids, pack_ids])
+	var nopack := cons.duplicate(true)
+	nopack["back"] = -1
+	check(((SAS.split_items(nopack)[0]) as Array).size() == (cons["items"] as Array).size(), "B-018: ohne Rucksack bleibt alles in den Taschen")
+	check(SAS.to_loadout(cons)["mags"].size() >= 0 and SAS.count_of(cons, am29) == 6, "B-018: Rucksack-Magazine zählen zum Inventar (Nachladen)")
 
 	# --- Waffen aus der Originaltabelle ---
 	var delisle := WeaponDB.from_orig(7)
@@ -129,6 +151,23 @@ func _run() -> void:
 	check(scr.can_start() != "" and not scr.try_start(), "Überladen: Fortsetzen gesperrt (wie im Original)", scr.can_start())
 	Game.sas_inventory(sold)["items"] = Game.sas_inventory(sold)["items"].filter(func(e): return int(e[0]) != 245)
 	check(scr.can_start() == "", "Nach dem Ablegen wieder startbereit", scr.can_start())
+	# B-018: zweite Langwaffe auf die Taschen gezogen → kommt auf den freien Rückenplatz (Schulter)
+	var inv3 := Game.sas_inventory(sold)
+	if int(inv3["hands"]) >= 0:
+		if int(inv3["shoulder"]) >= 0:
+			scr.unequip(sold, "shoulder")
+		var lw := 21 if int(inv3["hands"]) != 21 else 4          # Sten bzw. zweite leichte Langwaffe
+		var cnt0 := SAS.count_of(inv3, lw)
+		Game.campaign["storage"].append([lw, 1])
+		var ok3 := scr.give(sold, lw, 1, "items")
+		check(ok3 and int(Game.sas_inventory(sold)["shoulder"]) == lw and SAS.count_of(Game.sas_inventory(sold), lw) == cnt0 + 1
+			and not (Game.sas_inventory(sold)["items"] as Array).any(func(e): return int(e[0]) == lw),
+			"B-018: zweite Langwaffe auf den Rücken statt in die Taschen", str(Game.sas_inventory(sold)))
+		if ok3:
+			scr.unequip(sold, "shoulder")
+		SAS.remove_item({"items": Game.campaign["storage"]}, lw, 1)
+	else:
+		check(false, "B-018: Soldat ohne Waffe in den Händen (Testvoraussetzung)")
 	# --- Original-Layout (items selection.4ds / team members selection.4ds) ---
 	check(SAS.item_label(229) == SAS.text(1229, "") and SAS.item_label(229) != SAS.item_name(229),
 		"Gegenstandsnamen aus den Originaltexten", SAS.item_label(229))
@@ -301,7 +340,9 @@ func _check_ammo_order(scr: SasScreen, _sold: int) -> void:
 	# Inventar des Soldaten: Aufnahmereihenfolge wie im Original (hd2.exe 0x6A3080/0x672280, 0x7D7390/0x4A2010);
 	# Colt in der Tasche -> Colt-Munition direkt darunter; Sten-Magazin (Waffe in den Händen) und MP-40-Magazin
 	# (keine Waffe) bleiben an ihrer Aufnahmestelle, nichts wird nach oben oder ans Ende gezogen
-	var inv := {"hands": 21, "shoulder": -1, "head": -1, "uniform": -1, "back": 101,
+	# B-018: ohne Rucksack (alles in den Taschen) – mit Rucksack wandert die Munition in die Rucksackspalte, die
+	# Reihenfolge innerhalb jeder Spalte bleibt die Aufnahmereihenfolge
+	var inv := {"hands": 21, "shoulder": -1, "head": -1, "uniform": -1, "back": -1,
 		"items": [[172, 2], [9, 1], [187, 1], [2, 1], [190, 3]]}
 	var want := [9, 187, 2, 172, 190]
 	for cols in [scr.split_columns(inv), IngameInventory.split_columns(inv)]:
@@ -309,6 +350,12 @@ func _check_ammo_order(scr: SasScreen, _sold: int) -> void:
 		for e in cols[0] + cols[1]:
 			seq.append(int(e[0]))
 		check(seq == want, "Taschen/Rucksack: Aufnahmereihenfolge, Munition unter ihrer Waffe", str(seq))
+	inv["back"] = 101
+	for cols in [scr.split_columns(inv), IngameInventory.split_columns(inv)]:
+		var p_seq: Array = (cols[0] as Array).map(func(e): return int(e[0]))
+		var b_seq: Array = (cols[1] as Array).map(func(e): return int(e[0]))
+		check(p_seq == [9, 2] and b_seq == [187, 172, 190], "B-018: mit Rucksack Munition in der Rucksackspalte, Reihenfolge je Spalte",
+			"%s | %s" % [p_seq, b_seq])
 	# Original-Vorlage ice_rifle (presets.def 1): Garand-Munition zuerst eingefügt -> bleibt oben; Colt + Munition
 	var inv2 := {"hands": 10, "shoulder": -1, "head": -1, "uniform": -1, "back": -1,
 		"items": [[180, 5], [60, 1], [2, 1], [172, 1], [57, 1], [54, 1]]}

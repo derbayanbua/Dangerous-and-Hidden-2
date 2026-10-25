@@ -8,8 +8,9 @@ extends CharacterBody3D
 
 signal died_dog
 
-const BITE_RANGE := 1.4
-const BITE_INTERVAL := 0.9
+const BITE_RANGE := 2.1       ## Original 0x5C49A0: Biss trifft, wenn das Ziel näher als 2,1 m ist (0x811FA0) [B]
+const BITE_APPROACH := 1.3    ## so nah läuft der Hund heran, bevor er zubeißt [E]
+const BITE_INTERVAL := 0.9    ## Ersatztakt ohne Angriffsclip [E]
 
 var runtime: LsRuntime
 var owner_frame: Node3D            ## DOG_SetOwner
@@ -21,7 +22,8 @@ var hear_range := 40.0             ## DOG_SetRangeHear
 var health := 45.0
 var bite_damage := 14.0           ## Original: Biss 50 (Skala wie Soldaten)
 var alive := true
-var alarmed := false
+var alarmed := false               ## Alarmbit (DOG_ClearAlarm löscht nur dieses)
+var attacking := false             ## DOG_Attack bzw. eigener Angriff (aggressiv) – bleibt nach DOG_ClearAlarm
 var target: Soldier                ## Angriffsziel
 var attack_any := false            ## DOG_Attack(NULL): nächstes Ziel selbst wählen
 var move_target := Vector3.INF     ## DOG_Move(Wegpunkt)
@@ -40,6 +42,61 @@ func setup(visual: Node3D) -> void:
 	_visual = visual
 	if visual:
 		add_child(visual)
+		var aps := visual.find_children("*", "AnimationPlayer", true, false)
+		_anim = aps[0] as AnimationPlayer if not aps.is_empty() else null
+		if _anim:
+			for a in ["idle", "walk", "run", "sniff", "attack", "attack2", "lie", "bark"]:
+				if _anim.has_animation(a):
+					_anim.get_animation(a).loop_mode = Animation.LOOP_LINEAR
+			_play("idle")
+
+
+## Original-Hundeanimationen (TABLES\dog_anim.sav, Überblendung 250 ms [B]; export_characters.py --dogs → characters/(pes.glb).
+## Ohne skinned Modell (alter Cache): statisches Modell, das beim Laufen wippt.
+var _anim: AnimationPlayer
+var _cur_anim := ""
+var _oneshot := 0.0
+const BLEND := 0.25
+
+
+func _play(n: String, force := false) -> void:
+	if _anim == null or not _anim.has_animation(n) or (n == _cur_anim and not force):
+		return
+	_cur_anim = n
+	_anim.play(n, BLEND)
+
+
+func _play_once(n: String) -> float:
+	if _anim == null or not _anim.has_animation(n):
+		return 0.0
+	_play(n, true)
+	_oneshot = _anim.get_animation(n).length
+	return _oneshot
+
+
+func _update_anim(delta: float, hv: Vector3, biting: bool) -> void:
+	if _anim == null:
+		return
+	if _oneshot > 0.0:
+		_oneshot -= delta
+		return
+	var v := Vector2(hv.x, hv.z).length()
+	if biting:
+		_play("attack")
+	elif v > 3.5:
+		_play("run")
+	elif v > 0.2:
+		_play("walk")
+	elif lying:
+		if _cur_anim != "lie" and _cur_anim != "lie_down" and _play_once("lie_down") > 0.0:
+			return
+		_play("lie")
+	elif _cur_anim == "lie" and _play_once("stand_up") > 0.0:
+		return
+	elif alarmed or attacking:
+		_play("bark")
+	else:
+		_play("idle")
 
 
 func _ready() -> void:
@@ -78,18 +135,25 @@ func _physics_process(delta: float) -> void:
 		_scan()
 	var goal := Vector3.INF
 	var speed := 2.0
-	if alarmed and target == null and attack_any:
+	var biting := false
+	if attacking and (target == null or not target.alive) and attack_any:
 		target = _nearest_enemy(999.0, false)
-	if is_instance_valid(target) and target.alive and alarmed:
+	if is_instance_valid(target) and target.alive and attacking:
 		goal = target.global_position
-		speed = 7.5 if run_mode or alarmed else 3.0
+		speed = 7.5 if run_mode or attacking else 3.0
 		var d := global_position.distance_to(goal)
 		_bite_t -= delta
-		if d < BITE_RANGE:
+		if d < BITE_APPROACH:
 			goal = Vector3.INF
+			biting = true
+			var to := target.global_position - global_position
+			rotation.y = lerp_angle(rotation.y, atan2(to.x, to.z), clampf(delta * 10.0, 0.0, 1.0))
 			if _bite_t <= 0.0:
-				_bite_t = BITE_INTERVAL
-				target.apply_hit(bite_damage, &"leg", self, (target.global_position - global_position).normalized())
+				# Original 0x5C49A0 „Kousnul jsem humana“: Biss im Angriffszustand (5/6), wenn das Ziel < 2,1 m ist; Schaden
+				# Art 8 = Biss (+0x4A4, Std. 50 zotti) [B]. Takt = Länge des Angriffsclips (pesutok) [P]
+				_bite_t = _anim.get_animation("attack").length if _anim and _anim.has_animation("attack") else BITE_INTERVAL
+				if d < BITE_RANGE:
+					target.apply_hit(bite_damage, &"leg", self, to.normalized())
 				OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_DOG_ATTACK, global_position, self)   # „Dog Attack“
 		_bark_t -= delta
 		if _bark_t <= 0.0:
@@ -125,13 +189,15 @@ func _physics_process(delta: float) -> void:
 	velocity.x = hv.x
 	velocity.z = hv.z
 	move_and_slide()
-	if _visual:
+	if _anim:
+		_update_anim(delta, hv, biting)
+	elif _visual:
 		_bob += delta * hv.length() * 2.5
 		_visual.position.y = absf(sin(_bob)) * 0.06 if hv.length() > 0.1 else 0.0
 
 
 func _scan() -> void:
-	if alarmed or not aggressive:
+	if alarmed or attacking or not aggressive:
 		return
 	var e := _nearest_enemy(sight_range, true)
 	if e:
@@ -159,7 +225,7 @@ func _nearest_enemy(max_dist: float, need_los: bool) -> Soldier:
 
 
 func _on_noise(pos: Vector3, radius: float, source: Node, team: int, _kind: StringName) -> void:
-	if not alive or suspended or alarmed or team == Soldier.TEAM_AXIS:
+	if not alive or suspended or alarmed or attacking or team == Soldier.TEAM_AXIS:
 		return
 	if pos.distance_to(global_position) <= minf(radius, hear_range):
 		raise(source as Soldier)
@@ -167,15 +233,17 @@ func _on_noise(pos: Vector3, radius: float, source: Node, team: int, _kind: Stri
 
 func _on_global_alarm(_pos: Vector3, _by: Node) -> void:
 	# Besitzer/Garnison alarmiert -> Hund wird scharf (Original: OnAlarm im Hundeskript)
-	if alive and not suspended and not alarmed and aggressive:
+	if alive and not suspended and not alarmed and not attacking and aggressive:
 		raise(null)
 
 
 ## Hund schlägt an: Skript bekommt ONALARM; Garnison wird über Bellen geweckt.
 func raise(by: Soldier) -> void:
-	if alarmed:
+	if alarmed or attacking:
 		return
 	alarmed = true
+	if aggressive:
+		attacking = true
 	if by:
 		target = by
 	else:
@@ -186,8 +254,17 @@ func raise(by: Soldier) -> void:
 		runtime.notify(self, "ONALARM")
 
 
+## DOG_ClearAlarm (Opcode 0x11 → KI-vtable +0x38 = 0x5CE700 mit 0): löscht nur das Alarmbit 0x80000000 und die
+## Alarmquelle +0x1C; Angriffsflags (0x140000) und Ziel +0x8C aus DOG_Attack (0x5CF7C0) bleiben [B]. ARCTIC1
+## r_arc1a_dog.scr läuft nach OnAlarm → DOG_Attack(NULL) durch bis „label wait: DOG_ClearAlarm()“ – früher brach das den
+## Angriff sofort ab (B-020: „Hund verhält sich fehlerhaft“).
 func clear_alarm() -> void:
 	alarmed = false
+
+
+## Angriff beenden (Spielstand/Skriptende) – im Original kein eigener Skriptbefehl dafür
+func stop_attack() -> void:
+	attacking = false
 	target = null
 	attack_any = false
 
@@ -204,7 +281,9 @@ func apply_hit(amount: float, _zone: StringName, attacker: Node, _dir: Vector3) 
 		die()
 		return
 	OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_DOG_HURT, global_position, self)   # „Dog Injure“
-	if attacker is Soldier and not alarmed:
+	if not lying:
+		_play_once("hurt")     # zraneni2 (dog_anim.sav Eintrag 19) [P]
+	if attacker is Soldier and not alarmed and not attacking:
 		raise(attacker)
 
 
@@ -213,7 +292,13 @@ func die() -> void:
 	collision_layer = 0
 	velocity = Vector3.ZERO
 	OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_DOG_DEATH, global_position)   # „Dog Death“
-	if _visual:
+	if _anim and _anim.has_animation("death"):
+		# Tod im Liegen (pessmrtleh) bzw. im Stand (pessmrt1), dog_anim.sav Einträge 12–16 [P]
+		var dn := "death_lie" if lying and _anim.has_animation("death_lie") else "death"
+		_anim.get_animation(dn).loop_mode = Animation.LOOP_NONE
+		_cur_anim = ""
+		_play(dn)
+	elif _visual:
 		_visual.rotation.z = PI * 0.5
 		_visual.position.y = 0.2
 	died_dog.emit()

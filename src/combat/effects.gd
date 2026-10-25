@@ -162,6 +162,7 @@ func explosion(pos: Vector3, radius: float, sound: Array = [6, 0], kind: StringN
 		kind = &"water"
 	last_explosion = ExplosionFx.spawn(parent, pos, radius, Settings.quality, kind)
 	explosion_count += 1
+	Ragdoll.explosion(get_tree(), pos, radius)     # B-016: Leichen/Gefallene schleudern (auch auf Clients)
 	var big := kind == &"artillery" or kind == &"air"
 	shake(pos, clampf(radius / 5.0, 0.4, 2.0) * (1.6 if big else 1.0))
 	if kind != &"water":

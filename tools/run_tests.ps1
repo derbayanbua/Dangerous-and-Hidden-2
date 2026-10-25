@@ -29,6 +29,11 @@ $suites = @(
   @{ name = "test_interactive"; args = "--headless -- --mission=a1_blizzard --autoplay=test_interactive" },
   # Zweiprozessig: startet den Client (test_normandie_doors_client) selbst; MP-Tests nie parallel (Port 11001/27101)
   @{ name = "test_normandie_doors"; args = "--headless -- --autoplay=test_normandie_doors" },
+  # B-017: Türflügel/Zäune/Wasser/Zielmarker (echte Benutzen-/Vorwärtstaste)
+  @{ name = "test_b017_af1"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_b017 --phase=doors" },
+  @{ name = "test_b017_no2"; args = "--headless -- --mission=no2_schwerttaenzer --autoplay=test_b017 --phase=doors" },
+  @{ name = "test_b017_arctic"; args = "--headless -- --mission=a1_blizzard --autoplay=test_b017 --phase=arctic" },
+  @{ name = "test_b017_mp"; args = "--headless -- --autoplay=test_b017 --phase=mp_markers" },
   @{ name = "test_af6";      args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" },
   @{ name = "test_items";    args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_items" },
   @{ name = "test_water";    args = "--headless -- --mission=nw1_dampfleitung --autoplay=test_water" },
@@ -36,6 +41,7 @@ $suites = @(
   @{ name = "test_commands"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_commands" },
   @{ name = "test_weapons_orig"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_weapons_orig" },
   @{ name = "test_animations"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_animations" },
+  @{ name = "test_ragdoll";  args = "--headless -- --mission=m01_funkfeuer --autoplay=test_ragdoll" },
   @{ name = "test_tools_mines"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_tools_mines" },
   @{ name = "test_tools_mines_mp"; args = "--headless -- --autoplay=test_tools_mines --phase=mp" },
   @{ name = "test_net";      args = "--headless -- --autoplay=test_net" },

@@ -324,6 +324,19 @@ def model_to_gltf(model, textures, tex_rel, out_path, collision_hint=False):
 EXTRA_MODELS = {"AFRICA6": ["la_Bf109Canyon"]}
 
 
+def phobj_break_models(scene):
+    """Modelle hinter „break“ in den Parametern der phobj-Frames (Exportform ohne Trenner: „phobjmatid20breakm_plotdira“)."""
+    import re
+    out = set()
+    for fr in scene["frames"]:
+        p = fr.get("params") or ""
+        if p.startswith("phobj"):
+            m = re.search(r"break([A-Za-z0-9_]+)", p)
+            if m:
+                out.add(m.group(1))
+    return out
+
+
 def convert(mission):
     mdir = mission.upper()
     out = os.path.join(CACHE, mdir.lower())
@@ -399,6 +412,11 @@ def convert(mission):
     # 3a. Modelle, die nur im Programmcode erzeugt werden (nicht in scene2/actors), z. B. AFRICA6 Bf 109
     #     als Unterobjekt der Ju 88 (docs/re_notes_ju88.md)
     extra = list(EXTRA_MODELS.get(mdir, []))
+    # Ersatzmodelle zerschneidbarer Zäune: 4DS-Frameparameter „phobj … break <Modell>“ (hd2.exe 0x410B40, Standard
+    # „plotdira“), z. B. ARCTIC1 plot_a* -> m_plotdira (B-017)
+    for m in sorted(phobj_break_models(scene)):
+        if m not in extra:
+            extra.append(m)
     # Weltmodelle frei liegender Gegenstände (items.dat ohne Besitzer, Modell aus items.sav), z. B. „item_slozka3“
     try:
         import fmt_actors_items as fai

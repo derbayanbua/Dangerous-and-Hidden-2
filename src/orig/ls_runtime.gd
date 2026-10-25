@@ -1149,7 +1149,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			var dg6 := vm.me as Dog
 			if dg6:
 				var vic := _frame_arg(vm, args[0]) as Soldier if args.size() > 0 else null
-				dg6.alarmed = true
+				# 0x5CF7C0: Ziel nur ein Mensch (Typ 3), NULL = beliebiger Gegner; Angriffsflags 0x140000 [B]
+				dg6.attacking = true
 				dg6.target = vic
 				dg6.attack_any = vic == null
 			return null
@@ -1224,6 +1225,13 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				obj.rotation = Vector3.ZERO
 				obj.visible = true
 				ps2.set_meta("carried", obj)
+				# B-020: Kollision des getragenen Objekts aus – sonst schob der eigene Kanister (Level-Kollision am Frame
+				# „kanister“) Kanisternik in ARCTIC1 dauernd weg (er „lief“ ruhend 100 m weit, den Hang hinab)
+				for co in obj.find_children("*", "CollisionObject3D", true, false) + ([obj] if obj is CollisionObject3D else []):
+					if not co.has_meta("_carry_layers"):
+						co.set_meta("_carry_layers", [co.collision_layer, co.collision_mask])
+					co.collision_layer = 0
+					co.collision_mask = 0
 			return null
 		"HUMAN_DROPOBJECT":
 			var ps3 := _soldier(vm)
@@ -1233,6 +1241,11 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				if is_instance_valid(c):
 					c.reparent(mission.dynamic_root, true)
 					c.global_position = _ground(c.global_position)
+					for co in c.find_children("*", "CollisionObject3D", true, false) + ([c] if c is CollisionObject3D else []):
+						if co.has_meta("_carry_layers"):
+							co.collision_layer = co.get_meta("_carry_layers")[0]
+							co.collision_mask = co.get_meta("_carry_layers")[1]
+							co.remove_meta("_carry_layers")
 			return null
 		"FRM_CREATEPHYSICALOBJECT":
 			var po := _frame_arg(vm, args[0])
@@ -1847,11 +1860,11 @@ func _set_ai_mode(b: EnemyBrain, fname: String) -> void:
 		"HUMAN_SETAIMODE_ZOMBIE":
 			b.script_control = true
 		"HUMAN_SETAIMODE_DEFENSIVE":
-			b.script_control = false
 			b.ai_mode = EnemyBrain.Mode.DEFENSIVE
+			b.leave_script_control()     # B-020: Alarm aus dem Zombie-Modus an die eigene KI übergeben
 		"HUMAN_SETAIMODE_AGGRESSIVE":
-			b.script_control = false
 			b.ai_mode = EnemyBrain.Mode.AGGRESSIVE
+			b.leave_script_control()
 
 
 # --- Zwischensequenzen (CSC_*) --------------------------------------------------------

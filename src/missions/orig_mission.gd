@@ -314,7 +314,10 @@ func _spawn_orig_dog(nm: String, model: String, t: Transform3D) -> void:
 		d.sight_range = float(dp.get("sight_range", 20))
 		d.hear_range = float(dp.get("hear_range", 50))
 		d.bite_damage = float(dp.get("bite_damage", 50)) * HP_SCALE     # Biss +0x4A4 in zotti (re_notes_actors_items §3)
-	var vis: Node3D = orig.model_instance(model)
+	# B-020: skinned Hund mit Originalanimationen (characters/(pes.glb, export_characters.py --dogs); sonst statisch
+	var vis: Node3D = orig.character_instance(model)
+	if vis == null:
+		vis = orig.model_instance(model)
 	if vis:
 		vis.rotation.y = PI     # LS3D-Modelle blicken nach -Z (nach Z-Spiegelung), Dog läuft entlang +Z
 	d.setup(vis)
