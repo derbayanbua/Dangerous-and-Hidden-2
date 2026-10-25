@@ -6,6 +6,7 @@ New-Item -ItemType Directory -Force "$proj\test_output" | Out-Null
 $suites = @(
   @{ name = "check_scripts"; args = "--headless -- --autoplay=check_scripts" },
   @{ name = "test_gameplay"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_gameplay" },
+  @{ name = "test_graphics"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_graphics" },
   @{ name = "test_systems";  args = "--headless -- --mission=m01_funkfeuer --autoplay=test_systems" },
   @{ name = "test_m02";      args = "--headless -- --mission=m02_nordlicht --autoplay=test_m02" },
   @{ name = "test_m03";      args = "--headless -- --mission=m03_sandsturm --autoplay=test_m03" },
@@ -17,9 +18,11 @@ $suites = @(
   @{ name = "test_a1";       args = "--headless -- --mission=a1_blizzard --autoplay=test_a1" },
   @{ name = "test_audio";    args = "--headless -- --mission=a1_blizzard --autoplay=test_audio" },
   @{ name = "test_a2";       args = "--headless -- --mission=a2_erkundung --autoplay=test_orig_part --commandos=1" },
+  @{ name = "test_a2_interaktiv"; args = "--headless -- --mission=a2_erkundung --autoplay=test_a2" },
   @{ name = "test_a3";       args = "--headless -- --mission=a3_rendezvous --autoplay=test_orig_part --commandos=4" },
   @{ name = "test_sas";      args = "--headless -- --autoplay=test_sas" },
   @{ name = "test_ui_flow";  args = "--headless -- --autoplay=test_ui_flow --profiles_dir=user://test_ui_flow --noimport" },
+  @{ name = "test_language"; args = "--headless -- --autoplay=test_language --profiles_dir=user://test_language --noimport" },
   @{ name = "test_tactical"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_tactical" },
   @{ name = "test_movies";   args = "--headless -- --autoplay=test_movies --profiles_dir=user://test_movies --noimport" },
   @{ name = "test_movie_skip"; args = "--headless -- --autoplay=test_movie_skip --profiles_dir=user://test_movie_skip --noimport" },
@@ -43,7 +46,8 @@ $suites = @(
   @{ name = "test_mp_features"; args = "--headless -- --autoplay=test_mp_features --profiles_dir=user://test_mp_features --noimport" },
   @{ name = "test_dedicated"; args = "--headless -- --autoplay=test_dedicated --profiles_dir=user://test_ded --noimport" },
   @{ name = "test_mp_setup_ui"; args = "--headless -- --autoplay=test_mp_setup_ui --profiles_dir=user://test_mp_setup --noimport" },
-  @{ name = "test_mp_feedback"; args = "--headless -- --autoplay=test_mp_feedback" }
+  @{ name = "test_mp_feedback"; args = "--headless -- --autoplay=test_mp_feedback" },
+  @{ name = "test_support_strike"; args = "--headless -- --autoplay=test_support_strike" }
 )
 # Lokale Zusatzinhalte (Ordner local/, nicht im Repository) können eigene Suiten anhängen: $suites += @{ ... }
 if (Test-Path "$proj\local\local_tests.ps1") { . "$proj\local\local_tests.ps1" }

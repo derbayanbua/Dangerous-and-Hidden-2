@@ -228,8 +228,13 @@ static func weapon_icon(cause: String, team: int) -> Texture2D:
 	if _icon_cache.has(key):
 		return _icon_cache[key]
 	var tex: Texture2D = null
-	var wd: WeaponData = WeaponDB.get_weapon(StringName(cause)) if cause != "" and cause != "fall" else null
-	if wd and SAS.available():
+	var wd: WeaponData = WeaponDB.get_weapon(StringName(cause)) if cause != "" and cause != "fall" and not cause.begins_with("support_") else null
+	if cause.begins_with("support_"):
+		# B-011: Artillerie/Luftangriff = Original-Funkgerätsymbol ii_rapack (Gegenstand 243/244)
+		var pr := OrigLevel.cache_root() + "/ui/menu/items/ii_rapack.png"
+		var im: Image = Image.load_from_file(pr) if FileAccess.file_exists(pr) else null
+		tex = ImageTexture.create_from_image(im) if im else null
+	elif wd and SAS.available():
 		var item := OrigWeapons.item_for(wd, team)
 		if item < 0:
 			item = int(OrigHud.ITEM_FALLBACK.get(wd.id, -1))
@@ -248,6 +253,10 @@ static func weapon_icon(cause: String, team: int) -> Texture2D:
 static func weapon_label(cause: String) -> String:
 	if cause == "fall":
 		return ""
+	if cause == "support_art":
+		return "Artillerie"
+	if cause == "support_air":
+		return "Luftangriff"
 	var wd: WeaponData = WeaponDB.get_weapon(StringName(cause)) if cause != "" else null
 	return wd.display_name if wd else ""
 

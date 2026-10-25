@@ -66,6 +66,9 @@ func set_active(i: int) -> bool:
 				mb.set_order(SquadBrain.Order.HOLD, Vector3.ZERO, mb.quiet)
 	active_index = i
 	var cur := members[i]
+	if cur in selected:
+		selected.erase(cur)
+		selection_changed.emit()
 	cur.is_player_controlled = true
 	var cb := brain_of(cur)
 	if cb:
@@ -74,6 +77,46 @@ func set_active(i: int) -> bool:
 	active_changed.emit(cur)
 	Events.active_soldier_changed.emit(cur)
 	return true
+
+
+## Einzelauswahl „SOLDAT 1–4 WÄHLEN“ (Original-Aktionen 35–38, T2862–2865, Options.bin „profile“: Tasten 1–4,
+## Kategorie BEFEHLE). Markierte Kameraden zeigt die Truppleiste mit dem grauen Feld `select*` (gameinterface.4ds,
+## 0x4B30E0). Wirkung [E]: Befehle „an alle“ (Ziffernblock 0, Direkttasten) gehen nur an die Markierten, solange
+## jemand markiert ist; erneutes Drücken hebt die Markierung auf.
+var selected: Array[Soldier] = []
+signal selection_changed
+
+
+func toggle_select(i: int) -> bool:
+	if i < 0 or i >= members.size() or not members[i].alive or members[i] == leader():
+		return false
+	var s := members[i]
+	if s in selected:
+		selected.erase(s)
+	else:
+		selected.append(s)
+	selection_changed.emit()
+	return true
+
+
+func is_selected(s: Soldier) -> bool:
+	return s in selected
+
+
+func clear_selection() -> void:
+	if not selected.is_empty():
+		selected.clear()
+		selection_changed.emit()
+
+
+## Empfänger eines Befehls „an alle“: markierte lebende Kameraden, sonst alle außer dem Anführer.
+func order_recipients() -> Array[Soldier]:
+	var lead := leader()
+	var r: Array[Soldier] = []
+	for m in alive_members():
+		if m != lead and (selected.is_empty() or m in selected):
+			r.append(m)
+	return r
 
 
 func cycle_active() -> void:
@@ -150,11 +193,8 @@ func cycle_formation() -> String:
 
 ## Befehl an alle KI-Mitglieder.
 func order_all(o: int, pos := Vector3.ZERO) -> void:
-	var lead := leader()
 	var i := 0
-	for m in alive_members():
-		if m == lead:
-			continue
+	for m in order_recipients():
 		var b := brain_of(m)
 		if o == SquadBrain.Order.MOVE:
 			# Zielpunkte leicht auffächern
@@ -180,8 +220,8 @@ func order_one(s: Soldier, o: int, pos := Vector3.ZERO) -> void:
 func order_grenade(target: Vector3) -> Soldier:
 	var best: Soldier = null
 	var best_d := INF
-	for m in alive_members():
-		if m == leader() or m.weapons.size() <= WeaponData.Slot.GRENADE:
+	for m in order_recipients():
+		if m.weapons.size() <= WeaponData.Slot.GRENADE:
 			continue
 		var g := m.weapons[WeaponData.Slot.GRENADE]
 		if g == null or g.total_ammo() <= 0:
@@ -205,7 +245,7 @@ func toggle_roe() -> int:
 		if m != lead and b:
 			new_roe = SquadBrain.ROE.FIRE_AT_WILL if b.roe == SquadBrain.ROE.HOLD_FIRE else SquadBrain.ROE.HOLD_FIRE
 			break
-	for m in members:
+	for m in (members if selected.is_empty() else selected):
 		var b := brain_of(m)
 		if b:
 			b.roe = new_roe

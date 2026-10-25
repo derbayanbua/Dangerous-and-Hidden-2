@@ -46,7 +46,7 @@ func setup(m: Mission, level: OrigLevel) -> void:
 	for o in data.get("objects", []):
 		if String(o.get("model", "")) != "":
 			object_models[String(o.get("name", "")).to_upper()] = String(o["model"]).to_lower()
-	texts = _read_json(OrigLevel.cache_root() + "/texts_german.json")
+	texts = Settings.orig_texts()   # B-007: gewählte Sprachfassung
 	Events.soldier_damaged.connect(_on_soldier_damaged)
 	# Einsatzgebiet-Grenze (Einzelspieler-Team, hd2.exe 0x45EF00; src/orig/mission_area.gd)
 	if not Net.is_online:
@@ -756,6 +756,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				b9.script_stance = st
 			elif s2:
 				s2.stance_request = st
+			if s2 and s2.model and s2.model.body:
+				s2.model.body.stand_up()     # beendet HUMAN_ACTIVITY_Sit/_Turk (z. B. af1_02: Turk … SETMODE_Stand) [P]
 			return null
 		"HUMAN_SETAIMODE_ZOMBIE", "HUMAN_SETAIMODE_DEFENSIVE", "HUMAN_SETAIMODE_AGGRESSIVE":
 			_set_ai_mode(_brain(vm), fname)
@@ -857,7 +859,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 					p.disguised = on_d
 			return null
 		"_ISLANGUAGEVERSION":
-			return 1 if _str(vm.value(args[0])).to_lower() == "german" else 0   # deutsche Originalfassung
+			# B-007: gewählte Sprachfassung (Ordnernamen wie Text\<sprache>: English, EnglishUS, French …)
+			return 1 if _str(vm.value(args[0])).to_lower() == Settings.language.to_lower() else 0
 		# --- Formationen (Gegnertrupps folgen ihrem Anführer) ---
 		"FORMATION_CREATE":
 			var fl := _frame_arg(vm, args[0])
@@ -1284,8 +1287,13 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			return null    # Animation/Gesicht/Beleuchtung: vorerst ohne Wirkung (Original-Animationen: offen)
 		"HUMAN_ACTIVITY_SMOKE", "HUMAN_ACTIVITY_POINT", "HUMAN_ACTIVITY_SIT", "HUMAN_ACTIVITY_DRINKBOTTLE", \
 				"HUMAN_ACTIVITY_COLD", "HUMAN_ACTIVITY_HAT", "HUMAN_ACTIVITY_TURK", "HUMAN_ACTIVITY_HOT", "HUMAN_ACTIVITY_CHECKWEAPON", "HUMAN_ACTIVITY_BINOCULARS", \
-				"HUMAN_ACTIVITY_BINOCULARSEND", "HUMAN_ACTIVITY_SALUTE", "HUMAN_ACTIVITY_CARD":
-			return {"wait": 2.0}  # Tätigkeitsanimation (Platzhalter: kurze Pause)
+				"HUMAN_ACTIVITY_BINOCULARSEND", "HUMAN_ACTIVITY_SALUTE", "HUMAN_ACTIVITY_CARD", "HUMAN_ACTIVITY_CUBES", \
+				"HUMAN_ACTIVITY_SHOES", "HUMAN_ACTIVITY_TELEGRAPH", "HUMAN_ACTIVITY_PHONE", "HUMAN_ACTIVITY_READ", \
+				"HUMAN_ACTIVITY_EAT", "HUMAN_ACTIVITY_SPOTUP", "HUMAN_ACTIVITY_SPOTDOWN", "HUMAN_ACTIVITY_SPOTRIGHT", \
+				"HUMAN_ACTIVITY_SPOTLEFT", "HUMAN_ACTIVITY_PLAYCAR", "HUMAN_ACTIVITY_PLAYAIRPLANE", "HUMAN_ACTIVITY_PLAYPUPPET", \
+				"HUMAN_ACTIVITY_TRAP", "HUMAN_ACTIVITY_EXERCISE", "HUMAN_ACTIVITY_STANDSLEEP", "HUMAN_ACTIVITY_PISS", \
+				"HUMAN_ACTIVITY_SLEEP":
+			return _human_activity(vm, fname, args)
 	if not unimplemented.has(fname):
 		unimplemented[fname] = 0
 	unimplemented[fname] += 1
@@ -1298,6 +1306,87 @@ var _thunder_on := false
 var _thunder_light: Node3D
 var _thunder_t := 0.0
 var _dup_count := 0
+
+
+## HUMAN_ACTIVITY_* (Opcodes 0xD9–0xF7, Menschen-Dispatcher hd2.exe 0x421C00, docs/re_notes_weapons.md §13):
+## Tätigkeits-ID = anim.sav-Satz (BodyAnim.activity_clip). [B Code] Smoke, Spot*, Play*, Trap, Exercise, StandSleep, Piss,
+## Sleep: ohne Wirkung (Sprung auf 0x423354). Card(1/0/sonst) 0x19/Ende/0x1A, Cubes 0x1B, DrinkBottle(ohne/mit Objekt)
+## 0x1C/0x1D, Cold 0x35, Hot 0x36, CheckWeapon 0x37, Hat 0x38, Shoes 0x39, Salute(1/2/sonst) 0x3B/0x3C/0x3A,
+## Point(Obj) 0x3E, Eat(0/1,Obj) Ende/0x42, Phone 0x43, Telegraph 0x44, Read 0x45 (je 0 = Ende 0x4C); diese Befehle
+## schalten den Befehlszeiger nicht weiter (Handle in +0x18) -> Skript wartet bis Tätigkeitsende [P].
+## Binoculars 0x41 / BinocularsEnd 0x3D, Sit(Obj) (0x58F4B0) und Turk (0x58F540) laufen ohne Warten weiter [B].
+## Sätze ohne Clip (0x1B, 0x35, 0x37–0x3A, 0x43–0x45) zeigen nichts [B Daten].
+const ACTIVITY_NOP := ["HUMAN_ACTIVITY_SMOKE", "HUMAN_ACTIVITY_SPOTUP", "HUMAN_ACTIVITY_SPOTDOWN", "HUMAN_ACTIVITY_SPOTRIGHT",
+	"HUMAN_ACTIVITY_SPOTLEFT", "HUMAN_ACTIVITY_PLAYCAR", "HUMAN_ACTIVITY_PLAYAIRPLANE", "HUMAN_ACTIVITY_PLAYPUPPET",
+	"HUMAN_ACTIVITY_TRAP", "HUMAN_ACTIVITY_EXERCISE", "HUMAN_ACTIVITY_STANDSLEEP", "HUMAN_ACTIVITY_PISS",
+	"HUMAN_ACTIVITY_SLEEP"]
+const ACTIVITY_FIXED := {"HUMAN_ACTIVITY_CUBES": 0x1B, "HUMAN_ACTIVITY_COLD": 0x35, "HUMAN_ACTIVITY_HOT": 0x36,
+	"HUMAN_ACTIVITY_CHECKWEAPON": 0x37, "HUMAN_ACTIVITY_SHOES": 0x39, "HUMAN_ACTIVITY_HAT": 0x38}
+const ACTIVITY_STOP := 0x4C
+var activity_log := []    ## Tests: [Akteur, Funktion, Tätigkeits-ID, Dauer]
+
+
+func _human_activity(vm, fname: String, args: Array):
+	if fname in ACTIVITY_NOP:
+		return null
+	var s := _soldier(vm)
+	if s == null or not s.alive or s.model == null or s.model.body == null:
+		return null
+	var body: BodyAnim = s.model.body
+	var a0 = vm.value(args[0]) if args.size() > 0 else 0
+	var id := -1
+	var wait := true
+	match fname:
+		"HUMAN_ACTIVITY_SIT", "HUMAN_ACTIVITY_TURK":
+			var fr: Node3D = _frame_arg(vm, args[0]) if fname == "HUMAN_ACTIVITY_SIT" and args.size() > 0 else null
+			if fr:
+				# Sitzplatz-Frame: Figur dorthin, Blick wie der Frame (Frame-Vorderseite −Z) [E]
+				s.global_position = fr.global_position
+				var fwd := -fr.global_basis.z
+				fwd.y = 0.0
+				if fwd.length() > 0.01:
+					s.look_yaw = atan2(-fwd.x, -fwd.z)
+					s.rotation.y = s.look_yaw
+				var b := _brain(vm)
+				if b:
+					b.stop_moving()
+			body.sit_down("sit" if fname == "HUMAN_ACTIVITY_SIT" else "turk")
+			activity_log.append([String(s.name), fname, -1, 0.0])
+			return null
+		"HUMAN_ACTIVITY_BINOCULARS":
+			id = 0x41
+			wait = false
+		"HUMAN_ACTIVITY_BINOCULARSEND":
+			id = 0x3D
+			wait = false
+		"HUMAN_ACTIVITY_CARD":
+			id = 0x19 if int(a0) == 1 else (ACTIVITY_STOP if int(a0) == 0 else 0x1A)
+		"HUMAN_ACTIVITY_SALUTE":
+			id = 0x3B if int(a0) == 1 else (0x3C if int(a0) == 2 else 0x3A)
+		"HUMAN_ACTIVITY_DRINKBOTTLE":
+			id = 0x1D if _frame_arg(vm, args[0]) != null else 0x1C
+		"HUMAN_ACTIVITY_POINT":
+			id = 0x3E
+			var pt: Node3D = _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if pt:
+				var d := pt.global_position - s.global_position
+				if Vector2(d.x, d.z).length() > 0.1:
+					s.look_yaw = atan2(-d.x, -d.z)     # zum Ziel drehen [E]
+		"HUMAN_ACTIVITY_EAT", "HUMAN_ACTIVITY_PHONE", "HUMAN_ACTIVITY_TELEGRAPH", "HUMAN_ACTIVITY_READ":
+			id = ACTIVITY_STOP if int(a0) == 0 else {"HUMAN_ACTIVITY_EAT": 0x42, "HUMAN_ACTIVITY_PHONE": 0x43,
+					"HUMAN_ACTIVITY_TELEGRAPH": 0x44, "HUMAN_ACTIVITY_READ": 0x45}[fname]
+		_:
+			id = int(ACTIVITY_FIXED.get(fname, ACTIVITY_STOP))
+	if id == ACTIVITY_STOP or id == 0x3D:
+		body.stop_activity()
+		activity_log.append([String(s.name), fname, id, 0.0])
+		return null
+	var st := clampi(int(s.stance), 0, 2)
+	var dur := body.start_activity(id, st)
+	activity_log.append([String(s.name), fname, id, dur])
+	if wait and dur > 0.0:
+		return {"wait": dur}
+	return null
 
 
 ## HUMAN_Investigate: nach Ankunft 4 s umsehen (Dauer = ANNAHME)

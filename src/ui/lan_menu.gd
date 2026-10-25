@@ -30,6 +30,9 @@ var _vehicles: CheckBox
 var _names: CheckBox               ## Ergänzung: Namen über Spielern erlauben (shownames)
 var _hits: CheckBox                ## Ergänzung: Trefferanzeige erlauben (hitindicator)
 var _killcam: CheckBox             ## Ergänzung: Kill-Cam (killcam; Standard nur Deathmatch)
+var _support: OptionButton           ## B-011: Artillerie/Luftangriff (supportstrike)
+var _support_min: SpinBox
+var _support_bots: CheckBox
 var _hurts: CheckBox               ## Ergänzung: Treffer-Richtungsanzeige beim Getroffenen (hurtindicator)
 var _port: SpinBox
 var _voice: OptionButton
@@ -89,6 +92,9 @@ func _apply_style_defaults() -> void:
 	_hits.button_pressed = d["hit_indicator"]
 	_hurts.button_pressed = d["hurt_indicator"]
 	_killcam.button_pressed = d["kill_cam"]
+	_support.select(int(d["support_strike"]))
+	_support_min.value = d["support_interval_min"]
+	_support_bots.button_pressed = d["support_bots"]
 	_fill_map_choice()
 
 
@@ -255,6 +261,13 @@ func open() -> void:
 	_hurts = _check(g, "TREFFER-RICHTUNG GETROFFENER", true)
 	_hurts.tooltip_text = "Roter Richtungsbogen beim Getroffenen (hurtindicator)"
 	_killcam = _check(g, "KILL-CAM", true)
+	# B-011: Unterstützung per Funkgerät (nur offene Karten), kurze Beschriftungen
+	_support = _option(g, "FUNK-SCHLAG")
+	for t in ["AUS", "ARTILLERIE", "LUFTANGRIFF", "BEIDE"]:
+		_support.add_item(t)
+	_support.tooltip_text = "Funkgerät in der Kartenmitte: Artillerieschlag/Luftangriff (supportstrike)"
+	_support_min = _spin(g, "FUNK ALLE [min]", 1, 60, 5)
+	_support_bots = _check(g, "KI NUTZT FUNK", false)
 	_voice = _option(g, SAS.text(2375, "Codec für Voice-Chat"))
 	for c in Net.VOICE_CODECS:
 		_voice.add_item(SAS.text(2880 + int(c), "Codec %d" % c), int(c))
@@ -582,6 +595,7 @@ func server_settings() -> Dictionary:
 		"third_person": _third.button_pressed, "spawn_protect_s": int(_protect.value), "inverse_damage": int(_inverse.value),
 		"falling_damage": _falling.button_pressed, "allow_vehicles": _vehicles.button_pressed,
 		"show_names": _names.button_pressed, "hit_indicator": _hits.button_pressed, "hurt_indicator": _hurts.button_pressed, "kill_cam": _killcam.button_pressed,
+		"support_strike": _support.selected, "support_interval_min": int(_support_min.value), "support_bots": _support_bots.button_pressed,
 		"voice_codec": _voice.get_selected_id(), "map_list": map_rotation(), "internet": _inet.button_pressed,
 		"dedicated": _ded.button_pressed, "admin_login": _admin_login.text.strip_edges(), "admin_pass": _admin_pass.text,
 		"max_ping": int(_max_ping.value), "max_freq": int(_max_freq.value), "max_inactivity": int(_max_idle.value),

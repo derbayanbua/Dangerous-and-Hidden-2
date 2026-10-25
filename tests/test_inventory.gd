@@ -440,6 +440,128 @@ func _order(hale: Soldier) -> void:
 	var st := FieldInventory.export_state(hale)
 	check((st.get("order", []) as Array) == ids, "Reihenfolge im Netzabgleich enthalten")
 	await _mission_end(hale, cands)
+	await _helmet_sp(hale)
+	await _backpack_sp(hale)
+
+
+## B-014: Helm sichtbar (Kopfgegenstand), Helm-Trefferfläche zuerst, Abschießen → Flug → Ablagestapel, wieder aufsetzen
+func _helmet_sp(hale: Soldier) -> void:
+	var m := mission()
+	var mate: Soldier = null
+	for mm in m.squad.members:
+		if mm != hale and mm.alive:
+			mate = mm
+	check(mate != null, "Helm: Kamerad als Ziel")
+	if mate == null:
+		return
+	place(mate, 5, 27, 0.0)              # 6 m vor Hale, Blick nach Norden (vom Schützen weg)
+	m.squad.brain_of(mate).hold_pos = mate.global_position
+	mate.set_meta("protect_until", 0)
+	mate.health = mate.max_health
+	await frames(15)
+	var item := Helmet.head_item(mate)
+	var mdl = mate.model
+	check(item >= 0 and Helmet.is_head_item(item) and WeaponDB.wears_helmet(mate), "Helm: Kopfgegenstand am Soldaten", str(item))
+	check(int(FieldInventory.view(mate)["head"]) == item, "Helm: Inventar-Kopfplatz", str(FieldInventory.view(mate)["head"]))
+	if mdl and mdl.orig_figure == null:
+		# Übungseinsatz mit Platzhalterpuppe: Original-Figur en01 anlegen (wie MP-Figuren), damit Helmmodell und
+		# Trefferflächen geprüft werden
+		var fig := Net.character_figure(null, "en01")
+		if fig:
+			mdl.attach_orig(fig)
+			await frames(10)
+	if mdl == null or not mdl.has_method("has_helmet_box") or mdl.orig_figure == null:
+		print("INFO Helm: keine Original-Figur (Cache) – Modellprüfungen übersprungen")
+		return
+	check(mdl.helmet_item == item and mdl.has_helmet_box(), "Helm: Original-Helmmodell am Kopfgelenk + eigene Trefferfläche",
+		str(mdl.helmet_item))
+	var hx: Transform3D = mdl.helmet_transform()
+	var head_hb: Hitbox = null
+	for hb in mdl.orig_zones:
+		if (hb as Hitbox).zone == &"head":
+			head_hb = hb
+	var dy: float = hx.origin.y - (head_hb.get_child(0) as Node3D).global_position.y if head_hb else -1.0
+	check(head_hb != null and dy > 0.0 and dy < 0.2 and hx.origin.distance_to((head_hb.get_child(0) as Node3D).global_position) < 0.2,
+		"Helm sitzt auf dem Kopf (Mitte %.3f m über der Kopfzone)" % dy, "%s / %s" % [hx.origin, head_hb.global_position if head_hb else Vector3.ZERO])
+	# Original-Helmregel (0x5A1C90 Fall 0xB): Abpraller ×0,2 statt Kopfschuss ×5
+	var k98 := WeaponDB.get_weapon(&"kar98k")
+	var glance := WeaponDB.zone_damage(k98.damage, &"head", true, 0.9)
+	var headshot := WeaponDB.zone_damage(k98.damage, &"head", false)
+	check(glance < 20.0 and headshot >= 100.0, "Helmregel: K98k-Abpraller %.1f statt Kopfschuss %.1f" % [glance, headshot])
+	# Schuss von schräg oben auf den Helm (Strahl trifft zuerst die Helmfläche)
+	var target := hx.origin + Vector3.UP * 0.06
+	var from := target + Vector3(0.0, 0.8, 2.5)
+	var hp0 := mate.health
+	Ballistics.fire(hale, from, (target - from).normalized(), k98, hale.exclude_rids(), hale.team)
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 3000 and Helmet.head_item(mate) >= 0:
+		await get_tree().physics_frame
+	check(Helmet.head_item(mate) < 0 and not WeaponDB.wears_helmet(mate) and not mdl.has_helmet_box(),
+		"Helmtreffer: Helm vom Kopf (Gegenstand weg, keine Helmfläche mehr)", "Gesundheit %.1f → %.1f" % [hp0, mate.health])
+	print("INFO Helmtreffer: Gesundheit %.1f → %.1f (%s)" % [hp0, mate.health, "lebt" if mate.alive else "tot (Durchschlag 30 %)"])
+	var flying := get_tree().get_nodes_in_group("helmet_bodies").size()
+	check(flying > 0, "Helm fliegt als Starrkörper")
+	var pile: FieldInventory.Pile = null
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 8000 and pile == null:
+		await get_tree().create_timer(0.2).timeout
+		for p in get_tree().get_nodes_in_group("field_piles"):
+			if SAS.count_of(FieldInventory.view(p), item) > 0:
+				pile = p
+	check(pile != null and get_tree().get_nodes_in_group("helmet_bodies").is_empty(), "Helm liegt als Gegenstand (Ablagestapel)")
+	if pile == null:
+		return
+	var py := pile.global_position.y - mission().lb.ground(pile.global_position.x, pile.global_position.z, 0.0).y
+	check(absf(py) < 0.5, "Helm liegt am Boden (%.2f m)" % py, str(pile.global_position))
+	check(pile.find_child("HelmetModel", true, false) != null, "Ablage zeigt das Helmmodell")
+	if not mate.alive:
+		print("INFO Helm: Kamerad durch Durchschlag gefallen – Aufsetzen mit Hale")
+		mate = hale
+	mate.global_position = pile.global_position + Vector3(0.8, 0.3, 0.0)
+	await frames(5)
+	var res := FieldInventory.move(pile, "items", item, mate, "head")
+	await frames(3)
+	check(res == "" and Helmet.head_item(mate) == item and WeaponDB.wears_helmet(mate), "Helm aufgehoben und aufgesetzt (Kopf-Platz)", res)
+	check(mate.model.helmet_item == item and mate.model.has_helmet_box(), "Aufgesetzter Helm wieder sichtbar mit Trefferfläche")
+	# Helm in der Tasche schützt nicht
+	res = FieldInventory.move(mate, "head", item, mate, "items")
+	check(res == "" and not WeaponDB.wears_helmet(mate) and SAS.count_of(FieldInventory.view(mate), item) == 1,
+		"Helm in den Taschen: kein Kopfschutz, nicht sichtbar", res)
+	FieldInventory.move(mate, "items", item, mate, "head")
+
+
+## B-014: Rucksackraum nur mit angelegtem Rucksack (Originalregeln für Kader/MP-Figuren)
+func _backpack_sp(hale: Soldier) -> void:
+	var m := mission()
+	var mate: Soldier = null
+	for mm in m.squad.members:
+		if mm != hale and mm.alive:
+			mate = mm
+	if mate == null:
+		mate = hale
+	mate.set_meta("mp_class", "Test")      # Originalpackregeln (strict_rules)
+	var inv := FieldInventory.view(mate)
+	inv["back"] = 101                     # backpack EN (+30)
+	inv["items"] = []
+	SAS.add_item(inv, 9, 20)              # 20 Kompasse (Raum 20 > 12 Taschen)
+	FieldInventory.apply(mate, inv, FieldInventory.weapon_pool(mate))
+	var v := FieldInventory.view(mate)
+	check(int(v["back"]) == 101 and SAS.count_of(v, 9) == 20 and FieldInventory.fits(mate, v), "Rucksack: 20 Raum mit Rucksack EN gepackt")
+	var res := FieldInventory.move(mate, "back", 101, mate, "items")
+	check(res != "" and int(FieldInventory.view(mate)["back"]) == 101, "Rucksack ablegen abgelehnt: Inhalt passt nicht in die Taschen", res)
+	res = FieldInventory.drop(mate, "back", 101)
+	check(res != "" and int(FieldInventory.view(mate)["back"]) == 101, "Rucksack wegwerfen abgelehnt (voll)", res)
+	res = FieldInventory.move(mate, "items", 9, mate, "drop")
+	check(res == "" and SAS.count_of(FieldInventory.view(mate), 9) == 0, "Inhalt abgelegt", res)
+	res = FieldInventory.drop(mate, "back", 101)
+	check(res == "" and int(FieldInventory.view(mate)["back"]) < 0, "Leerer Rucksack abgelegt", res)
+	var pile := FieldInventory.pile_near(mate.global_position)
+	if pile:
+		res = FieldInventory.move(pile, "items", 9, mate, "items")
+		v = FieldInventory.view(mate)
+		check(res != "" and SAS.inv_space(v) <= SAS.POCKET_SPACE + 0.001, "Ohne Rucksack: 20 Raum passen nicht (Taschen 12)",
+			"%s %.1f" % [res, SAS.inv_space(v)])
+	mate.remove_meta("mp_class")
 
 
 ## Missionsende (Original 0x698F80 → 0x5A9040 → 0x5A8B50): SAS-Datensatz = aktuelles Inventar des Soldaten.
@@ -550,6 +672,19 @@ func _mp() -> void:
 	while Time.get_ticks_msec() - t0 < 240000 and not taken.call():
 		await get_tree().create_timer(0.25).timeout
 	check(taken.call(), "MP: Server hat die Waffe aus der Leiche dem Client gegeben (Server-Stand)")
+	# B-014: Helm des Clients abschießen (Server-autoritativ; Client prüft Flug, Ablage, Aufheben/Aufsetzen)
+	await get_tree().create_timer(3.0).timeout
+	var cl: Soldier = Net._soldiers.get(cid)
+	var h0: int = Helmet.head_item(cl) if is_instance_valid(cl) else -1
+	check(h0 >= 0, "MP-Helm: Client-Soldat trägt einen Kopfgegenstand (Server)", str(h0))
+	if is_instance_valid(cl) and h0 >= 0:
+		Helmet.knock_off(cl, Vector3(0.2, 0.0, 0.1))
+		check(Helmet.head_item(cl) < 0 and not WeaponDB.wears_helmet(cl), "MP-Helm: Server nimmt den Helm vom Kopf")
+		var put_on := func() -> bool: return is_instance_valid(Net._soldiers.get(cid)) and Helmet.head_item(Net._soldiers.get(cid)) == h0
+		t0 = Time.get_ticks_msec()
+		while Time.get_ticks_msec() - t0 < 120000 and not put_on.call() and not FileAccess.file_exists(RESULT):
+			await get_tree().create_timer(0.25).timeout
+		check(put_on.call(), "MP-Helm: Client hat den Helm wieder aufgesetzt (Server-Stand)")
 	t0 = Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t0 < 240000 and not FileAccess.file_exists(RESULT):
 		await get_tree().create_timer(0.5).timeout

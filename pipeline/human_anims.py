@@ -92,7 +92,31 @@ FULL = {
     "hit_legr0": ")znohaP1", "hit_legr1": ")z-nohaP1", "hit_legr2": ")z_nohaP1",
     "hit_belly0": ")zbricho1", "hit_belly1": ")z-hlava2", "hit_belly2": ")z_bolL1",
     "hit_back0": ")zzada", "hit_back1": ")z-zada", "hit_back2": ")z_bolP2",
+    # Sitzen (B-004): Haltungswechsel-Gruppe 0x0938…0x0C80 – hinsetzen/sitzen/aufstehen (sednout/sedím/zesednout),
+    # Schneidersitz „turek“ (sedám/sedím/vstávám) [B Daten, P Deutung]; Tode im Sitzen 0x2FEE…0x3192
+    "sit_down": "!sednuti", "sit": "!sedim1", "sit_up": "!zeseduR",
+    "turk_down": "#sedamturek", "turk": "#sedimturek", "turk_up": "#vstavamtur",
+    "death_sit1": "!smrtsed1", "death_sit2": "!smrtsed2", "death_turk": "!smrttur2",
+    "death_car1": "!smrtauto1", "death_car2": "!smrtauto2", "death_car3": "!smrtauto3",
+    # Fahrzeuginsassen (0x32E4 „!namotorce“, 0x33E0 „!ridic“ Fahrer, 0x3434 „!spol“ Mitfahrer) [B Daten, P Deutung]
+    "drive": "!ridic", "passenger": "!spol", "motorbike": "!namotorce",
 }
+# Tätigkeiten (HUMAN_ACTIVITY_*): hd2.exe 0x421C00 (Menschen-Dispatcher) übergibt eine Tätigkeits-ID an 0x5AF510/0x5AF530;
+# die ID ist der Satzindex in anim.sav ab Eintrag 0x19AD7, Sätze zu 3 Haltungen (stehen/hocken/liegen) × 0x1C Byte
+# [B Daten: Treffer-Sätze 0x1E–0x33 und Gefangener 0x34 liegen genau an den bekannten Stellen]. Nur IDs mit Clip.
+ACT_BASE = 0x19AD7
+ACT_STRIDE = 0x54
+ACT_IDS = [0x11, 0x12, 0x13, 0x15, 0x16, 0x17, 0x19, 0x1A, 0x1C, 0x1D, 0x36, 0x3B, 0x3C, 0x3E, 0x41, 0x42, 0x46, 0x49]
+# Frames der Beine/des Beckens: Clips ohne diese Spuren sind Oberkörperclips (Haltungsschicht, Präfix h_)
+LEG_FRAMES = {"s", "t", "u", "v", "o", "p", "q", "r"}
+
+
+def activity_table(d):
+    """{id: [5DS je Haltung 0..2 ("" = keiner)]}"""
+    out = {}
+    for i in ACT_IDS:
+        out[i] = [_name(d, ACT_BASE + i * ACT_STRIDE + st * REC) for st in range(3)]
+    return out
 # Oberkörperclips für die Haltungsschicht (Präfix h_ -> ohne Becken/Beine; export_characters.channel_filter)
 UPPER = {
     # Messerstich stehend/hockend (Haltesatz „hand“ +0xF40/+0xF60), von hinten hockend (+0xFC0)
@@ -233,6 +257,24 @@ def build(model):
         ck = upper_key(a5)
         anims[ck] = ALIASES.get(a5, a5)
         upper[k] = ck
+    # Tätigkeiten: Ganzkörper (m_) wenn der Clip Beinspuren hat, sonst Oberkörper (h_, Haltungsschicht)
+    activity = {}
+    for i, names in activity_table(d).items():
+        row = []
+        for a5 in names:
+            b = read5(a5) if a5 else None
+            if b is None:
+                row.append(None)
+                continue
+            objs = {o["name"].lower() for o in fmt_5ds.parse(b)["objects"]}
+            if objs & LEG_FRAMES:
+                ck = clip_key(a5)
+                row.append({"clip": ck, "layer": "full"})
+            else:
+                ck = upper_key(a5)
+                row.append({"clip": ck, "layer": "upper"})
+            anims[ck] = ALIASES.get(a5, a5)
+        activity[str(i)] = row
     loco = {c for dirs in move.values() for lst in dirs.values() for c in lst}
     missing = []
     for ck, a5 in list(anims.items()):
@@ -251,5 +293,5 @@ def build(model):
             e["vel"] = [vx, vz]
             e["speed"] = round(math.hypot(vx, vz), 3)
         info[ck] = e
-    return anims, {"move": move, "full": full, "upper": upper, "clips": info, "modes": MODES, "dirs": DIRS,
-                   "missing": missing}
+    return anims, {"move": move, "full": full, "upper": upper, "activity": activity, "clips": info, "modes": MODES,
+                   "dirs": DIRS, "missing": missing}

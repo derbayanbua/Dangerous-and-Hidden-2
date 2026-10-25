@@ -1,0 +1,19 @@
+[remap]
+
+importer="csv_translation"
+type="Translation"
+uid="uid://bqwkft5uir3dr"
+
+[deps]
+
+files=["res://locale/ui_texts.de.translation", "res://locale/ui_texts.en.translation", "res://locale/ui_texts.fr.translation", "res://locale/ui_texts.it.translation", "res://locale/ui_texts.es.translation", "res://locale/ui_texts.cs.translation"]
+
+source_file="res://locale/ui_texts.csv"
+dest_files=["res://locale/ui_texts.de.translation", "res://locale/ui_texts.en.translation", "res://locale/ui_texts.fr.translation", "res://locale/ui_texts.it.translation", "res://locale/ui_texts.es.translation", "res://locale/ui_texts.cs.translation"]
+
+[params]
+
+compress=1
+delimiter=0
+unescape_keys=false
+unescape_translations=true

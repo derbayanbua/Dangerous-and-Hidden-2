@@ -8,7 +8,7 @@ extends RefCounted
 
 ## [größte Ausdehnung bis m, Sichtweite m, Schatten werfen]
 const SIZE_STEPS := [[0.6, 70.0, false], [2.0, 140.0, true], [6.0, 320.0, true], [25.0, 900.0, true]]
-const QUALITY_K := [0.6, 0.8, 1.0, 1.6]
+const QUALITY_K := [0.6, 0.8, 1.0, 1.6, 2.4]   ## Stufe 4 = „4K Ultra“ (B-013)
 const LIGHT_FADE_M := 90.0
 static var last := {}
 
@@ -22,7 +22,7 @@ static func apply(m: Node) -> Dictionary:
 	if m == null or not enabled():
 		last = st
 		return st
-	var k: float = QUALITY_K[clampi(Settings.quality, 0, 3)]
+	var k: float = QUALITY_K[clampi(Settings.quality, 0, 4)]
 	var roots: Array = []
 	var orig = m.get("orig")
 	if orig != null and orig.get("root") != null:

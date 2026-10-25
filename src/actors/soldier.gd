@@ -482,6 +482,11 @@ func _physics_process(delta: float) -> void:
 
 func _update_stance(delta: float) -> void:
 	_stance_lock = maxf(_stance_lock - delta, 0.0)
+	# KI mit Zweibein-/Dreibein-MG (B-012): zum Feuern hinlegen (bzw. hocken), sonst könnte sie nie schießen
+	if not is_player_controlled and not net_puppet and (trigger or aiming) and alive:
+		var cw := current_weapon()
+		if cw and not is_instance_valid(mounted) and vehicle == null:
+			stance_request = maxi(stance_request, 2 - fire_stance_max(cw.data))
 	if stance_request == stance or _stance_lock > 0.0:
 		return
 	if stance_request < stance and not _has_headroom(stance_request):
@@ -558,6 +563,7 @@ func _update_movement(delta: float) -> void:
 	var was_floor := is_on_floor()
 	_step_up(delta)
 	move_and_slide()
+	_step_down(was_floor, vy_before)
 	# Landung nach Sprung/Fall: Schritt auf dem Untergrund (Original-Schrittklang, Lautstärke nach Aufprall – Annahme)
 	if not was_floor and is_on_floor() and vy_before < -3.0:
 		OrigAudio.play_step(global_position, null, clampf(-vy_before / 6.0, 0.5, 1.0))
@@ -720,7 +726,49 @@ func _step_up(delta: float) -> void:
 		if ny >= cos(floor_max_angle) and rise > 0.02 and rise <= STEP_HEIGHT:
 			global_position.y += rise + 0.01
 			velocity.y = minf(velocity.y, 0.0)
+			_stepped_up_t = 0.25
 			return
+
+
+## Step-down: Treppen mit echter Stufenkollision (CZECH1/3/4, nach dem B-010-Ersatzkörperfix) – an der Stufenkante
+## verliert die runde Kapselunterseite den Boden (Kantennormale), floor_snap greift nicht und die Figur „fliegt“
+## 0,4 s die Treppe hinab. Lag sie eben noch auf dem Boden und ist nicht gesprungen, wird sie auf eine begehbare
+## Fläche höchstens STEP_HEIGHT tiefer gesetzt [E].
+var _air_t := 0.0
+var _stepped_up_t := 0.0     ## nach einem Step-up kein Step-down (sonst Pendeln an der Stufe)
+
+
+func _step_down(was_floor: bool, vy_before: float) -> void:
+	if is_on_floor() or was_floor:
+		_air_t = 0.0 if is_on_floor() else _air_t
+	else:
+		_air_t += get_physics_process_delta_time()
+	# auch kurz nach dem Verlassen der Kante (Treppe hinab: zwischen zwei Stufen kurz in der Luft), nie nach einem Sprung
+	_stepped_up_t = maxf(_stepped_up_t - get_physics_process_delta_time(), 0.0)
+	if is_on_floor() or _air_t > 0.2 or vy_before > 0.0 or velocity.y > 0.0 or _climb_t > 0.0 or _stepped_up_t > 0.0:
+		return
+	# Boden senkrecht unter der Figurmitte (die Kapsel selbst hängt an der Kante und käme per test_move nicht tiefer)
+	var ray := get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(
+		global_position + Vector3.UP * 0.1, global_position + Vector3.DOWN * (STEP_HEIGHT + 0.05), collision_mask, [get_rid()]))
+	if ray.is_empty() or ray.normal.y < cos(floor_max_angle) or ray.position.y > global_position.y - 0.02:
+		return
+	var land: Vector3 = ray.position + Vector3.UP * 0.01
+	# keine Kapselprüfung: an der Stufenkante überlappt die Kapsel die obere Setzstufe kurz, move_and_slide trennt
+	global_position = land
+	velocity.y = -0.5
+	apply_floor_snap()
+
+
+func _fits_capsule(at: Vector3) -> bool:
+	var col := _shape
+	if col == null or col.shape == null:
+		return true
+	var params := PhysicsShapeQueryParameters3D.new()
+	params.shape = col.shape
+	params.transform = Transform3D(col.global_transform.basis, at + (col.global_position - global_position) + Vector3.UP * 0.03)
+	params.collision_mask = collision_mask
+	params.exclude = [get_rid()]
+	return get_world_3d().direct_space_state.intersect_shape(params, 1).is_empty()
 
 
 func _ray_down(space: PhysicsDirectSpaceState3D, at: Vector3, from_y: float, to_y: float, ex: Array[RID]) -> Vector3:
@@ -884,6 +932,10 @@ func _update_weapon(delta: float) -> void:
 	if w == null:
 		return
 	var can_fire := not stance_transitioning() and not (move_mode == MoveMode.RUN and is_moving() and not aiming)
+	if not stance_allows_fire(w.data):
+		can_fire = false
+		if trigger and not _trigger_prev and is_player_controlled and not net_puppet:
+			Events.say("%s: nur %s feuerbar" % [w.data.display_name, "im Liegen" if fire_stance_max(w.data) == 0 else "hockend oder liegend"], 1.5)
 	if w.data.action == WeaponData.Action.MELEE:
 		# Klick wird gemerkt (auch während der Erholung), gehaltene Taste sticht weiter
 		if trigger and not _tool_trigger_prev:
@@ -903,6 +955,26 @@ func _update_weapon(delta: float) -> void:
 	_trigger_prev = trigger
 	if w.trigger(trigger and can_fire):
 		_fire_shot(w)
+
+
+## Schwere MGs mit Zweibein/Dreibein (B-012): items.sav Feuerwaffen-Verhalten Feld u9 (Datensatz +0x24 im Block,
+## fmt_actors_items._decode_behaviour) = höchste Haltung, aus der gefeuert werden darf [P: Deutung aus den Werten –
+## 2 bei allen Gewehren/MPs/Pistolen/Bren/BAR, 0 bei MG 42/MG 15/MG 81, 1 bei Browning 1919/Typ 97/„DO BUNKRU“].
+## 0 = nur liegend, 1 = liegend oder hockend, 2 = jede Haltung. Gilt nicht in Stellungen/Fahrzeugen.
+const FIRE_STANCE_MAX := {33: 0, 37: 0, 42: 0, 43: 0, 55: 0, 30: 1, 34: 1, 35: 1, 40: 1}
+
+
+static func fire_stance_max(data: WeaponData) -> int:
+	if data == null:
+		return 2
+	return int(FIRE_STANCE_MAX.get(WeaponDB.orig_item_of(data.id), 2))
+
+
+## Darf mit dieser Waffe in der aktuellen Haltung gefeuert werden? (Stance: STAND 0, CROUCH 1, PRONE 2)
+func stance_allows_fire(data: WeaponData) -> bool:
+	if is_instance_valid(mounted) or vehicle != null:
+		return true
+	return 2 - int(stance) <= fire_stance_max(data)
 
 
 func _fire_shot(w: Weapon) -> void:
@@ -1392,6 +1464,9 @@ func _on_weapon_switched() -> void:
 	weapon_changed.emit(w)
 
 
+var _throw_prop := ""     ## Granatenmodell in der Hand während der Wurfanimation (B-012)
+
+
 ## override_velocity: von der KI berechnete Abwurfgeschwindigkeit (sonst Blickrichtung).
 func throw_grenade(w: Weapon, override_velocity := Vector3.INF) -> void:
 	if is_throwing():
@@ -1421,6 +1496,13 @@ func throw_grenade(w: Weapon, override_velocity := Vector3.INF) -> void:
 	_throw_left = release
 	if cw:
 		cw.cooldown = maxf(cw.cooldown, length)
+	# B-012: Granate (Original-Weltmodell, items.sav) bis zum Auslösen in der Wurfhand statt der Waffe
+	_throw_prop = ""
+	if tool == "":
+		var gm := String(OrigWeapons.info(w.data, team).get("model", ""))
+		if gm != "" and model != null and OrigWeapons.available():
+			_throw_prop = gm
+			model.set_prop(gm)
 	action_started.emit("throw", length)
 
 
@@ -1430,6 +1512,9 @@ func _release_grenade() -> void:
 	if data == null:
 		return
 	_throw_data = null
+	if _throw_prop != "" and model and model.prop_name() == _throw_prop:
+		model.set_prop("")
+	_throw_prop = ""
 	var g := Grenade.new()
 	g.data = data
 	g.thrower = self

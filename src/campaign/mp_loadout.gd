@@ -277,7 +277,7 @@ static func take(inv: Dictionary, slot_or_item: String) -> void:
 	if slot_or_item in SAS.SLOTS:
 		inv[slot_or_item] = -1
 		# ohne Rucksack passt der Inhalt evtl. nicht mehr → Überzähliges ablegen
-		while SAS.inv_space(inv) > SAS.inv_capacity(inv) + 0.001 and not (inv["items"] as Array).is_empty():
+		while not SAS.fits(inv) and not (inv["items"] as Array).is_empty():     # B-014: Raum nur mit Rucksack
 			var e: Array = (inv["items"] as Array).back()
 			SAS.remove_item(inv, int(e[0]), int(e[1]))
 	elif slot_or_item.is_valid_int():
@@ -293,7 +293,7 @@ static func to_preset(inv: Dictionary, nm: String, flags: int, text_id: int) -> 
 	var used := 0.0
 	for e in inv.get("items", []):
 		var sp := SAS.space(int(e[0])) * int(e[1])
-		if (p["a"] as Array).size() < 14 and (used + sp <= SAS.POCKET_SPACE + 0.001 or int(inv.get("back", -1)) < 0):
+		if (p["a"] as Array).size() < 14 and (used + sp <= SAS.POCKET_SPACE + 0.001 or not SAS.is_backpack(int(inv.get("back", -1)))):
 			p["a"].append([int(e[0]), int(e[1])])
 			used += sp
 		elif (p["b"] as Array).size() < 32:

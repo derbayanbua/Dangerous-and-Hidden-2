@@ -1,0 +1,43 @@
+keys,de,en,fr,it,es,cs
+"ANZEIGE: AUFLÖSUNG, VOLLBILD …","ANZEIGE: AUFLÖSUNG, VOLLBILD …","DISPLAY: RESOLUTION, FULLSCREEN …","AFFICHAGE : RÉSOLUTION, PLEIN ÉCRAN …","SCHERMO: RISOLUZIONE, SCHERMO INTERO …","PANTALLA: RESOLUCIÓN, PANTALLA COMPLETA …","ZOBRAZENÍ: ROZLIŠENÍ, CELÁ OBRAZOVKA …"
+Moderne Ergänzung (nicht im Original),Moderne Ergänzung (nicht im Original),Modern addition (not in the original),Ajout moderne (absent de l'original),Aggiunta moderna (non presente nell'originale),Añadido moderno (no está en el original),Moderní doplněk (není v originále)
+Gesichtsanimation – im Nachbau noch ohne Wirkung,Gesichtsanimation – im Nachbau noch ohne Wirkung,Facial animation – no effect in the remake yet,Animation faciale – sans effet pour l'instant,Animazione facciale – ancora senza effetto,Animación facial – aún sin efecto,Animace obličeje – zatím bez účinku
+Anzeige & Setup (aus dem Original-Setup):,Anzeige & Setup (aus dem Original-Setup):,Display & setup (from the original setup):,Affichage et configuration (du setup original) :,Schermo e setup (dal setup originale):,Pantalla y configuración (del setup original):,Zobrazení a nastavení (z původního setupu):
+Grafikkarte:,Grafikkarte:,Graphics card:,Carte graphique :,Scheda grafica:,Tarjeta gráfica:,Grafická karta:
+AUFLÖSUNG:,AUFLÖSUNG:,RESOLUTION:,RÉSOLUTION :,RISOLUZIONE:,RESOLUCIÓN:,ROZLIŠENÍ:
+Desktop (nativ),Desktop (nativ),Desktop (native),Bureau (natif),Desktop (nativa),Escritorio (nativa),Plocha (nativní)
+VOLLBILD,VOLLBILD,FULLSCREEN,PLEIN ÉCRAN,SCHERMO INTERO,PANTALLA COMPLETA,CELÁ OBRAZOVKA
+VSYNC:,VSYNC:,VSYNC:,VSYNC :,VSYNC:,VSYNC:,VSYNC:
+AUS,AUS,OFF,DÉSACTIVÉ,DISATTIVATO,DESACTIVADO,VYPNUTO
+AN,AN,ON,ACTIVÉ,ATTIVO,ACTIVADO,ZAPNUTO
+ADAPTIV,ADAPTIV,ADAPTIVE,ADAPTATIF,ADATTIVO,ADAPTATIVO,ADAPTIVNÍ
+DREIFACHPUFFER,DREIFACHPUFFER,TRIPLE BUFFERING,TRIPLE TAMPON,TRIPLO BUFFER,TRIPLE BÚFER,TROJITÝ BUFFER
+BILDRATE:,BILDRATE:,FRAME RATE:,FRÉQUENCE D'IMAGES :,FRAME RATE:,FOTOGRAMAS:,SNÍMKOVÁ FREKVENCE:
+UNBEGRENZT,UNBEGRENZT,UNLIMITED,ILLIMITÉE,ILLIMITATO,ILIMITADO,NEOMEZENO
+KANTENGLÄTTUNG:,KANTENGLÄTTUNG:,ANTI-ALIASING:,ANTICRÉNELAGE :,ANTI-ALIASING:,ANTIALIASING:,VYHLAZOVÁNÍ HRAN:
+TEXTUREN:,TEXTUREN:,TEXTURES:,TEXTURES :,TEXTURE:,TEXTURAS:,TEXTURY:
+ORIGINAL,ORIGINAL,ORIGINAL,ORIGINAL,ORIGINALE,ORIGINAL,ORIGINÁL
+HD (KI),HD (KI),HD (AI),HD (IA),HD (IA),HD (IA),HD (AI)
+4K (KI),4K (KI),4K (AI),4K (IA),4K (IA),4K (IA),4K (AI)
+ANISOTROPE FILTERUNG:,ANISOTROPE FILTERUNG:,ANISOTROPIC FILTERING:,FILTRAGE ANISOTROPE :,FILTRO ANISOTROPICO:,FILTRADO ANISOTRÓPICO:,ANIZOTROPNÍ FILTROVÁNÍ:
+3D-RENDERSKALIERUNG: %d %%,3D-RENDERSKALIERUNG: %d %%,3D RENDER SCALE: %d %%,ÉCHELLE DE RENDU 3D : %d %%,SCALA RENDER 3D: %d %%,ESCALA DE RENDER 3D: %d %%,ŠKÁLOVÁNÍ 3D: %d %%
+SICHTFELD: %d°,SICHTFELD: %d°,FIELD OF VIEW: %d°,CHAMP DE VISION : %d°,CAMPO VISIVO: %d°,CAMPO DE VISIÓN: %d°,ZORNÉ POLE: %d°
+BEI INAKTIVEM FENSTER PAUSIEREN,BEI INAKTIVEM FENSTER PAUSIEREN,PAUSE WHEN WINDOW IS INACTIVE,PAUSE SI FENÊTRE INACTIVE,PAUSA CON FINESTRA INATTIVA,PAUSA CON VENTANA INACTIVA,PAUZA PŘI NEAKTIVNÍM OKNĚ
+"ZUSATZEFFEKTE (SSIL, SDFGI)","ZUSATZEFFEKTE (SSIL, SDFGI)","EXTRA EFFECTS (SSIL, SDFGI)","EFFETS SUPPLÉMENTAIRES (SSIL, SDFGI)","EFFETTI EXTRA (SSIL, SDFGI)","EFECTOS EXTRA (SSIL, SDFGI)","DALŠÍ EFEKTY (SSIL, SDFGI)"
+BLUT:,BLUT:,BLOOD:,SANG :,SANGUE:,SANGRE:,KREV:
+MEHR,MEHR,MORE,PLUS,DI PIÙ,MÁS,VÍCE
+Texturänderung wirkt beim nächsten Laden einer Mission.,Texturänderung wirkt beim nächsten Laden einer Mission.,Texture changes apply when the next mission loads.,La modification des textures s'applique au prochain chargement de mission.,La modifica delle texture vale dal prossimo caricamento di una missione.,El cambio de texturas se aplica al cargar la próxima misión.,Změna textur se projeví při příštím načtení mise.
+Effekt-Lautstärke:,Effekt-Lautstärke:,Effects volume:,Volume des effets :,Volume effetti:,Volumen de efectos:,Hlasitost efektů:
+Sprach-Lautstärke:,Sprach-Lautstärke:,Speech volume:,Volume des voix :,Volume voci:,Volumen de voces:,Hlasitost řeči:
+Joystick/Gamepad wird noch nicht unterstützt,Joystick/Gamepad wird noch nicht unterstützt,Joystick/gamepad is not supported yet,Joystick/manette pas encore pris en charge,Joystick/gamepad non ancora supportato,Joystick/mando aún no compatible,Joystick/gamepad zatím není podporován
+… Taste drücken …,… Taste drücken …,… press a key …,… appuyez sur une touche …,… premi un tasto …,… pulsa una tecla …,… stiskněte klávesu …
+FPS ANZEIGEN,FPS ANZEIGEN,SHOW FPS,AFFICHER LES FPS,MOSTRA FPS,MOSTRAR FPS,ZOBRAZIT FPS
+NAMEN ÜBER SPIELERN (MP),NAMEN ÜBER SPIELERN (MP),NAMES ABOVE PLAYERS (MP),NOMS AU-DESSUS DES JOUEURS (MP),NOMI SOPRA I GIOCATORI (MP),NOMBRES SOBRE LOS JUGADORES (MP),JMÉNA NAD HRÁČI (MP)
+TREFFERANZEIGE SCHÜTZE (MP),TREFFERANZEIGE SCHÜTZE (MP),HIT MARKER FOR SHOOTER (MP),INDICATEUR DE TOUCHE TIREUR (MP),INDICATORE COLPI TIRATORE (MP),INDICADOR DE IMPACTO TIRADOR (MP),UKAZATEL ZÁSAHU STŘELCE (MP)
+TREFFER-RICHTUNG GETROFFENER (MP),TREFFER-RICHTUNG GETROFFENER (MP),HIT DIRECTION WHEN HIT (MP),DIRECTION DES TIRS REÇUS (MP),DIREZIONE COLPI SUBITI (MP),DIRECCIÓN DE IMPACTOS RECIBIDOS (MP),SMĚR ZÁSAHU (MP)
+KILL-CAM (MP),KILL-CAM (MP),KILL CAM (MP),KILL-CAM (MP),KILL-CAM (MP),KILL-CAM (MP),KILL-CAM (MP)
+Sprechen: %s halten (Push-to-talk),Sprechen: %s halten (Push-to-talk),Talk: hold %s (push-to-talk),Parler : maintenir %s (push-to-talk),Parla: tieni premuto %s (push-to-talk),Hablar: mantener %s (pulsar para hablar),Mluvit: držet %s (push-to-talk)
+NEIN,NEIN,NO,NON,NO,NO,NE
+SPRACHE:,SPRACHE:,LANGUAGE:,LANGUE :,LINGUA:,IDIOMA:,JAZYK:
+Sprachausgabe nur in den Sprachen der Installation.,Sprachausgabe nur in den Sprachen der Installation.,Voice output only in the installation's languages.,Voix uniquement dans les langues de l'installation.,Voci solo nelle lingue dell'installazione.,Voces solo en los idiomas de la instalación.,Hlasový výstup jen v jazycích instalace.
+Netzwerk-Einstellungen:,Netzwerk-Einstellungen:,Network settings:,Paramètres réseau :,Impostazioni di rete:,Ajustes de red:,Nastavení sítě:

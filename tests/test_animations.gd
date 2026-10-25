@@ -35,6 +35,127 @@ func _drive(s: Soldier, secs: float) -> void:
 		await get_tree().physics_frame
 
 
+## B-004: Tätigkeiten (HUMAN_ACTIVITY_* → anim.sav-Satz), Sitzen/Schneidersitz, Fahrzeuginsassen, Tode im Sitzen.
+func _test_b004(e: Soldier, t: Dictionary) -> void:
+	var body: BodyAnim = e.model.body
+	var anim: AnimationPlayer = e.model._orig_anim
+	var hold: AnimationPlayer = e.model._hold_anim
+	var act: Dictionary = t.get("activity", {})
+	check(act.has(str(0x19)) and act.has(str(0x3B)) and act.has(str(0x41)) and act.has(str(0x36)),
+		"Tätigkeitssätze aus anim.sav (Karten 0x19, Gruß 0x3B, Fernglas 0x41, Hitze 0x36)", str(act.keys()))
+	var miss: Array = []
+	for id in act:
+		for en in act[id]:
+			if en is Dictionary:
+				var pl: AnimationPlayer = anim if String(en["layer"]) == "full" else hold
+				if pl == null or not pl.has_animation(String(en["clip"])):
+					miss.append(String(en["clip"]))
+	check(miss.is_empty(), "Alle Tätigkeitsclips in der Figur (Ganzkörper m_*, Oberkörper h_*)", str(miss))
+	var sitk: Array = []
+	for k in ["sit_down", "sit", "sit_up", "turk_down", "turk", "turk_up", "drive", "passenger", "motorbike",
+			"death_sit1", "death_turk"]:
+		if not anim.has_animation(BodyAnim.full(k)):
+			sitk.append(k)
+	check(sitk.is_empty(), "Sitz-/Insassenclips (!sednuti/!sedim1/!zeseduR, #sedamturek…, !ridic/!spol/!namotorce)", str(sitk))
+	# Skript-API: Zuordnung Funktion -> Tätigkeits-ID (hd2.exe 0x421C00)
+	place(e, 6, 20, 0.0)
+	e.velocity = Vector3.ZERO
+	var eb = e.get_node_or_null("EnemyBrain")
+	if eb:
+		eb.state = EnemyBrain.State.GUARD     # Tätigkeiten nur ohne Alarm (Kampf/Suche bricht ab)
+	await seconds(0.5)
+	check(not BodyAnim._alarmed(e), "Prüffigur ohne Alarm (Wache)")
+	var rt := LsRuntime.new()
+	var vm := LsVM.new(LsCompiler.new(), e, rt)
+	var r = rt.call_api(vm, "HUMAN_ACTIVITY_SALUTE", [["num", 1]])
+	await frames(3)
+	check(body.activity_id == 0x3B and anim.current_animation == BodyAnim.activity_clip(0x3B, 0)["clip"]
+		and r is Dictionary and absf(float(r.get("wait", 0.0)) - anim.get_animation(anim.current_animation).length) < 0.05,
+		"HUMAN_ACTIVITY_Salute(1): „!salutovani“ (Satz 0x3B), Skript wartet die Cliplänge", "%s %s" % [anim.current_animation, str(r)])
+	check(not e.model._weapon_mesh.visible, "Tätigkeit: Waffe weg (Hände frei)")
+	rt.call_api(vm, "HUMAN_ACTIVITY_HOT", [])
+	await frames(3)
+	check(body.act_upper == BodyAnim.activity_clip(0x36, 0)["clip"] and e.model._hold_clip == body.act_upper
+		and body.state == "idle", "HUMAN_ACTIVITY_Hot: Oberkörper „(teplous“ über der Ruhe", "%s / %s" % [e.model._hold_clip, body.state])
+	r = rt.call_api(vm, "HUMAN_ACTIVITY_COLD", [])
+	check(r == null and body.activity_id == -1, "HUMAN_ACTIVITY_Cold: Satz 0x35 ohne Clip -> nichts, kein Warten")
+	r = rt.call_api(vm, "HUMAN_ACTIVITY_SMOKE", [["num", 1]])
+	check(r == null and body.activity_id == -1, "HUMAN_ACTIVITY_Smoke: ohne Wirkung wie hd2.exe 1.12 (0x423354)")
+	rt.call_api(vm, "HUMAN_ACTIVITY_CARD", [["num", 2]])
+	await frames(2)
+	check(body.activity_id == 0x1A and body.oneshot == "m_hrejkarty", "HUMAN_ACTIVITY_Card(2): „(hrejkarty“", body.oneshot)
+	rt.call_api(vm, "HUMAN_ACTIVITY_CARD", [["num", 0]])
+	check(body.activity_id == -1 and body.oneshot == "", "HUMAN_ACTIVITY_Card(0): Tätigkeit beendet")
+	r = rt.call_api(vm, "HUMAN_ACTIVITY_BINOCULARS", [])
+	await frames(2)
+	check(r == null and body.activity_id == 0x41 and body.oneshot == "m_dalekohled", "HUMAN_ACTIVITY_Binoculars: „%dalekohled“ ohne Warten",
+		body.oneshot)
+	rt.call_api(vm, "HUMAN_ACTIVITY_BINOCULARSEND", [])
+	check(body.activity_id == -1, "HUMAN_ACTIVITY_BinocularsEnd beendet")
+	rt.call_api(vm, "HUMAN_ACTIVITY_DRINKBOTTLE", [["num", 0]])
+	await frames(2)
+	check(body.activity_id == 0x1C and e.model._hold_clip == "h_pitiFL", "HUMAN_ACTIVITY_DrinkBottle ohne Flasche: „(pitiFL“",
+		e.model._hold_clip)
+	e.move_input = Vector3(0, 0, -1)
+	await seconds(0.5)
+	e.move_input = Vector3.ZERO
+	check(body.activity_id == -1, "Tätigkeit endet bei Bewegung")
+	await seconds(0.3)
+	# Sitzen / Schneidersitz
+	rt.call_api(vm, "HUMAN_ACTIVITY_TURK", [])
+	await frames(2)
+	check(body.seated == "turk" and body.oneshot == BodyAnim.full("turk_down"), "HUMAN_ACTIVITY_Turk: hinsetzen „#sedamturek“",
+		body.oneshot)
+	await seconds(anim.get_animation(BodyAnim.full("turk_down")).length + 0.4)
+	check(body.state == "turk" and anim.current_animation == BodyAnim.full("turk"), "Schneidersitz „#sedimturek“ (Schleife)",
+		anim.current_animation)
+	check(body.death_clip(0, Vector3(0, 0, 1), "torso", "") == BodyAnim.full("death_turk"), "Tod im Schneidersitz: „!smrttur2“")
+	rt.call_api(vm, "HUMAN_SETMODE_STAND", [])
+	await frames(2)
+	check(body.seated == "" and body.oneshot == BodyAnim.full("turk_up"), "HUMAN_SETMODE_Stand: aufstehen „#vstavamtur“", body.oneshot)
+	await seconds(anim.get_animation(BodyAnim.full("turk_up")).length + 0.3)
+	check(body.sit_down("sit") and body.seated == "sit", "Sitzen (HUMAN_ACTIVITY_Sit): „!sednuti“")
+	await seconds(anim.get_animation(BodyAnim.full("sit_down")).length + 0.4)
+	check(body.state == "sit" and anim.current_animation == BodyAnim.full("sit") and not e.model._weapon_mesh.visible,
+		"Sitzen „!sedim1“ (Schleife), Waffe weg", anim.current_animation)
+	check(body.death_clip(0, Vector3(0, 0, 1), "torso", "") in [BodyAnim.full("death_sit1"), BodyAnim.full("death_sit2")],
+		"Tod im Sitzen: „!smrtsed1/2“")
+	e.move_input = Vector3(0, 0, -1)
+	await seconds(0.5)
+	e.move_input = Vector3.ZERO
+	check(body.seated == "", "Sitzen endet bei Bewegung")
+	rt.free()
+	await seconds(0.5)
+	# Fahrzeuginsassen: Sitzflags SEAT<Ziffern> (la_jeepw: SEAT00 „SEAT0“ Fahrer, SEAT01 „SEAT15“ Mitfahrer)
+	var jeep := ""
+	for p in DirAccess.get_directories_at(OrigLevel.cache_root()):
+		var cand := OrigLevel.cache_root() + "/" + p + "/models/la_jeepw.glb"
+		if FileAccess.file_exists(cand):
+			jeep = cand
+			break
+	var fl := BodyAnim.seat_flags(jeep)
+	check(int(fl.get(0, 0)) == 1 and int(fl.get(1, 0)) == ((1 << 1) | (1 << 5)), "Sitzflags la_jeepw: SEAT0 / SEAT15", str(fl))
+	check(BodyAnim.seat_kind(int(fl.get(0, 0))) == "drive" and BodyAnim.seat_kind(int(fl.get(1, 0))) == "passenger"
+		and BodyAnim.seat_kind(1 | (1 << 7)) == "motorbike" and BodyAnim.seat_kind((1 << 1) | (1 << 8)) == ""
+		and BodyAnim.seat_kind(1 | (1 << 4)) == "", "Sitzhaltung: Fahrer !ridic, Mitfahrer !spol, Motorrad !namotorce, Bordwaffe/Panzer unverändert")
+	var veh: Vehicle = null
+	for v in get_tree().get_nodes_in_group("vehicles"):
+		if v is Vehicle and not v.armored and v.seats.size() >= 2:
+			veh = v
+			break
+	if veh == null:
+		check(true, "Kein Fahrzeug in der Prüfmission (Insassen nur über Sitzflags geprüft)")
+		return
+	var fd := BodyAnim.seat_kind(int(BodyAnim.seat_flags(veh.model_path).get(0, 0)))
+	if veh.board(e, true):
+		await seconds(0.6)
+		check(fd == "" or (body.state == "vehicle" and anim.current_animation == BodyAnim.full(fd)),
+			"Fahrer im Fahrzeug: Sitzclip", "%s %s" % [fd, anim.current_animation])
+		veh.leave(e)
+		await seconds(0.5)
+		check(body.seat == "" and body.state != "vehicle", "Nach dem Aussteigen: normale Haltung")
+
+
 func _run() -> void:
 	for i in 600:
 		if mission() and mission().squad and mission().squad.leader():
@@ -257,6 +378,8 @@ func _run() -> void:
 	check(e.model.body.death_clip(1, Vector3(0, 0, -1), "torso", "") in [BodyAnim.full("death_c1"), BodyAnim.full("death_c2"),
 		BodyAnim.full("death_c3"), BodyAnim.full("death_c4")], "Tod hockend: #-death*")
 	check(e.model.body.death_clip(2, Vector3(0, 0, 1), "torso", "").begins_with("m_deathleh"), "Tod liegend: #deathleh*")
+
+	await _test_b004(e, t)
 
 	# --- Messer: schneller, Treffer im Nahbereich, von hinten tödlich ---
 	s.equip(["", "", "", "", "knife"])

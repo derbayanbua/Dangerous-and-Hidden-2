@@ -533,9 +533,20 @@ func _on_action(kind: String, duration: float) -> void:
 			_vm_play("arm")
 		"throw":
 			# Granate in der Hand: FPV-Wurf so getaktet, dass sie zum selben Zeitpunkt die Hand verlässt
-			var rel := float(_vm_info.get("release", 0.0))
 			var left: float = target._throw_left if is_instance_valid(target) else 0.0
 			var w := target.current_weapon()
+			# B-012: Schnellwurf (G) mit Waffe in der Hand – für den Wurf das Granaten-FPV-Modell zeigen und dessen
+			# Wurfclip abspielen, danach wieder die Waffe ziehen (vorher nur Wegstecken/Ziehen der Waffe = kein Wurf)
+			var gw: Weapon = target.weapons[WeaponData.Slot.GRENADE] if target.weapons.size() > WeaponData.Slot.GRENADE else null
+			if w and w.data.slot != WeaponData.Slot.GRENADE and gw and left > 0.0 and not OrigWeapons.fpv_info(OrigWeapons.fpv_key(gw.data, target.team)).is_empty():
+				_on_weapon_changed(gw)
+				w = gw
+				var back := w
+				var tw := target.current_weapon()
+				get_tree().create_timer(maxf(duration, left + 0.3), false).timeout.connect(func():
+					if is_instance_valid(target) and target.current_weapon() == tw and _vm_key == OrigWeapons.fpv_key(back.data, target.team):
+						_on_weapon_changed(tw))
+			var rel := float(_vm_info.get("release", 0.0))
 			if w and w.data.slot == WeaponData.Slot.GRENADE and rel > 0.0 and left > 0.0:
 				var ln2: Dictionary = _vm_info.get("lengths", {})
 				var shot: Array = (_vm_info.get("actions", {}) as Dictionary).get("shot", [])
@@ -715,7 +726,7 @@ func _process(delta: float) -> void:
 	if fpv_active:
 		var eye: Vector3 = target.model.camera_point(true) if target.model and target.model.orig_figure else target.eye_position()
 		var right := Vector3(cos(yaw), 0, -sin(yaw))
-		_pivot.global_position = eye + right * target.lean * 0.35
+		_pivot.global_position = _safe_pivot(eye + right * target.lean * 0.35, PIVOT_MARGIN_FPV)
 		_pivot.global_rotation = Vector3(lpitch, lyaw, -target.lean * 0.12)
 		_arm.spring_length = 0.0
 		_arm.position = Vector3.ZERO
@@ -743,12 +754,35 @@ func _process(delta: float) -> void:
 		var cm: Array = CAM_MODES[cam_mode]
 		var p: Vector3 = target.model.camera_point(false) if target.model else target.eye_position() + Vector3.UP * 0.2
 		var right2 := Vector3(cos(yaw), 0, -sin(yaw))
-		_pivot.global_position = p + right2 * target.lean * 0.35
+		_pivot.global_position = _safe_pivot(p + right2 * target.lean * 0.35, _sph.radius + _arm.margin)
 		var lim := float(cm[2])
 		_pivot.global_rotation = Vector3(clampf(lpitch, -lim, lim), lyaw, 0.0)
 		_arm.position = Vector3.ZERO
 		_dist = move_toward(_dist, float(cm[0]), float(cm[3]) * delta)
 		_arm.spring_length = _dist
+
+
+## Drehpunkt nicht hinter/in Wände legen (Fix A1 24.10.2026): Dummy camera3RD/cameraFPV und der Lehnversatz liegen
+## außerhalb der Figurenkapsel (liegend cameraFPV 0,6 m vor der Wurzel) und gerieten an Wänden in/hinter die Geometrie –
+## der SpringArm prüft erst AB dem Drehpunkt, die Kamera sah dann durch die Wand. Strahl von der Körperachse (senkrecht
+## unter/über dem Drehpunkt auf Drehpunkthöhe) zum Drehpunkt, bei Treffer davor mit Abstand `margin` [E: Original
+## 0x468130 stellt die Kamera mit der Kugel aus gamecam.set frei, die Prüfung ab dem Figurenframe ist nicht dekodiert].
+const PIVOT_MARGIN_FPV := 0.12     ## > Ecken der Nahebene (near 0,05 m, 16:9, FOV ≤ 75° ≈ 0,08 m)
+
+
+func _safe_pivot(p: Vector3, margin: float) -> Vector3:
+	var base := Vector3(target.global_position.x, p.y, target.global_position.z)
+	var d := p - base
+	var len := d.length()
+	if len < 0.001 or Game.cli.has("collision_legacy"):
+		return p
+	var q := PhysicsRayQueryParameters3D.create(base, p + d / len * margin, 1)
+	q.exclude = target.exclude_rids()
+	q.hit_back_faces = true
+	var h := get_world_3d().direct_space_state.intersect_ray(q)
+	if h.is_empty():
+		return p
+	return base + d / len * maxf(0.0, base.distance_to(h.position) - margin)
 
 
 ## Wackeln der Blickrichtung beim Zoomen (hd2.exe 0x466970, Kamera +0x290): Amplitude A = 0,002 bei Kimme/Korn;

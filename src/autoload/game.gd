@@ -98,10 +98,7 @@ const ORIG_SPECIAL_SCRIPTS := {"af6_raubvoegel": "res://src/missions/af6_raubvoe
 
 ## Original-Missionen anmelden (Titel aus den Originaltexten; fehlt der Cache, bleibt der Ordnername).
 func _register_orig_missions() -> void:
-	var texts = null
-	var f := FileAccess.open(OrigLevel.cache_root() + "/texts_german.json", FileAccess.READ)
-	if f:
-		texts = JSON.parse_string(f.get_as_text())
+	var texts = Settings.orig_texts()   # B-007: gewählte Sprachfassung
 	for e in ORIG_CAMPAIGN + [ORIG_TRAINING]:
 		var k: int = e[2]
 		var title: String = e[1]
@@ -684,9 +681,8 @@ func briefing_text(id: String) -> String:
 	var m: Dictionary = MISSIONS.get(id, {})
 	if not m.has("orig_texts"):
 		return m.get("briefing", "")
-	var f := FileAccess.open(OrigLevel.cache_root() + "/texts_german.json", FileAccess.READ)
-	var texts = JSON.parse_string(f.get_as_text()) if f else null
-	if typeof(texts) != TYPE_DICTIONARY:
+	var texts: Dictionary = Settings.orig_texts()   # B-007: gewählte Sprachfassung
+	if texts.is_empty():
 		return "(Originaltexte fehlen: tools/convert_mission.py ausführen)"
 	var lines: PackedStringArray = []
 	var ids: Array = m["orig_texts"]

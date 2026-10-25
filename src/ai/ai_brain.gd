@@ -34,6 +34,8 @@ var _off_check := 0.0
 var _detour := 0.0
 var _detour_sign := 1.0
 var _human_tries := 0
+var _climb_retry := 0.0
+var _climb_dir := Vector3.ZERO
 
 
 func setup(s: Soldier) -> void:
@@ -46,6 +48,42 @@ func setup(s: Soldier) -> void:
 	agent.height = 1.8
 	agent.path_max_distance = 3.0
 	s.add_child(agent)
+	agent.link_reached.connect(_on_link_reached)
+
+
+## Navigationsverbindung erreicht: Leiter (Mission.ladder_links, Meta „ladder“/„ladder_top“) → hinauf-/hinunterklettern
+## wie der Spieler per Benutzen (OrigLadder.climb); der Pfad geht danach am anderen Ende weiter.
+func _on_link_reached(details: Dictionary) -> void:
+	var link = details.get("owner")
+	if not (link is NavigationLink3D) or soldier == null or soldier.is_climbing():
+		return
+	if link.has_meta("climb"):
+		# Kletterstelle (Mission._bridge_islands): hinauf wie der Spieler per Sprungtaste (Soldier.try_climb), hinunter
+		# einfach weiterlaufen (Absprung ≤ CLIMB_MAX)
+		var to: Vector3 = details.get("link_exit_position", link.end_position)
+		var from: Vector3 = details.get("link_entry_position", soldier.global_position)
+		if to.y - from.y > Soldier.STEP_HEIGHT:
+			var d := to - soldier.global_position
+			d.y = 0.0
+			if d.length() > 0.05:
+				soldier.look_yaw = atan2(-d.x, -d.z)
+			soldier.stance_request = Soldier.Stance.STAND
+			if not soldier.try_climb():
+				_climb_retry = 1.5
+				_climb_dir = d.normalized()
+		return
+	if not link.has_meta("ladder"):
+		return
+	var bottom = link.get_meta("ladder")
+	var top = link.get_meta("ladder_top", null)
+	if not is_instance_valid(bottom):
+		return
+	var at: Vector3 = details.get("link_entry_position", soldier.global_position)
+	var use = bottom
+	if top != null and is_instance_valid(top) and at.distance_to(top.global_position) < at.distance_to(bottom.global_position):
+		use = top
+	if use.can_interact(soldier):
+		use.climb(soldier)
 
 
 # --- Bewegung ----------------------------------------------------------------
@@ -92,11 +130,20 @@ func update_movement(delta: float, face_move := true) -> void:
 	dir.y = 0
 	if direct_when_off_mesh:
 		_off_check -= delta
-		if _off_check <= 0.0:
+		if _off_check <= 0.0 and NavigationServer3D.map_get_iteration_id(agent.get_navigation_map()) > 0:
 			_off_check = 0.5
 			var cp := NavigationServer3D.map_get_closest_point(agent.get_navigation_map(), soldier.global_position)
 			_off_mesh = cp.distance_to(soldier.global_position) > OFF_MESH_DIST
 	var direct := direct_when_off_mesh and _off_mesh
+	if _climb_retry > 0.0:
+		# Kletterstelle: an die Wand herantreten und erneut hinaufklettern (try_climb braucht ≤ 1 m Abstand)
+		_climb_retry -= delta
+		if _climb_dir.length() > 0.1:
+			soldier.look_yaw = atan2(-_climb_dir.x, -_climb_dir.z)
+			soldier.move_input = _climb_dir
+		if not soldier.is_climbing() and soldier.try_climb():
+			_climb_retry = 0.0
+		return
 	if dir.length() < 0.05 or direct:
 		# kein Pfad (z. B. Navigationsnetz noch nicht fertig): direkt laufen
 		dir = _move_target - soldier.global_position

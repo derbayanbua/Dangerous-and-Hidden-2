@@ -106,7 +106,46 @@ func _run() -> void:
 		check(is_instance_valid(corpse) and SAS.count_of(FieldInventory.view(corpse), am) == 0, "Leiche ohne Magazine (Server-Stand)")
 	ui.close()
 	check(not ui.is_open(), "Inventar geschlossen")
+	await _helmet(m)
 	_done()
+
+
+## B-014: der Server schießt den Helm des Clients ab (test_inventory) → Flug beim Client, Helm weg, Ablagestapel vom
+## Server; Client hebt ihn auf und setzt ihn auf (Anfrage an den Server)
+func _helmet(_m: Node) -> void:
+	print("INV-CLIENT: warte auf Helmtreffer")
+	var off := func() -> bool: return is_instance_valid(_me()) and Helmet.head_item(_me()) < 0
+	check(await _wait(off, 120.0), "MP-Helm: Helm vom Kopf (Server-Stand beim Client)")
+	var saw_body := not get_tree().get_nodes_in_group("helmet_bodies").is_empty()
+	var pile_of := func() -> Node:
+		for p in get_tree().get_nodes_in_group("field_piles"):
+			for e in FieldInventory.view(p)["items"]:
+				if Helmet.is_head_item(int(e[0])):
+					return p
+		return null
+	var has_pile := func() -> bool:
+		if not get_tree().get_nodes_in_group("helmet_bodies").is_empty():
+			saw_body = true
+		return pile_of.call() != null
+	check(await _wait(has_pile, 30.0), "MP-Helm: Helm liegt als Gegenstand (Ablagestapel vom Server)")
+	check(saw_body, "MP-Helm: Flug des Helms beim Client dargestellt")
+	var pile: Node = pile_of.call()
+	if pile == null or not is_instance_valid(_me()):
+		return
+	var item := -1
+	for e in FieldInventory.view(pile)["items"]:
+		if Helmet.is_head_item(int(e[0])):
+			item = int(e[0])
+	var me := _me()
+	me.global_position = (pile as Node3D).global_position + Vector3(0.8, 0.4, 0.0)
+	me.velocity = Vector3.ZERO
+	await get_tree().create_timer(1.5).timeout
+	FieldInventory.request(me, pile, "items", item, me, "head")
+	var on := func() -> bool: return is_instance_valid(_me()) and Helmet.head_item(_me()) == item
+	check(await _wait(on, 30.0), "MP-Helm: aufgehoben und aufgesetzt (vom Server bestätigt)", str(item))
+	var mdl = _me().model if is_instance_valid(_me()) else null
+	if mdl and mdl.orig_figure:
+		check(mdl.helmet_item == item, "MP-Helm: Helmmodell wieder am Kopf")
 
 
 func _me() -> Soldier:

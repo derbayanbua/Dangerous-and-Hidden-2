@@ -141,5 +141,8 @@ func info_lines() -> PackedStringArray:
 		"Kill-Cam: %s" % _yn(r.get("kill_cam", false)),
 		"Namen über Spielern: %s" % _yn(r.get("show_names", true)),
 		"Trefferanzeige (Schütze): %s" % _yn(r.get("hit_indicator", true)),
-		"Treffer-Richtungsanzeige (Getroffener): %s" % _yn(r.get("hurt_indicator", true))]
+		"Treffer-Richtungsanzeige (Getroffener): %s" % _yn(r.get("hurt_indicator", true)),
+		# B-011: Artillerie/Luftangriff per Funkgerät
+		"Funk-Unterstützung: %s" % (["aus", "Artillerie", "Luftangriff", "Artillerie + Luftangriff"][clampi(int(r.get("support_strike", 0)), 0, 3)]
+			+ ("" if int(r.get("support_strike", 0)) == 0 else " (alle %d min%s)" % [int(r.get("support_interval_min", 5)), ", KI" if bool(r.get("support_bots", false)) else ""]))]
 	return out

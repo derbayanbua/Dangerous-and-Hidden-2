@@ -47,13 +47,20 @@ const RULE_KEYS := {
 	"max_ping": "maxping", "max_freq": "maxfreq", "max_inactivity": "maxinactivity", "autorestart": "autorestart",
 	# Ergänzung (kein Original-Schlüssel): Namen über Spielern / Trefferanzeige erlauben (src/ui/mp_feedback.gd)
 	"show_names": "shownames", "hit_indicator": "hitindicator", "hurt_indicator": "hurtindicator", "kill_cam": "killcam",
+	# B-011 (Ergänzung): Unterstützung per Funkgerät (SupportStrike): 0 aus, 1 Artillerie, 2 Luftangriff, 3 beide;
+	# Intervall in Minuten; KI-Soldaten dürfen das Funkgerät nutzen
+	"support_strike": "supportstrike", "support_interval_min": "supportinterval", "support_bots": "supportbots",
 }
 ## Wertebereiche: Menü (0x629EE0) bzw. Konsole; bots = Ergänzung (KI-Soldaten je Team); 0 = „No limit“ (T2010)
 const RULE_RANGE := {
 	"max_players": [2, 32], "score_limit": [0, 999], "time_limit_min": [0, 99], "round_count": [1, 999],
 	"warmup_s": [0, 99], "respawn_s": [3, 99], "spawn_protect_s": [0, 15], "inverse_damage": [0, 999],
 	"bots_per_team": [0, 16], "max_ping": [0, 9999], "max_freq": [0, 100], "max_inactivity": [0, 3600],
+	"support_strike": [0, 3], "support_interval_min": [1, 60],
 }
+## B-011: Unterstützung standardmäßig aus (nur wenn in den Servereinstellungen erlaubt)
+const SUPPORT_DEFAULTS := {"support_strike": 0, "support_interval_min": 5, "support_bots": false}
+var support: SupportStrike          ## Artillerie/Luftangriff der laufenden Karte (src/combat/support_strike.gd)
 ## Server-Grenzen (Launcher-Standard „No limit“ = 0): Rauswurf erst, wenn der Ping so lange ununterbrochen über
 ## maxping liegt (Annahme, Original-Prüfung nicht dekodiert); Flood-Schutz: höchstens FLOOD_MSGS Chatzeilen in
 ## FLOOD_WINDOW_S, sonst FLOOD_MUTE_S stumm (Annahme)
@@ -86,6 +93,7 @@ static func style_defaults(m: int) -> Dictionary:
 	var d := (STYLE_DEFAULTS[col] as Dictionary).duplicate()
 	d.merge(LIMIT_DEFAULTS)
 	d.merge(FEEDBACK_DEFAULTS)
+	d.merge(SUPPORT_DEFAULTS)
 	d["kill_cam"] = m == Mode.DEATHMATCH          # Kill-Cam (Ergänzung): Standard nur im Deathmatch an
 	return d
 
@@ -1276,6 +1284,10 @@ func mission_ready(_m: Node) -> void:
 	if not is_online:
 		return
 	print("NET: Mission bereit (Server: ", multiplayer.is_server(), ")")
+	if _m and not _m.get_node_or_null("SupportStrike"):
+		support = SupportStrike.new()
+		_m.add_child(support)
+		support.setup(_m)
 	if multiplayer.is_server():
 		if not dedicated:
 			_server_spawn(1)
@@ -1299,6 +1311,8 @@ func _client_ready() -> void:
 				s.global_position, s.look_yaw, int(_gen.get(pid, 0)), players.get(pid, {}).get("kit", []))
 	_players.rpc_id(id, players)
 	_obj_states.rpc_id(id, _object_states())      # Türen: aktueller Stand für Spät-Beitretende
+	if is_instance_valid(support):
+		support.sync_to(id)                        # B-011: Funkgerät liegt/getragen
 	_server_spawn(id)
 
 
@@ -1573,6 +1587,10 @@ func _do_act(s: Soldier, kind: String, a: Vector3, b: Vector3, wid: String) -> v
 	var wd: WeaponData = WeaponDB.get_weapon(StringName(wid)) if wid != "" else null
 	match kind:
 		"shot":
+			# B-012: Zweibein-/Dreibein-MG nur aus erlaubter Haltung (Server prüft; Haltung oder angeforderte Haltung)
+			if multiplayer.is_server() and wd and not is_instance_valid(s.mounted) and s.vehicle == null \
+					and 2 - maxi(int(s.stance), int(s.stance_request)) > Soldier.fire_stance_max(wd):
+				return
 			Ballistics.fire(s, a, b, wd, s.exclude_rids(), s.team)
 			Effects.muzzle_flash(a + b * 0.9, b)
 			Effects.play(Effects.weapon_sound(wd), a, 0.0, 1.0, wd.noise_radius * 2.0)
@@ -1723,6 +1741,21 @@ func inventory_broadcast(key: String, state: Dictionary) -> void:
 @rpc("authority", "call_remote", "reliable")
 func _inv_state(key: String, state: Dictionary) -> void:
 	FieldInventory.receive_state(key, state)
+
+
+## B-014 Helm (Absprache B-011, docs/status/backlog_b014.md): Server meldet einen abgeschossenen Helm; Clients zeigen
+## denselben Flug (nur Darstellung). Inventar des Soldaten und der spätere Ablagestapel kommen über _inv_state.
+func helmet_knocked(soldier_key: String, item: int, xf: Transform3D, vel: Vector3, spin: Vector3) -> void:
+	if is_online and multiplayer.is_server():
+		_helmet_off.rpc(soldier_key, item, xf, vel, spin)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _helmet_off(soldier_key: String, item: int, xf: Transform3D, vel: Vector3, spin: Vector3) -> void:
+	var s := FieldInventory.node_of(soldier_key)
+	var parent: Node = s.get_parent() if s and s.get_parent() else Game.current_mission()
+	if parent:
+		Helmet.spawn_body(parent, item, xf, vel, spin, false)
 
 
 ## Fahrer meldet die Fahrzeuglage; Ein-/Aussteigen anderer kommt über deren Zustand (Sitz)
@@ -2324,7 +2357,8 @@ func server_info() -> Dictionary:
 			"team_balance": bool(rule("team_balance")), "third_person": bool(rule("third_person")),
 			"spawn_protect_s": int(rule("spawn_protect_s")), "kill_cam": bool(rule("kill_cam")),
 			"show_names": bool(rule("show_names")), "hit_indicator": bool(rule("hit_indicator")),
-			"hurt_indicator": bool(rule("hurt_indicator"))},
+			"hurt_indicator": bool(rule("hurt_indicator")), "support_strike": int(rule("support_strike")),
+			"support_interval_min": int(rule("support_interval_min")), "support_bots": bool(rule("support_bots"))},
 		# Spiel-Info (gameinfo.4ds): Version (Filter „Selbe Version“ T2579), Team-/Spieler-Status, Runde
 		"ver": String(ProjectSettings.get_setting("application/config/version")), "ts": [int(team_score[0]), int(team_score[1])],
 		"w": team_wins, "rn": round_no, "st": game_state, "plist": _info_players()}
@@ -3734,6 +3768,10 @@ func _use_by(id: int, pid: String) -> void:
 ## Spielziel für einen KI-Gruppenführer (Server): Zielwahl in BotGoals (Zonen angreifen/verteidigen/halten nach
 ## Weglänge über das Netz, Aufgabenobjekte benutzen/verteidigen, Gegner suchen; Netzpunkt, kein Pendeln)
 func bot_goal(b: BotBrain) -> Vector3:
+	if is_instance_valid(support):
+		var sg: Vector3 = support.bot_goal(b)     # B-011: Funkgerät holen (Regel supportbots)
+		if sg.is_finite():
+			return sg
 	var r := BotGoals.choose(b)
 	var best: Dictionary = r.get("best", {})
 	return best["pos"] if not best.is_empty() else Vector3.INF
@@ -3744,3 +3782,44 @@ func _on_nav(b: BotBrain, p: Vector3) -> Vector3:
 	var map := b.soldier.get_world_3d().navigation_map
 	var q := NavigationServer3D.map_get_closest_point(map, p)
 	return q if q != Vector3.ZERO or p.length() < 1.0 else p
+
+
+# --- B-011: Artillerie/Luftangriff per Funkgerät (Logik in src/combat/support_strike.gd) -------------------------
+
+@rpc("authority", "call_local", "reliable")
+func _sup_radio(state: int, kind: int, pos: Vector3, who: int) -> void:
+	if is_instance_valid(support):
+		support.apply_radio(state, kind, pos, who)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _sup_req_pickup() -> void:
+	if multiplayer.is_server() and is_instance_valid(support):
+		support.server_pickup(multiplayer.get_remote_sender_id())
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _sup_req_call(kind: int, pos: Vector3) -> void:
+	if not multiplayer.is_server() or not is_instance_valid(support):
+		return
+	var id := multiplayer.get_remote_sender_id()
+	var err: String = support.server_call(id, kind, pos)
+	if err != "":
+		_sup_denied.rpc_id(id, err)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _sup_denied(text: String) -> void:
+	Events.say(text, 3.0)
+
+
+@rpc("authority", "call_local", "reliable")
+func _sup_strike(kind: int, pos: Vector3, caller: int, delay: float, plane_dir: Vector3) -> void:
+	if is_instance_valid(support):
+		support.show_strike(kind, pos, caller, delay, plane_dir)
+
+
+@rpc("authority", "call_local", "reliable")
+func _sup_boom(kind: int, pts: Array) -> void:
+	if is_instance_valid(support):
+		support.show_boom(kind, pts)

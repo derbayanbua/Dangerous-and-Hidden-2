@@ -31,6 +31,11 @@ var _yaw_prev := INF
 var _turn_t := 0.0
 var state := ""            ## Dauerzustand für Tests/Kontrollbilder: move/idle/lean/ladder/swim/surrender/captive/…
 var clip := ""             ## zuletzt gewählter Ganzkörperclip
+var seated := ""           ## "sit" / "turk": sitzt (HUMAN_ACTIVITY_Sit / _Turk) bis Bewegung, Kampf oder Aufstehen
+var act_upper := ""        ## laufender Oberkörper-Tätigkeitsclip (h_*, Haltungsschicht spielt ihn)
+var act_left := 0.0
+var activity_id := -1      ## laufende Tätigkeit (anim.sav-Satz), -1 = keine
+var seat := ""             ## Fahrzeughaltung: "drive" / "passenger" / "motorbike" / ""
 
 
 static func table() -> Dictionary:
@@ -79,6 +84,69 @@ static func event_time(c: String, ev: String) -> float:
 	return -1.0
 
 
+## Tätigkeitsclip (HUMAN_ACTIVITY_*, anim.sav-Satz id, docs/re_notes_weapons.md §13) je Haltung:
+## {clip, layer: "full"|"upper"} oder {} (Satz ohne Clip). Leere Haltung → Clip der stehenden Haltung [E].
+static func activity_clip(id: int, stance: int) -> Dictionary:
+	var row = (table().get("activity", {}) as Dictionary).get(str(id))
+	if not (row is Array) or (row as Array).is_empty():
+		return {}
+	var e = row[clampi(stance, 0, row.size() - 1)]
+	if not (e is Dictionary):
+		e = row[0]
+	return e if e is Dictionary else {}
+
+
+## Sitzflags des Fahrzeugmodells: Frameparameter „SEAT<Ziffern>“ = Bitmaske (Ziffer n → Bit n, re_notes_ju88 §2.5)
+static var _seat_cache := {}
+
+
+static func seat_flags(model_path: String) -> Dictionary:
+	if model_path == "":
+		return {}
+	if _seat_cache.has(model_path):
+		return _seat_cache[model_path]
+	var out := {}
+	var f := FileAccess.open(model_path, FileAccess.READ)
+	if f and f.get_length() > 20 and f.get_32() == 0x46546C67:
+		f.get_32()
+		f.get_32()
+		var ln := f.get_32()
+		f.get_32()
+		var j = JSON.parse_string(f.get_buffer(ln).get_string_from_utf8())
+		if typeof(j) == TYPE_DICTIONARY:
+			for n in j.get("nodes", []):
+				var nm := String(n.get("name", "")).to_upper()
+				var ex = n.get("extras", {})
+				if not nm.begins_with("SEAT") or nm.length() != 6 or not nm.substr(4).is_valid_int() \
+						or typeof(ex) != TYPE_DICTIONARY:
+					continue
+				var p := String(ex.get("params", "")).to_upper().strip_edges()
+				var mask := 0
+				if p.begins_with("SEAT"):
+					var q := 4
+					while q < p.length() and p[q].is_valid_int():
+						mask |= 1 << int(p[q])
+						q += 1
+				out[int(nm.substr(4))] = mask
+	_seat_cache[model_path] = out
+	return out
+
+
+## Haltung eines Insassen nach Sitzflags [B Daten, P Deutung]: Bit 0 Fahrer („!ridic“), Bit 7 Motorrad/Kleinst-U-Boot
+## („!namotorce“), Bit 1 sitzender Mitfahrer („!spol“); Bit 4 (in der Panzerung verborgen) und Bit 8 (Bordwaffe:
+## Haltung über die Waffe) behalten die bisherige Darstellung → "".
+static func seat_kind(mask: int) -> String:
+	if mask & (1 << 8) or mask & (1 << 4):
+		return ""
+	if mask & (1 << 7):
+		return "motorbike"
+	if mask & 1:
+		return "drive"
+	if mask & (1 << 1):
+		return "passenger"
+	return ""
+
+
 static func move_clip(stance: int, d: String, m: int) -> String:
 	var lst: Array = ((table().get("move", {}) as Dictionary).get(str(stance), {}) as Dictionary).get(d, [])
 	return String(lst[m]) if m < lst.size() else ""
@@ -101,8 +169,12 @@ func setup(player: AnimationPlayer) -> void:
 			for c in _table["move"][st][d]:
 				loops[String(c)] = true
 	for k in ["idle_zb", "crouch_zb", "prone_zb", "swim", "swim_idle", "dive", "dive_move", "ladder_up", "ladder_down",
-			"tied", "wounded_lie"]:
+			"tied", "wounded_lie", "sit", "turk", "drive", "passenger", "motorbike"]:
 		loops[full(k)] = true
+	for row in (_table.get("activity", {}) as Dictionary).values():
+		for e in row:
+			if e is Dictionary and String(e.get("layer", "")) == "full" and anim.has_animation(String(e["clip"])):
+				anim.get_animation(String(e["clip"])).loop_mode = Animation.LOOP_NONE
 	for c in loops:
 		if c != "" and anim.has_animation(c):
 			anim.get_animation(c).loop_mode = Animation.LOOP_LINEAR
@@ -142,13 +214,65 @@ func stop_oneshot() -> void:
 func arms_free() -> bool:
 	if oneshot != "" and oneshot_arms:
 		return true
-	return state in ["ladder", "swim", "climb", "captive_tied", "wounded_lie"]
+	if seat in ["drive", "motorbike"]:
+		return true
+	return state in ["ladder", "swim", "climb", "captive_tied", "wounded_lie", "sit", "turk"]
 
 
 func weapon_hidden() -> bool:
-	if oneshot != "" and oneshot_arms and oneshot_kind == "use":
-		return true          # Benutzen/Aufheben/Sprengsatz: beide Hände frei (Waffe am Rücken gedacht) [D]
-	return state in ["ladder", "swim", "surrender", "captive", "captive_tied", "wounded_lie"]
+	if oneshot != "" and oneshot_arms and oneshot_kind in ["use", "activity", "sit"]:
+		return true          # Benutzen/Aufheben/Sprengsatz/Tätigkeit: beide Hände frei (Waffe am Rücken gedacht) [D]
+	if act_upper != "" or seat in ["drive", "motorbike"]:
+		return true
+	return state in ["ladder", "swim", "surrender", "captive", "captive_tied", "wounded_lie", "sit", "turk"]
+
+
+## Tätigkeit starten (HUMAN_ACTIVITY_*): Satz id je Haltung; Ganzkörperclip als Einmalaktion, Oberkörperclip über die
+## Haltungsschicht (Beine: Ruhe). Rückgabe: Dauer (s), 0 = Satz ohne Clip.
+func start_activity(id: int, stance: int) -> float:
+	stop_activity()
+	var e := activity_clip(id, stance)
+	var c := String(e.get("clip", ""))
+	if c == "" or not has(c):
+		return 0.0
+	var ln := anim.get_animation(c).length
+	activity_id = id
+	if String(e.get("layer", "")) == "upper":
+		act_upper = c
+		act_left = ln
+	elif not play_oneshot(c, ln, true, "activity"):
+		activity_id = -1
+		return 0.0
+	return ln
+
+
+func stop_activity() -> void:
+	if oneshot_kind == "activity":
+		stop_oneshot()
+	act_upper = ""
+	act_left = 0.0
+	activity_id = -1
+
+
+## Hinsetzen (kind "sit" = Stuhl/Bank, "turk" = Schneidersitz): Übergangsclip, dann Sitzschleife.
+func sit_down(kind: String) -> bool:
+	if kind not in ["sit", "turk"] or not has(full(kind)):
+		return false
+	stop_activity()
+	seated = kind
+	play_oneshot(full(kind + "_down"), -1.0, true, "sit")
+	return true
+
+
+## Aufstehen aus dem Sitzen (Übergangsclip „!zeseduR“ / „#vstavamtur“).
+func stand_up() -> void:
+	if seated == "":
+		return
+	var k := seated
+	seated = ""
+	if oneshot_kind == "sit":
+		stop_oneshot()
+	play_oneshot(full(k + "_up"), -1.0, true, "sit")
 
 
 ## Lokale Bewegungsrichtung (Sektor) mit Hysterese: Winkel 0 = vorwärts (-Z), + = rechts.
@@ -198,6 +322,21 @@ func update(delta: float, s, stance: int, speed: float, lean: float, basis: Basi
 		on_hit(stance, &"torso", Vector3.ZERO, speed)
 	_hit_signal = false
 	last_health = hp
+	# Fahrzeuginsasse: Sitzhaltung nach den Sitzflags des Modells (Fahrer/Mitfahrer/Motorrad)
+	seat = ""
+	var veh = s.get("vehicle")
+	if veh is Node and is_instance_valid(veh) and alive:
+		seat = seat_kind(int(seat_flags(String(veh.get("model_path") if veh.get("model_path") != null else "")).get(
+				int(s.get("seat_index")), 0)))
+		if seat != "" and has(full(seat)):
+			last_stance = stance
+			seated = ""
+			stop_activity()
+			if oneshot != "":
+				stop_oneshot()
+			state = "vehicle"
+			return {"clip": full(seat), "rate": 1.0, "blend": 0.25}
+		seat = ""
 	# Haltungswechsel
 	if last_stance >= 0 and stance != last_stance and alive:
 		var key: String = TRANSITIONS.get("%d%d" % [last_stance, stance], "")
@@ -213,6 +352,22 @@ func update(delta: float, s, stance: int, speed: float, lean: float, basis: Basi
 	var climbing: bool = s.has_method("is_climbing") and s.is_climbing()
 	if climbing and oneshot != "" and oneshot_kind != "climb":
 		stop_oneshot()
+	# Tätigkeit/Sitzen enden bei Bewegung, Kampf oder Tod (wie Skriptanimationen, ls_anim._ai_interrupted) [E]
+	var interrupted: bool = not alive or speed > 0.4 or _alarmed(s)
+	if (oneshot_kind == "activity" or act_upper != "") and interrupted:
+		stop_activity()
+	if act_upper != "":
+		act_left -= delta
+		if act_left <= 0.0:
+			act_upper = ""
+			activity_id = -1
+	if seated != "" and interrupted:
+		if alive and speed <= 0.4:
+			stand_up()
+		else:
+			seated = ""
+			if oneshot_kind == "sit":
+				stop_oneshot()
 	# Einmalaktion läuft
 	if oneshot != "":
 		oneshot_left -= delta
@@ -221,6 +376,9 @@ func update(delta: float, s, stance: int, speed: float, lean: float, basis: Basi
 		else:
 			state = oneshot_kind if oneshot_kind != "" else "action"
 			return {"clip": oneshot, "rate": oneshot_rate, "blend": 0.12, "keep": true}
+	if seated != "":
+		state = seated
+		return {"clip": full(seated), "rate": 1.0, "blend": 0.2}
 	var v: Vector3 = s.get("velocity") if s.get("velocity") != null else Vector3.ZERO
 	var local3 := basis.inverse() * v
 	var local := Vector2(local3.x, local3.z)
@@ -325,10 +483,17 @@ func update(delta: float, s, stance: int, speed: float, lean: float, basis: Basi
 var _turn_left := false
 
 
+static func _alarmed(s) -> bool:
+	if not (s is Node):
+		return false
+	var b = (s as Node).get_node_or_null("EnemyBrain")
+	return b != null and (b.state == EnemyBrain.State.COMBAT or b.state == EnemyBrain.State.SEARCH)
+
+
 ## Treffer: Original-Trefferclip je Zone/Haltung (Tabelle 0x1A4AF); im Lauf nur ohne Ganzkörperclip (Beine laufen).
 func on_hit(stance: int, zone: StringName, local_from: Vector3, speed: float) -> void:
 	_hit_signal = true
-	if oneshot_kind in ["climb", "knife", "use"] or speed > 1.0:
+	if oneshot_kind in ["climb", "knife", "use", "sit"] or speed > 1.0 or seated != "" or seat != "":
 		return
 	var key := "hit_belly"
 	match String(zone):
@@ -350,6 +515,10 @@ func death_clip(stance: int, local_dir: Vector3, zone: String, kind: String) -> 
 	var keys: Array = []
 	if kind == "throat":
 		keys = ["death_throat"]
+	elif seated == "sit":
+		keys = ["death_sit1", "death_sit2"]      # Tode im Sitzen (anim.sav 0x2FEE „!smrtsed1/2“)
+	elif seated == "turk":
+		keys = ["death_turk"]
 	elif stance == 2:
 		keys = ["death_p1", "death_p2", "death_p4", "death_p5", "death_p6"]
 	elif stance == 1:

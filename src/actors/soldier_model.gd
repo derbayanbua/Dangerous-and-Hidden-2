@@ -314,6 +314,7 @@ func attach_orig(figure: Node3D) -> void:
 	_hand = figure.find_child("hw1", true, false) as Node3D
 	_setup_hold(figure)
 	_build_orig_hitboxes(figure)
+	refresh_helmet()
 	set_weapon(_weapon_data)   # Waffe vom Platzhaltersockel an die Hand der Figur umhängen
 
 
@@ -365,6 +366,82 @@ func _build_orig_hitboxes(figure: Node3D) -> void:
 	_set_puppet_hitboxes(orig_zones.size() < table.size())
 
 
+## --- Kopfgegenstand (B-014, Helmet) ------------------------------------------------------------------------
+## Helmmodell aus items.sav (Kopf-Platz) am Kopfgelenk „f“ der Original-Figur, dazu eine eigene Trefferfläche
+## (Zone „helmet“, Kiste des Helmmodells) – der Strahltest des Originals prüft das Helmmodell vor den Gelenkzonen.
+var helmet_item := -1
+var _helmet_mount: BoneAttachment3D
+var _helmet_vis: Node3D
+var _helmet_box: Hitbox
+
+
+func refresh_helmet() -> void:
+	if not is_instance_valid(orig_figure) or _soldier == null:
+		return
+	Helmet.ensure_default(_soldier)
+	var want := Helmet.head_item(_soldier)
+	if want == helmet_item and (want < 0 or is_instance_valid(_helmet_vis)):
+		return
+	if is_instance_valid(_helmet_vis):
+		_helmet_vis.queue_free()
+	if is_instance_valid(_helmet_box):
+		_helmet_box.get_parent().remove_child(_helmet_box)
+		_helmet_box.queue_free()
+	_helmet_vis = null
+	_helmet_box = null
+	helmet_item = want
+	if want < 0:
+		return
+	var sks := orig_figure.find_children("*", "Skeleton3D", true, false)
+	if sks.is_empty():
+		return
+	var sk := sks[0] as Skeleton3D
+	var bi := sk.find_bone(Helmet.HEAD_BONE)
+	if bi < 0:
+		return
+	var vis := Helmet.model_of(want)
+	if vis == null:
+		return
+	if not is_instance_valid(_helmet_mount):
+		_helmet_mount = BoneAttachment3D.new()
+		_helmet_mount.name = "HelmetMount"
+		sk.add_child(_helmet_mount)
+		_helmet_mount.bone_name = Helmet.HEAD_BONE
+	# Helmmodell liegt im Figurraum der Bindungslage → relativ zum Kopfgelenk in Ruhelage
+	var bone_in_fig: Transform3D = OrigWeapons._rel(orig_figure, sk) * sk.get_bone_global_rest(bi)
+	vis.name = "Helmet"
+	_helmet_mount.add_child(vis)
+	vis.transform = bone_in_fig.affine_inverse()
+	_helmet_vis = vis
+	var bb := Helmet.bounds(vis)
+	if bb.size.length() > 0.01:
+		# Original: Strahltest gegen das Helmmodell (Schale + Rand). Kiste = obere Teil der Hüllkiste ab
+		# Helm.BOX_FROM der Höhe, damit Schüsse ins Gesicht unter dem Rand die Kopfzone treffen [P]
+		var cut := bb.size.y * Helmet.BOX_FROM
+		var hbb := AABB(bb.position + Vector3(0, cut, 0), bb.size - Vector3(0, cut, 0))
+		var box := BoxShape3D.new()
+		box.size = hbb.size
+		var hb := Hitbox.create(_soldier, Helmet.ZONE, 1.0, box)
+		hb.name = "Hitbox_helmet"
+		hb.set_meta("bone", Helmet.HEAD_BONE)
+		(hb.get_child(0) as Node3D).position = hbb.get_center()
+		vis.add_child(hb)
+		_helmet_box = hb
+
+
+## Weltlage des Helms (Abflug), sonst Kopfhöhe
+func helmet_transform() -> Transform3D:
+	if is_instance_valid(_helmet_vis):
+		var bb := Helmet.bounds(_helmet_vis)
+		return _helmet_vis.global_transform.translated_local(bb.get_center())
+	return global_transform.translated_local(Vector3(0, 1.75, 0))
+
+
+## Hat die Figur eine eigene Helm-Trefferfläche? (sonst Näherung obere Kopfhälfte in Ballistics)
+func has_helmet_box() -> bool:
+	return is_instance_valid(_helmet_box)
+
+
 func _set_puppet_hitboxes(on: bool) -> void:
 	for h in root_pivot.find_children("*", "Hitbox", true, false):
 		(h as Hitbox).collision_layer = Hitbox.LAYER if on else 0
@@ -380,6 +457,8 @@ func show_zones(on: bool) -> void:
 		list.append_array(root_pivot.find_children("*", "Hitbox", true, false))
 	else:
 		list.append_array(orig_zones)
+	if is_instance_valid(_helmet_box):
+		list.append(_helmet_box)
 	for h in list:
 		var hb := h as Hitbox
 		if not is_instance_valid(hb):
@@ -427,6 +506,10 @@ func _detach_orig() -> void:
 	orig_figure.queue_free()
 	orig_figure = null
 	orig_zones.clear()
+	_helmet_mount = null
+	_helmet_vis = null
+	_helmet_box = null
+	helmet_item = -1
 	_set_puppet_hitboxes(true)
 	_orig_anim = null
 	body = null
@@ -662,9 +745,11 @@ func _update_hold(delta: float, speed: float, aim_pitch: float, aiming: bool) ->
 			_aim_mod.weight = 0.0
 		_update_ik(delta, false, "")
 		return
-	if bstate in ["surrender", "captive"]:
-		# Hände hoch (anim.sav „!zajatecST/DR/LE“): Oberkörperclip bis zum letzten Bild, dann stehen lassen
-		var hc := BodyAnim.upper("surrender%d" % (1 if bstate == "captive" else clampi(_anim_stance, 0, 2)))
+	if bstate in ["surrender", "captive"] or (body and body.act_upper != ""):
+		# Hände hoch (anim.sav „!zajatecST/DR/LE“) bzw. Oberkörper-Tätigkeit (HUMAN_ACTIVITY_*, BodyAnim.start_activity):
+		# Oberkörperclip bis zum letzten Bild, dann stehen lassen
+		var hc: String = body.act_upper if body.act_upper != "" else \
+				BodyAnim.upper("surrender%d" % (1 if bstate == "captive" else clampi(_anim_stance, 0, 2)))
 		if _hold_anim.has_animation(hc):
 			if _hold_clip != hc:
 				_hold_clip = hc
@@ -816,7 +901,9 @@ func _update_orig(speed: float) -> void:
 		var r := body.update(get_physics_process_delta_time(), _soldier, _anim_stance, speed, _lean, global_basis)
 		# Schwimmclips liegen mit der Wurzel 0,14 m unter dem Ursprung (Ursprung = Wasserlinie); der Soldat schwimmt
 		# mit dem Ursprung 1,4 m unter der Oberfläche (Soldier._update_swim) -> Figur so weit anheben
-		var lift := 1.4 if body.state == "swim" else 0.0
+		# Insassen: Ursprung der Sitzclips (!ridic/!spol/!namotorce) = Sitz-Frame SEATnn [P]; Soldier setzt seinen
+		# Ursprung 0,55 m unter den Sitz (Soldier._physics_process) -> Figur wieder auf den Sitz heben
+		var lift := 1.4 if body.state == "swim" else (0.55 if body.state == "vehicle" else 0.0)
 		if not is_equal_approx(orig_figure.position.y, lift):
 			orig_figure.position.y = move_toward(orig_figure.position.y, lift, get_physics_process_delta_time() * 4.0)
 		var c := String(r.get("clip", ""))

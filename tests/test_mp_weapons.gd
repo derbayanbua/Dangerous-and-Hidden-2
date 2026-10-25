@@ -323,9 +323,39 @@ func _phase_server() -> void:
 					cls_ok = false
 					cls_bad.append("%d/%d %s" % [t, c, w.data.id])
 	check(cls_ok, "Alle 6 Klassen beider Seiten nur mit kartenerlaubten Waffen (inkl. Schleicher)", str(cls_bad))
+	if String(Game.cli.get("skip_mg", "")) == "":
+		await _mg_stance_server(bots)
 	await _hits(m, bots)
 	await _emplacements(m, bots)
 	await _leave()
+
+
+## B-012: Server verwirft Schüsse eines Zweibein-MGs (MG 42, items.sav u9 = 0) aus stehender Haltung (Client-Aktion
+## „shot“ über Net._do_act wie beim Empfang vom Client), liegend werden sie ausgeführt.
+func _mg_stance_server(bots: Array) -> void:
+	# Host-Soldat, ohne echten Haltungswechsel (nur angeforderte Haltung kurz gesetzt, alles im selben Bild →
+	# keine Auswirkung auf die folgenden Treffermessungen)
+	var s: Soldier = Net._soldiers.get(1)
+	if not is_instance_valid(s) or s.stance != Soldier.Stance.STAND:
+		return
+	var req0 := s.stance_request
+	var mgd := WeaponDB.get_weapon(&"o_33")
+	var org := s.eye_position() + Vector3.UP * 50.0
+	s.stance_request = Soldier.Stance.STAND
+	var n0 := Ballistics.shots_fired
+	Net._do_act(s, "shot", org, Vector3.UP, String(mgd.id))
+	var standing_blocked := Ballistics.shots_fired == n0
+	var n1 := Ballistics.shots_fired
+	Net._do_act(s, "shot", org, Vector3.UP, "bren")
+	var bren_ok := Ballistics.shots_fired == n1 + 1
+	s.stance_request = Soldier.Stance.PRONE
+	var n2 := Ballistics.shots_fired
+	Net._do_act(s, "shot", org, Vector3.UP, String(mgd.id))
+	var prone_ok := Ballistics.shots_fired == n2 + 1
+	s.stance_request = req0
+	check(standing_blocked and prone_ok and bren_ok,
+		"Server: MG 42 nur liegend (stehender Client-Schuss verworfen), Bren stehend erlaubt")
+	await seconds(1.0)
 
 
 ## Nur Bedienhaltung an der Original-MG-Stellung (schneller Lauf: 1 KI je Seite)
@@ -575,7 +605,9 @@ func _check_zones(b: Soldier, p: String) -> void:
 				q.collide_with_areas = true
 				q.collide_with_bodies = false
 				h = space.intersect_ray(q)
-				if h.is_empty() or not (h.collider is Hitbox) or (h.collider as Hitbox).soldier == b:
+				# B-014: die Helmfläche liegt über dem Kopf (Original prüft sie vor den Gelenkzonen) – hier zählen nur
+				# die 10 Gelenkzonen, der Helm wird übersprungen (eigene Prüfung unten)
+				if h.is_empty() or not (h.collider is Hitbox) or ((h.collider as Hitbox).soldier == b and (h.collider as Hitbox).zone != Helmet.ZONE):
 					break
 				ex.append((h.collider as Hitbox).get_rid())
 			if h.is_empty() or not (h.collider is Hitbox):
@@ -596,6 +628,18 @@ func _check_zones(b: Soldier, p: String) -> void:
 			resolved_ok = false
 			bad.append("%s/%s aufgelöst als %s" % [hb.zone, bone, res_zone])
 	check(active == 10 and attached and hit_ok and resolved_ok, "Trefferzonen %s: 10 Gelenkzonen aktiv, am Gelenk, jede von außen zuerst getroffen" % p, str(bad))
+	# B-014: mit Kopfgegenstand eine Helmfläche über der Kopfzone (Strahltest von oben trifft zuerst den Helm)
+	if Helmet.head_item(b) >= 0 and b.model.has_method("has_helmet_box"):
+		var hbx: Hitbox = b.model._helmet_box
+		var ok_h := false
+		if b.model.has_helmet_box():
+			var c := (hbx.get_child(0) as Node3D).global_position
+			var qh := PhysicsRayQueryParameters3D.create(c + Vector3.UP * 1.5, c, Hitbox.LAYER)
+			qh.collide_with_areas = true
+			qh.collide_with_bodies = false
+			var hh := space.intersect_ray(qh)
+			ok_h = not hh.is_empty() and hh.collider == hbx
+		check(ok_h, "Helmfläche %s: am Kopf, von oben zuerst getroffen (Gegenstand %d)" % [p, Helmet.head_item(b)])
 
 
 func _zone_shot(b: Soldier, p: String) -> void:

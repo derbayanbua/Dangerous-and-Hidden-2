@@ -212,12 +212,64 @@ func _run() -> void:
 	check(s.is_throwing() and s.model.action_clip() == "h_hodHSTv" and s.weapons[2].total_ammo() == g0 - 1,
 		"G: Wurfanimation (hodHSTv) beginnt", s.model.action_clip())
 	check(get_tree().root.find_children("*", "Grenade", true, false).size() == n0, "Granate noch in der Hand")
+	if OrigWeapons.available():
+		check(s.model.prop_name() != "" and s.model.prop_name() == s._throw_prop, "Granatenmodell in der Wurfhand (3. Person)", s.model.prop_name())
 	var rel := float(OrigWeapons.clip_info("h_hodHSTv").get("release", 0.0))
-	await seconds(rel + 0.15)
-	check(not s.is_throwing() and get_tree().root.find_children("*", "Grenade", true, false).size() == n0 + 1,
-		"Granate verlässt die Hand nach %.2f s" % rel)
+	# B-012 Regression: der Wurfclip muss bis zum Auslösen sichtbar laufen (Haltungs-Player spielt ihn wirklich)
+	var bad_t: Array = []
+	var t_end: int = Time.get_ticks_msec() + int(rel * 900.0 / maxf(Engine.time_scale, 0.01))
+	while Time.get_ticks_msec() < t_end and s.is_throwing():
+		var ha: AnimationPlayer = s.model._hold_anim
+		var cur: String = String(ha.current_animation) if ha else ""
+		if s.model.action_clip() != "h_hodHSTv" or cur != "h_hodHSTv" or not ha.is_playing():
+			bad_t.append("%s/%s/%s/%s" % [s.model.action_clip(), cur, s.model.body.state if s.model.body else "-",
+				s.model.body.oneshot if s.model.body else "-"])
+			break
+		await frames(1)
+	check(bad_t.is_empty(), "3. Person: Wurfclip läuft bis zum Auslösen (Haltungs-Player)", str(bad_t))
+	await seconds(maxf(rel * 0.15, 0.0) + 0.2)
+	check(not s.is_throwing() and get_tree().root.find_children("*", "Grenade", true, false).size() == n0 + 1
+		and s.model.prop_name() == "", "Granate verlässt die Hand nach %.2f s (Modell weg, Waffe zurück)" % rel)
 	place(s, 0, 50, 0.0)       # Abstand zur Explosion
 	await seconds(5.0)
+	# B-012: Schnellwurf in der 1. Person zeigt das Granaten-FPV-Modell mit Wurfclip, danach wieder die Waffe
+	if OrigWeapons.available() and s.weapons[2] and s.weapons[2].total_ammo() > 0:
+		var key0: String = rig.viewmodel_info()["key"]
+		rig.toggle_mode()
+		await seconds(0.3)
+		var gkey := OrigWeapons.fpv_key(s.weapons[2].data, s.team)
+		await tap("grenade")
+		await frames(2)
+		var vinfo: Dictionary = rig.viewmodel_info()
+		var vclip: String = rig._vm_anim.current_animation if rig._vm_anim else ""
+		check(s.is_throwing() and vinfo["key"] == gkey and (vclip.to_lower().contains("shot") or vclip.to_lower().contains("thr")),
+			"1. Person: Granate in der Hand, FPV-Wurfclip", "%s / %s" % [vinfo["key"], vclip])
+		await seconds(3.5)
+		check(rig.viewmodel_info()["key"] == key0, "1. Person: nach dem Wurf wieder die Waffe", "%s → %s" % [key0, rig.viewmodel_info()["key"]])
+		rig.toggle_mode()
+		place(s, 0, 80, 0.0)
+		await seconds(4.0)
+
+	# --- B-012: MG 42 (items.sav u9 = 0) nur liegend feuerbar, Bren (u9 = 2) in jeder Haltung ---
+	check(Soldier.fire_stance_max(WeaponDB.get_weapon(&"o_33")) == 0 and Soldier.fire_stance_max(WeaponDB.get_weapon(&"bren")) == 2
+		and Soldier.fire_stance_max(WeaponDB.get_weapon(&"o_34")) == 1, "Haltungsregel aus items.sav: MG 42 liegend, Browning hockend/liegend, Bren frei")
+	var keep0: Weapon = s.weapons[0]
+	var mg := Weapon.new(WeaponDB.get_weapon(&"o_33"))
+	s.weapons[0] = mg
+	s.select_slot(WeaponData.Slot.PRIMARY)
+	s._on_weapon_switched()
+	await seconds(1.0)
+	var mg0 := mg.in_mag
+	await hold("fire", 0.5)
+	check(mg.in_mag == mg0, "MG 42 im Stehen: kein Schuss", "%d → %d" % [mg0, mg.in_mag])
+	await tap("stance_prone")
+	await seconds(1.5)
+	await hold("fire", 0.5)
+	check(s.stance == Soldier.Stance.PRONE and mg.in_mag < mg0, "MG 42 liegend: feuert", "%d → %d" % [mg0, mg.in_mag])
+	await tap("stance_stand")
+	s.weapons[0] = keep0
+	s._on_weapon_switched()
+	await seconds(1.5)
 
 	# --- 6. Erste Hilfe mit Taste H: Verbandskasten in der Hand, Original-Animation ---
 	check(InputSetup.binding_text("medkit") == "H" and InputSetup.binding_text("order_follow") == "U",
