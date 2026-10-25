@@ -45,8 +45,8 @@ try {
 
 # 3) Originaldaten (orig_cache) spiegeln – nur Änderungen werden kopiert
 "-- Originaldaten kopieren"
-$xd = @("$proj\orig_cache\arctic1,arctic2,arctic3,arctic4,africa1,africa2,africa3,africa4,africa5,africa6,norway,burma1,burma2,alps1,alps2,normandy,normandy2,czech1,czech2,czech3,czech4,czech5,czech6,tutorial",
-        "$proj\orig_cache\textures_sd")
+# Missionsordner (arctic1 …) werden vom Spiel gebraucht und daher mitkopiert; nur textures_sd entfällt
+$xd = @("$proj\orig_cache\textures_sd")
 if ($NoHD) { $xd += @("$proj\orig_cache\textures_hd", "$proj\orig_cache\textures_4k") }
 $rc = @("$proj\orig_cache", "$Out\orig_cache", "/MIR", "/MT:8", "/R:1", "/W:1", "/NFL", "/NDL", "/NP", "/NJH", "/XF", "*.tmp", "*.part", "/XD") + $xd
 & robocopy @rc | Select-Object -Last 6
@@ -134,5 +134,5 @@ if ($Zip) {
   "   $zipPath ($([math]::Round((Get-Item $zipPath).Length / 1GB, 2)) GB)"
 }
 
-$size = (Get-ChildItem $Out -Recurse -File | Measure-Object Length -Sum).Sum
+$size = (Get-ChildItem $Out -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
 "== Fertig: $Out ($([math]::Round($size / 1GB, 2)) GB). Den ganzen Ordner auf den Ziel-PC kopieren und DangerousHidden2.exe starten."

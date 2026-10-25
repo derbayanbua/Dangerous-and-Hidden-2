@@ -1005,6 +1005,8 @@ func _page_game() -> void:
 		func(v: bool): Settings.crosshair = v)
 	# BEWUSSTE ABWEICHUNG (Vorgabe Auftraggeber): Zielmarker/Randpfeile für aktive Missionsziele (Standard an)
 	_yesno(245, "ZIELMARKIERUNGEN", Settings.objective_markers, func(v: bool): Settings.objective_markers = v)
+	# B-016 BEWUSSTE ABWEICHUNG: Ragdoll-Physik für Gefallene (Standard an), nein = Original-Todesanimationen
+	_yesno(333, "RAGDOLL-PHYSIK", Settings.ragdoll, func(v: bool): Settings.ragdoll = v)
 	# Ergänzungen (kein Original-Punkt): FPS-Anzeige (SP+MP), Namen/Trefferanzeige im Mehrspieler
 	_yesno(377, "FPS ANZEIGEN", Settings.show_fps, func(v: bool): Settings.show_fps = v)
 	_yesno(421, "NAMEN ÜBER SPIELERN (MP)", Settings.show_names, func(v: bool): Settings.show_names = v)

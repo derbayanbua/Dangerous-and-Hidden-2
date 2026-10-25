@@ -123,6 +123,7 @@ func clear_tasks() -> void:
 	launcher_target = Vector3.INF
 	action_target = null
 	action_kind = ""
+	_kill_time = 0.0
 
 
 func _physics_process(delta: float) -> void:
@@ -236,17 +237,7 @@ func _physics_process(delta: float) -> void:
 	match order:
 		Order.FOLLOW:
 			if leader:
-				var slot := squad.formation_slot(soldier, leader)
-				var d := distance_to(slot)
-				if d > 1.5:
-					var mode := Soldier.MoveMode.RUN if d > 8.0 else leader.move_mode
-					# Anführer schleicht (geduckt/liegend) bzw. leiser Befehl -> Kameraden schleichen mit
-					if (quiet or leader.move_mode == Soldier.MoveMode.SNEAK or leader.stance != Soldier.Stance.STAND) and d < 15.0:
-						mode = Soldier.MoveMode.SNEAK
-					move_to(slot, mode)
-				elif not has_move_target():
-					# in Blickrichtung des Anführers sichern
-					soldier.look_yaw = rotate_toward(soldier.look_yaw, leader.look_yaw + squad.slot_watch_offset(soldier), delta * 3.0)
+				_follow(leader, delta)
 		Order.HOLD, Order.COVER:
 			if distance_to(hold_pos) > 1.5:
 				move_to(hold_pos, _move_mode())
@@ -259,6 +250,183 @@ func _physics_process(delta: float) -> void:
 				move_to(hold_pos, _move_mode())
 	soldier.look_pitch = move_toward(soldier.look_pitch, 0.0, delta)
 	update_movement(delta, true)
+	if order == Order.FOLLOW:
+		_keep_apart(delta)
+
+
+## Folgen (B-019): Formationsplatz nach den Originaltabellen (SquadManager.formation_slots: Abstand, Trennung 1,2 m,
+## Heften an den Boden). Zusätzlich [E, Vorgabe „keine Klumpen“]: lebende Kameraden näher als SEPARATION schieben
+## sich auseinander; wer festhängt (kein Fortschritt zum Platz), folgt erst der Spur des Anführers, dann seitlich
+## versetzt, zuletzt kurz ohne Kollision mit Kameraden.
+const FOLLOW_TOL := 1.5            ## Platz erreicht [E]
+const TRAIL_STEP := 1.0            ## Spurpunkt des Anführers alle 1 m [E]
+const STUCK_FOLLOW := 2.5          ## s ohne Fortschritt → Lösen [E]
+var _trail: Array[Vector3] = []
+var _follow_best := INF
+var _follow_stuck := 0.0
+var _unstick_stage := 0
+var _unstick_time := 0.0
+var _unstick_target := Vector3.INF
+var follow_unsticks := 0           ## Zähler für Tests
+
+
+func _record_trail(leader: Soldier) -> void:
+	var p := leader.global_position
+	if _trail.is_empty() or _trail[_trail.size() - 1].distance_to(p) >= TRAIL_STEP:
+		_trail.append(p)
+		if _trail.size() > 60:
+			_trail.remove_at(0)
+
+
+func _follow(leader: Soldier, delta: float) -> void:
+	_record_trail(leader)
+	var slot := squad.formation_slot(soldier, leader)
+	var d := distance_to(slot)
+	# Lösen aus einer Blockade: Ersatzziel ansteuern, bis Zeit um oder erreicht
+	if _unstick_time > 0.0:
+		_unstick_time -= delta
+		var wall_follow := _unstick_stage == 2 or _unstick_stage == 3
+		# Umgehen (Wand entlang): sobald der Weg zum Platz frei ist, direkt hin
+		if wall_follow and _unstick_time < UNSTICK_TIME - 0.4 and _clear_path(soldier.global_position, slot):
+			_unstick_time = 0.0
+		elif _unstick_target.is_finite() and _unstick_time > 0.0:
+			if distance_to(_unstick_target) <= 1.0 and wall_follow:
+				_unstick_target = _free_step(slot, false)    # weiter in dieselbe Richtung (Bonus letzte Richtung)
+			if distance_to(_unstick_target) > 1.0:
+				move_to(_unstick_target, Soldier.MoveMode.RUN)
+				return
+		_unstick_time = 0.0
+		_unstick_target = Vector3.INF
+	if d > FOLLOW_TOL:
+		var mode := Soldier.MoveMode.RUN if d > 8.0 else leader.move_mode
+		# Anführer schleicht (geduckt/liegend) bzw. leiser Befehl -> Kameraden schleichen mit
+		if (quiet or leader.move_mode == Soldier.MoveMode.SNEAK or leader.stance != Soldier.Stance.STAND) and d < 15.0:
+			mode = Soldier.MoveMode.SNEAK
+		move_to(slot, mode)
+		# Fortschritt zum Platz messen (der Platz wandert mit dem Anführer → Abstand statt Weg)
+		if d < _follow_best - 0.3:
+			_follow_best = d
+			_follow_stuck = 0.0
+			_unstick_stage = 0
+		else:
+			# nur „fest“, wenn er sich selbst kaum bewegt (läuft er dem davonlaufenden Platz hinterher, ist alles gut)
+			var v := Vector2(soldier.velocity.x, soldier.velocity.z).length()
+			_follow_stuck += delta if v < 0.6 else -delta
+			_follow_stuck = maxf(_follow_stuck, 0.0)
+			_follow_best = minf(_follow_best + delta * 0.2, d)   # langsam vergessen
+		if _follow_stuck > STUCK_FOLLOW:
+			_unstick(leader, slot)
+	else:
+		_follow_best = d
+		_follow_stuck = 0.0
+		_unstick_stage = 0
+		if has_move_target() and arrived(FOLLOW_TOL):
+			stop_moving()
+		if not has_move_target():
+			# auf dem Platz: in die Platzrichtung (Pfeil fächert auf) sichern
+			soldier.look_yaw = rotate_toward(soldier.look_yaw, leader.look_yaw + squad.slot_watch_offset(soldier), delta * 3.0)
+
+
+## Stufenweise lösen: 1 Spur des Anführers, 2 seitlich versetzter Platz, 3 kurz ohne Kollision mit Kameraden.
+func _unstick(leader: Soldier, slot: Vector3) -> void:
+	_follow_stuck = 0.0
+	_follow_best = distance_to(slot)     # erst echter Fortschritt zum Platz setzt die Stufe zurück
+	_unstick_stage += 1
+	follow_unsticks += 1
+	match _unstick_stage:
+		1:
+			# letzter Spurpunkt, der deutlich näher am Anführer liegt als ich
+			_unstick_target = leader.global_position
+			for k in range(_trail.size() - 1, -1, -1):
+				if _trail[k].distance_to(soldier.global_position) > 2.0 and _trail[k].distance_to(leader.global_position) < 12.0:
+					_unstick_target = _trail[k]
+					break
+		2, 3:
+			# freie Richtung suchen (8 Strahlen in Brusthöhe), die am wenigsten vom Platz wegführt
+			_unstick_target = _free_step(slot, _unstick_stage == 3)
+			if _unstick_stage == 3:
+				soldier.jump_or_climb()
+		_:
+			_unstick_stage = 0
+			_unstick_target = slot
+			for m in squad.members:
+				if m != soldier and m.alive:
+					soldier.add_collision_exception_with(m)
+					soldier.get_tree().create_timer(2.0, false).timeout.connect(_end_pass_through.bind(soldier, m))
+	_unstick_time = UNSTICK_TIME if _unstick_stage != 1 else 3.0
+
+
+const UNSTICK_TIME := 6.0          ## s je Lösungsversuch [E]
+
+## Ist der Weg (Kapselbreite: drei Strahlen in Hüfthöhe) von a nach b frei von Weltgeometrie?
+func _clear_path(a: Vector3, b: Vector3) -> bool:
+	var dir := b - a
+	dir.y = 0.0
+	if dir.length() < 0.1:
+		return true
+	var side := dir.normalized().cross(Vector3.UP) * 0.28
+	var space := soldier.get_world_3d().direct_space_state
+	for off in [Vector3.ZERO, side, -side]:
+		var q := PhysicsRayQueryParameters3D.create(a + Vector3.UP * 0.9 + off, b + Vector3.UP * 0.9 + off, 1 | 16)
+		if not space.intersect_ray(q).is_empty():
+			return false
+	return true
+
+
+var _last_free_dir := Vector3.ZERO
+
+## Ausweichpunkt: unter 12 Richtungen die freie (≥ 2,5 m bis zum Hindernis), die dem Platz am nächsten zeigt; mit
+## `second` die zweitbeste (anderer Umweg). Die zuletzt genommene Richtung wird bevorzugt beibehalten (Wand entlang).
+func _free_step(slot: Vector3, second: bool) -> Vector3:
+	var space := soldier.get_world_3d().direct_space_state
+	var from := soldier.global_position + Vector3.UP * 1.0
+	var want := slot - soldier.global_position
+	want.y = 0.0
+	want = want.normalized() if want.length() > 0.01 else Vector3.FORWARD
+	var cands: Array = []
+	for k in 12:
+		var dir := want.rotated(Vector3.UP, TAU * k / 12.0)
+		var q := PhysicsRayQueryParameters3D.create(from, from + dir * 4.0, 1 | 2 | 16)
+		q.exclude = [soldier.get_rid()]
+		var hit := space.intersect_ray(q)
+		var free := 4.0 if hit.is_empty() else from.distance_to(hit["position"])
+		if free < 2.5:
+			continue
+		var score := dir.dot(want) + (0.6 if dir.dot(_last_free_dir) > 0.8 else 0.0)
+		cands.append([score, dir, free])
+	if cands.is_empty():
+		return soldier.global_position - want * 2.0
+	cands.sort_custom(func(a, b): return a[0] > b[0])
+	var pick: Array = cands[1] if second and cands.size() > 1 else cands[0]
+	_last_free_dir = pick[1]
+	return soldier.global_position + (pick[1] as Vector3) * minf(float(pick[2]) - 0.6, 3.5)
+
+
+## Abstand zu Kameraden halten (keine Klumpen): näher als SEPARATION → seitlich wegschieben.
+func _keep_apart(_delta: float) -> void:
+	var push := Vector3.ZERO
+	var lead := squad.leader()
+	var order_list: Array = squad._followers(lead) if lead else []
+	var my_i := order_list.find(soldier)
+	for m in squad.members:
+		if m == soldier or not m.alive or m.vehicle != null:
+			continue
+		# Vorrang nach Platz: Anführer und kleinere Platznummer haben Vorrang, nur der Nachrangige weicht aus
+		# (sonst schieben sich zwei Kameraden in einer Engstelle gegenseitig an die Wand)
+		if m != lead and order_list.find(m) > my_i:
+			continue
+		var dv := soldier.global_position - m.global_position
+		dv.y = 0.0
+		var l := dv.length()
+		if l < SquadManager.SEPARATION and absf(soldier.global_position.y - m.global_position.y) < 1.5:
+			push += (dv / maxf(l, 0.05) if l > 0.01 else Vector3(1, 0, 0).rotated(Vector3.UP, soldier.look_yaw)) \
+				* (SquadManager.SEPARATION - l)
+	if push.length() > 0.05:
+		if not has_move_target():
+			soldier.move_mode = Soldier.MoveMode.WALK
+		var mi := soldier.move_input + push.normalized() * minf(push.length() * 1.5, 1.0)
+		mi.y = 0.0
+		soldier.move_input = mi.normalized() if mi.length() > 1.0 else mi
 
 
 ## „Raketenwerfer einsetzen“: Werfer nehmen, auf den Punkt richten, einen Schuss abgeben, zurück zur Hauptwaffe.
@@ -343,11 +511,26 @@ func _do_action(delta: float) -> bool:
 		action_target = null
 		return false
 	var p := action_target.global_position
+	if action_kind == "kill":
+		return _do_kill(delta)
+	if action_kind == "grenade_room":
+		# Granate durch die Tür in den Raum: Punkt 3 m hinter der Tür (vom Werfer aus) [E]
+		var away := p - soldier.global_position
+		away.y = 0.0
+		grenade_target = p + away.normalized() * 3.0
+		if action_target is OrigInteractive.OrigDoor:
+			(action_target as OrigInteractive.OrigDoor).ai_open(soldier)
+		action_target = null
+		action_kind = ""
+		return false
 	var flat := p - soldier.global_position
 	flat.y = 0.0
-	var reach := 1.5 if action_kind == "heal" else 1.6
+	var reach := 1.5 if action_kind == "heal" else (1.0 if action_kind == "silent_kill" else 1.6)
 	if flat.length() > reach:
-		move_to(p, _move_mode())
+		var mode := _move_mode()
+		if action_kind == "silent_kill":
+			mode = Soldier.MoveMode.SNEAK if flat.length() < 8.0 else mode
+		move_to(p, mode)
 		update_movement(delta, true)
 		return true
 	stop_moving()
@@ -363,10 +546,110 @@ func _do_action(delta: float) -> bool:
 			var want_open := kind == "open"
 			if target is Interactable and bool(target.get("is_open")) != want_open:
 				(target as Interactable).interact(soldier)
+		"lock":
+			if target is OrigInteractive.OrigDoor:
+				(target as OrigInteractive.OrigDoor).set_locked(true)
+		"unlock":
+			if target is OrigInteractive.OrigDoor and bool(target.get("locked")):
+				(target as OrigInteractive.OrigDoor).interact(soldier)
+		"clear_room":
+			# Hineingehen & räumen: Tür öffnen, 3 m hinein, Feuer frei [E]
+			if target is OrigInteractive.OrigDoor:
+				(target as OrigInteractive.OrigDoor).ai_open(soldier)
+			elif target is Interactable and not bool(target.get("is_open")):
+				(target as Interactable).interact(soldier)
+			var into := target.global_position - soldier.global_position
+			into.y = 0.0
+			roe = ROE.FIRE_AT_WILL
+			set_order(Order.MOVE, target.global_position + into.normalized() * 3.0, quiet)
+		"capture", "search", "uniform":
+			var eb := _enemy_brain_of(target)
+			if eb:
+				match kind:
+					"capture":
+						eb.capture(soldier)
+					"search":
+						if eb.capture_action:
+							eb.capture_action.set("searched", true)
+						Events.say("Durchsucht: %s" % eb.search(soldier), 2.5)
+					"uniform":
+						eb.give_uniform(soldier)
+			elif kind == "search" and target is Soldier:
+				_loot(target as Soldier)
+		"items":
+			if target is Soldier and not (target as Soldier).alive:
+				_loot(target as Soldier)
+			elif target is Soldier:
+				# Gegenstände eines Lebenden (Kamerad/Gefangener): Originalgegenstände übernehmen [E]
+				var inv: Array = soldier.get_meta("orig_items", [])
+				for it in (target as Soldier).get_meta("orig_items", []):
+					inv.append(it)
+				(target as Soldier).set_meta("orig_items", [])
+				soldier.set_meta("orig_items", inv)
+		"silent_kill":
+			var t := target as Node3D
+			if t is Soldier and (t as Soldier).alive:
+				look_at_point((t as Soldier).global_position + Vector3.UP, 1.0, 50.0)
+				if soldier.weapons.size() > WeaponData.Slot.MELEE and soldier.weapons[WeaponData.Slot.MELEE] != null:
+					soldier.select_slot(WeaponData.Slot.MELEE)
+					soldier.trigger = true
+					get_tree().create_timer(0.3, false).timeout.connect(func(): if is_instance_valid(soldier): soldier.trigger = false)
+				else:
+					action_target = t
+					action_kind = "kill"
 		_:
 			if target is Interactable and (target as Interactable).can_interact(soldier):
 				(target as Interactable).interact(soldier)
 	return true
+
+
+var _kill_time := 0.0
+
+## „Töten“: in Schussweite mit Sichtlinie gehen, dann bekämpfen, bis das Ziel tot ist (max. 20 s) [E].
+func _do_kill(delta: float) -> bool:
+	var t := action_target as Node3D
+	var alive := t != null and ((t is Soldier and (t as Soldier).alive) or (t is Dog and bool(t.get("alive"))))
+	_kill_time += delta
+	if not alive or _kill_time > 20.0:
+		action_target = null
+		action_kind = ""
+		_kill_time = 0.0
+		cease_fire()
+		return false
+	if t is Soldier:
+		var ts := t as Soldier
+		if distance_to(ts.global_position) > 30.0 or not _clear_line(soldier.eye_position(), ts.global_position + Vector3.UP * 1.0):
+			move_to(ts.global_position, _move_mode())
+			update_movement(delta, true)
+			return true
+		stop_moving()
+		update_movement(delta, false)
+		engage(ts, delta)
+	else:
+		suppress_point = t.global_position + Vector3.UP * 0.4
+		suppress_time = 2.0
+	return true
+
+
+func _clear_line(from: Vector3, to: Vector3) -> bool:
+	var q := PhysicsRayQueryParameters3D.create(from, to, 1)
+	return soldier.get_world_3d().direct_space_state.intersect_ray(q).is_empty()
+
+
+func _enemy_brain_of(n: Node) -> EnemyBrain:
+	if n == null:
+		return null
+	for c in n.get_children():
+		if c is EnemyBrain:
+			return c
+	return null
+
+
+func _loot(corpse: Soldier) -> void:
+	for n in get_tree().get_nodes_in_group("interactables"):
+		if n is Pickups.Loot and (n as Pickups.Loot).corpse == corpse and (n as Interactable).can_interact(soldier):
+			(n as Interactable).interact(soldier)
+			return
 
 
 func _reload_if_needed() -> void:

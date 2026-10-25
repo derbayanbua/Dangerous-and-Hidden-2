@@ -46,7 +46,8 @@ func _enabled() -> bool:
 	if not Settings.objective_markers or mission == null or not is_instance_valid(mission):
 		return false
 	var rt = mission.get("runtime")
-	if rt and is_instance_valid(rt) and bool(rt.get("in_cutscene")):
+	# MP-Arenen ohne Skriptlaufzeit: get() liefert null (bool(null) war ein Skriptfehler, B-017)
+	if rt and is_instance_valid(rt) and rt.get("in_cutscene") == true:
 		return false
 	return true
 
@@ -81,13 +82,20 @@ func _collect() -> void:
 	# 2./3. Zielorte je aktivem Pflichtziel
 	if mission is OrigMission:
 		_scan_scripts()
-		for idx in mission.orig_objectives:
+		# Reihenfolge wie die Original-Zielliste (Index-Reihenfolge, B-017): nur das erste aktive Pflichtziel mit
+		# bekanntem Ort bekommt Skript-Zielorte – ARCTIC1 erst der Führer (Ziel 1), danach der Eingang (Ziel 2)
+		var idxs: Array = mission.orig_objectives.keys()
+		idxs.sort()
+		for idx in idxs:
 			var o: Objective = mission.objective(mission.orig_objectives[idx])
 			if o == null or not act.has(o):
 				continue
+			var n0 := targets.size()
 			for f in _script_targets.get(int(idx), []):
-				if is_instance_valid(f):
+				if is_instance_valid(f) and not (f is Soldier and not (f as Soldier).alive):
 					_add((f as Node3D).global_position, o.text, "objective")
+			if targets.size() > n0:
+				break
 	elif mission.has_method("objective_target"):
 		for o in act:
 			var t = mission.objective_target(o.id)
@@ -127,16 +135,78 @@ func _scan_scripts() -> void:
 	if rt == null or rt.orig == null:
 		return
 	var sdir: String = rt.orig.mission_dir + "/scripts"
+	var srcs := {}                   # vm -> Quelltext
 	for vm in rt.vms:
-		if vm.me == null or vm.me is Soldier or vm.name == "":
+		if vm.me == null or vm.name == "" or not is_instance_valid(vm.me):
 			continue
 		var f := FileAccess.open(sdir + "/" + vm.name, FileAccess.READ)
 		if f == null:
 			continue
-		for idx in script_objective_targets(f.get_buffer(f.get_length()).get_string_from_ascii()):
+		srcs[vm] = f.get_buffer(f.get_length()).get_string_from_ascii()
+	var sig_map := {}                # Frame-Name (klein) -> {Signal: Zielindex}
+	for vm in srcs:
+		if vm.me is Soldier:
+			continue
+		for idx in script_objective_targets(srcs[vm]):
 			if not _script_targets.has(idx):
 				_script_targets[idx] = []
 			_script_targets[idx].append(vm.me)
+		var sm := signal_objectives(srcs[vm])
+		if not sm.is_empty():
+			sig_map[String(vm.me.name).to_lower()] = sm
+	# Personen, deren Skript dem Zielskript das Erfolgssignal schickt (ARCTIC1 „Rebel“: SendSignal(OBJ, 4) →
+	# objectives „Whenever OBJ_4_succ (_SignalReceived(4))“ → SetObjectiveStatus(1, 1)) = Zielort „Führer folgen“
+	for vm in srcs:
+		if not (vm.me is Soldier):
+			continue
+		for pair in signal_senders(srcs[vm]):
+			var sm: Dictionary = sig_map.get(String(pair[0]).to_lower(), {})
+			if sm.has(int(pair[1])):
+				var idx: int = sm[int(pair[1])]
+				if not _script_targets.has(idx):
+					_script_targets[idx] = []
+				if not _script_targets[idx].has(vm.me):
+					_script_targets[idx].append(vm.me)
+
+
+static func _strip_comments(src: String) -> Array:
+	var lines: Array = []
+	for l: String in src.split("\n"):
+		var c: int = l.find("//")
+		lines.append(l.substr(0, c) if c >= 0 else l)
+	return lines
+
+
+## Signal -> Zielindex: Blöcke „Whenever …(_SignalReceived(n))“ bzw. „OnSignal(n)“, die SetObjectiveStatus(i, 1) setzen
+static func signal_objectives(src: String) -> Dictionary:
+	var out := {}
+	var head_re := RegEx.create_from_string("^\\s*(Whenever|OnSignal|OnCutsceneDone|OnCutscene|OnDeath|OnUse|OnHit|Label|label)\\b")
+	var sig_re := RegEx.create_from_string("(?:_SignalReceived|OnSignal)\\s*\\(\\s*(\\d+)\\s*\\)")
+	var set_re := RegEx.create_from_string("SetObjectiveStatus\\s*\\(\\s*(\\d+)\\s*,\\s*1\\s*\\)")
+	var cur_sig := -1
+	for l: String in _strip_comments(src):
+		if head_re.search(l) != null:
+			var m := sig_re.search(l)
+			cur_sig = int(m.get_string(1)) if m != null else -1
+		elif cur_sig >= 0:
+			var m2 := set_re.search(l)
+			if m2 != null and not out.has(cur_sig):
+				out[cur_sig] = int(m2.get_string(1))
+	return out
+
+
+## [Frame-Name, Signal] je „SendSignal(var, n)“ mit „FRM_FindFrame(var, "Name")“ im selben Skript
+static func signal_senders(src: String) -> Array:
+	var text := "\n".join(_strip_comments(src))
+	var vars := {}
+	for m in RegEx.create_from_string("FRM_FindFrame\\s*\\(\\s*(\\w+)\\s*,\\s*\"([^\"]+)\"\\s*\\)").search_all(text):
+		vars[m.get_string(1).to_lower()] = m.get_string(2)
+	var out: Array = []
+	for m in RegEx.create_from_string("SendSignal\\s*\\(\\s*(\\w+)\\s*,\\s*(\\d+)\\s*\\)").search_all(text):
+		var v := m.get_string(1).to_lower()
+		if vars.has(v):
+			out.append([vars[v], int(m.get_string(2))])
+	return out
 
 
 ## Zielindizes, die ein Skript beim Betreten seines Bereichs erfüllt (statisch, für Tests öffentlich)

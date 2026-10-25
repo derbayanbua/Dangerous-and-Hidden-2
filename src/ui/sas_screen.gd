@@ -744,7 +744,9 @@ func give(idx: int, id: int, count := -1, want := "") -> bool:
 	var inv := Game.sas_inventory(idx)
 	var slot := SAS.slot_for(id)
 	if want == "items":
-		slot = ""            # auf Taschen/Rucksack gezogen: ins gemeinsame Inventar statt auf einen Platz
+		# auf Taschen/Rucksack gezogen: ins gemeinsame Inventar statt auf einen Platz – B-018: eine zweite Langwaffe
+		# kommt dabei auf den freien Rückenplatz (Vorgabe Auftraggeber, wie das Ingame-Inventar)
+		slot = "shoulder" if slot == "hands" and int(inv.get("hands", -1)) >= 0 and int(inv.get("shoulder", -1)) < 0 else ""
 		want = ""
 	if slot == "hands" and want == "shoulder":
 		slot = "shoulder"

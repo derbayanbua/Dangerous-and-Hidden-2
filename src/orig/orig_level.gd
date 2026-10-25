@@ -305,7 +305,7 @@ func _mesh_collider(mi: MeshInstance3D, collide: bool, two_sided := false, klz_f
 		grass_nodes.append(mi)
 	if klz_faces:
 		foliage = false        # Original: in tree.klz als Flächen verlinkt -> begehbar/fest, egal welches Material
-	if mi.mesh and not foliage and _is_water(mi):
+	if mi.mesh and not foliage and _is_water(mi, klz_faces):
 		# Wasserfläche (QuadPatch/„more“, Material VODA*/MORE*): keine Kollision, als Wasserbereich merken
 		var box: AABB = mi.global_transform * mi.get_aabb() if mi.is_inside_tree() else mi.get_aabb()
 		water.append(box)
@@ -334,14 +334,17 @@ static func _has_area(mesh: Mesh) -> bool:
 var water: Array[AABB] = []
 
 
-static func _is_water(mi: MeshInstance3D) -> bool:
+## klz_faces: in tree.klz als begehbare Fläche verlinkt – dann zählt nur ein Wassermaterial (VODA*/MORE*), nicht der
+## Name: ARCTIC1 „m_ark01_hrdr_.QuadPatch01“ (Haupteingang, links) ist Klz-Fläche mit Material 36 „Schnee – kugelfest“
+## (surface.bin) und Textur G_A1_1B, galt aber wegen „QuadPatch“ als Wasser -> keine Kollision, Schwimmen (B-017).
+static func _is_water(mi: MeshInstance3D, klz_faces := false) -> bool:
 	var box := mi.get_aabb()
 	if box.size.y > 0.8 or box.size.x * box.size.z < 16.0:
 		return false       # Wasser ist eine große, flache Fläche
 	var nm := String(mi.name).to_lower() + "|" + String(mi.get_parent().name).to_lower()
 	# „more“ = Meer (ARCTIC1 more2 = U-Boot-Becken mit Filmtextur, ohne Klz-Link; war einseitig nach unten
 	# orientiert und kollidierte erst mit beidseitigen Trimeshes -> sperrte das Navmesh der Bunkertreppe)
-	if nm.contains("quadpatch") or nm.begins_with("more") or nm.contains("|more"):
+	if not klz_faces and (nm.contains("quadpatch") or nm.begins_with("more") or nm.contains("|more")):
 		return true
 	for i in mi.mesh.get_surface_count():
 		var m := mi.get_active_material(i)

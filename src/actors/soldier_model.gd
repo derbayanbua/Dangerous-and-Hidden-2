@@ -114,6 +114,7 @@ func _add_helmet(h: Node3D) -> void:
 ## Cache derselbe Ort mit dem Platzhalter. Ohne Original-Figur: Platzhalter am WeaponSocket der Puppe.
 func set_weapon(data: WeaponData) -> void:
 	_weapon_data = data
+	call_deferred("refresh_back_weapon")     # B-018: Rückenwaffe folgt dem Waffenwechsel
 	if is_instance_valid(_weapon_mesh):
 		_weapon_mesh.queue_free()
 	_weapon_mesh = null
@@ -316,6 +317,9 @@ func attach_orig(figure: Node3D) -> void:
 	_build_orig_hitboxes(figure)
 	refresh_helmet()
 	set_weapon(_weapon_data)   # Waffe vom Platzhaltersockel an die Hand der Figur umhängen
+	var sks := figure.find_children("*", "Skeleton3D", true, false)
+	if not sks.is_empty() and _orig_anim:
+		ragdoll = Ragdoll.attach(self, _soldier as Node3D, sks[0] as Skeleton3D, _orig_anim)   # B-016, Körper erst beim Tod
 
 
 ## --- Trefferzonen der Original-Figur (docs/re_notes_weapons.md §10a) ---------------------------------------
@@ -407,11 +411,13 @@ func refresh_helmet() -> void:
 		_helmet_mount.name = "HelmetMount"
 		sk.add_child(_helmet_mount)
 		_helmet_mount.bone_name = Helmet.HEAD_BONE
-	# Helmmodell liegt im Figurraum der Bindungslage → relativ zum Kopfgelenk in Ruhelage
-	var bone_in_fig: Transform3D = OrigWeapons._rel(orig_figure, sk) * sk.get_bone_global_rest(bi)
+	# B-018 [B]: hd2.exe 0x7D1B60 Fall 1 (Kopf-Platz) hängt das Modell an das Kopfgelenk (+0x7C), SetDir(0,0,1) =
+	# keine Drehung gegenüber dem Gelenk, SetPos = fester Vektor 0x98AFB0 (Helmet.MOUNT_POS). Die Wurzel des Helmmodells
+	# (Knoten mit der Figurraum-Lage 1,73 m) sitzt damit genau dort; vorher Figurraum − Ruhelage (≈ 2,7 cm zu weit
+	# hinten, Seitenversatz aus dem Modell statt 1,67 cm).
 	vis.name = "Helmet"
 	_helmet_mount.add_child(vis)
-	vis.transform = bone_in_fig.affine_inverse()
+	vis.transform = Helmet.mount_transform(vis)
 	_helmet_vis = vis
 	var bb := Helmet.bounds(vis)
 	if bb.size.length() > 0.01:
@@ -440,6 +446,64 @@ func helmet_transform() -> Transform3D:
 ## Hat die Figur eine eigene Helm-Trefferfläche? (sonst Näherung obere Kopfhälfte in Ballistics)
 func has_helmet_box() -> bool:
 	return is_instance_valid(_helmet_box)
+
+
+## --- Waffe auf dem Rücken (B-018) --------------------------------------------------------------------------------
+## Original [B] hd2.exe 0x7D1B60 Fall 0x10: Waffenmodell der Rücken-/Schulterwaffe an das Brustgelenk (+0x78 = „d“,
+## Figur-Dummy „Dummy25“ liegt genau auf DAT_0098AFC0), SetDir(0,1,0) (Lauf nach oben), SetPos(0x98AFC0); danach
+## Lage = SetPos + Drehung·(−„backlink“ des Waffenmodells) + (0,0275; 0; 0,09). Die anschließende Zusatzdrehung für
+## Waffenart ≠ 4 (Schrägstellung, −0,01/−0,08) ist nicht vollständig dekodiert und fehlt [P]. Waffen ohne „backlink“
+## (Pistolen, Messer …) werden wie im Original nicht auf dem Rücken gezeigt. LS3D → Nachbau: z gespiegelt.
+const BACK_POS := Vector3(0.175592, 0.180547, 0.133315)
+const BACK_ADD := Vector3(0.0275, 0.0, -0.09)
+var _back_mount: BoneAttachment3D
+var _back_vis: Node3D
+var _back_key := ""
+
+
+func refresh_back_weapon() -> void:
+	if not is_instance_valid(orig_figure) or _soldier == null or not (_soldier is Soldier):
+		return
+	var s := _soldier as Soldier
+	var w: Weapon = OrigHud.shoulder_weapon(s)
+	var model := String(OrigWeapons.info(w.data, _team()).get("model", "")) if w else ""
+	if model == _back_key and (model == "" or is_instance_valid(_back_vis)):
+		return
+	if is_instance_valid(_back_vis):
+		_back_vis.queue_free()
+	_back_vis = null
+	_back_key = model
+	if model == "":
+		return
+	var n := OrigWeapons.world_model(model)
+	if n == null:
+		return
+	var bl := n.find_child("backlink", true, false) as Node3D
+	if bl == null:
+		n.free()
+		return
+	var sks := orig_figure.find_children("*", "Skeleton3D", true, false)
+	if sks.is_empty() or (sks[0] as Skeleton3D).find_bone("d") < 0:
+		n.free()
+		return
+	if not is_instance_valid(_back_mount):
+		_back_mount = BoneAttachment3D.new()
+		_back_mount.name = "BackMount"
+		sks[0].add_child(_back_mount)
+		_back_mount.bone_name = "d"
+	n.name = "BackWeapon"
+	var rot := Basis(Vector3.RIGHT, PI * 0.5)        # Dummy25: +90° um X → Lauf (−Z) zeigt nach oben
+	var link := OrigWeapons._rel(n, bl).origin
+	n.transform = Transform3D(rot, BACK_POS + rot * (-link) + BACK_ADD)
+	for mi in n.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	_back_mount.add_child(n)
+	_back_vis = n
+
+
+## RID der eigenen Helmfläche (Ausschluss im Strahltest des Schützen, B-018)
+func helmet_rid() -> RID:
+	return _helmet_box.get_rid() if is_instance_valid(_helmet_box) else RID()
 
 
 func _set_puppet_hitboxes(on: bool) -> void:
@@ -502,6 +566,10 @@ func _detach_orig() -> void:
 		_weapon_mesh.queue_free()
 	_weapon_mesh = null
 	_muzzle = null
+	if is_instance_valid(ragdoll):
+		ragdoll.cancel()
+		ragdoll.queue_free()
+	ragdoll = null
 	remove_child(orig_figure)
 	orig_figure.queue_free()
 	orig_figure = null
@@ -1025,6 +1093,7 @@ func play_death(direction: Vector3) -> void:
 			_play_orig("death", 1.0)
 	_stop_hold()
 	_dead = true
+	_begin_ragdoll(direction, death_clip_name)
 	var fall_dir := direction
 	fall_dir.y = 0
 	if fall_dir.length() < 0.1:
@@ -1043,6 +1112,54 @@ func play_death(direction: Vector3) -> void:
 	tw.tween_property(torso, "rotation:x", 0.0, 0.4)
 	tw.tween_property(arm_l, "rotation", Vector3(-2.6, 0, -0.6), 0.5)
 	tw.tween_property(arm_r, "rotation", Vector3(-0.4, 0, 0.8), 0.5)
+
+
+## --- B-016 Ragdoll (src/actors/ragdoll.gd) -------------------------------------------------------------------
+var ragdoll: Ragdoll
+
+
+## Übergabe vom Todesclip an die Physik. Treffer-Daten legt Soldier.apply_hit/die bzw. Ballistics als Metas ab:
+## „_rd_hit“ [Weltpunkt, Knochen], „_rd_amount“ Schaden, „last_zone“, „_rd_vel“ Fahrzeuggeschwindigkeit.
+func _begin_ragdoll(direction: Vector3, clip: String) -> void:
+	if not is_instance_valid(ragdoll) or not Ragdoll.wanted(ragdoll.sk) or not is_instance_valid(_soldier):
+		return
+	var s := _soldier
+	var hit := {"dir": direction, "amount": float(s.get_meta("_rd_amount", 30.0)),
+		"clip": clip, "zone": _last_hit_zone if _last_hit_zone != "" else String(s.get_meta("last_zone", "")), "vel": s.get_meta("_rd_vel", Vector3.ZERO)}
+	var hp = s.get_meta("_rd_hit", [])
+	if hp is Array and (hp as Array).size() >= 2 and Time.get_ticks_msec() - int(s.get_meta("_rd_hit_ms", 0)) < 500:
+		hit["pos"] = hp[0]
+		hit["bone"] = String(hp[1])
+	var delay := Ragdoll.START_DELAY
+	# Explosion (in den letzten 0,6 s in Reichweite): sofort, Impuls kommt aus Ragdoll._recent
+	var now := Time.get_ticks_msec()
+	for e in Ragdoll._recent:
+		if now - int(e[2]) <= 600 and (e[0] as Vector3).distance_to(global_position) <= float(e[1]) * Ragdoll.EXPL_RANGE_K:
+			hit["explosive"] = true
+			delay = 0.0
+	# Tod im Sitzen: Anfang des Original-Clips „!smrtsed1/2“ bzw. „!smrttur2“ (Zusammensacken), dann Physik
+	if body and String(body.get("seated")) in ["sit", "turk"]:
+		delay = 0.45
+	# MG-Stellung (Bediener steigt beim Tod ab, Figur gleitet zurück) / aus dem Fahrzeug gefallen: sofort aus der Bedienhaltung
+	if s.get("mounted") != null or s.has_meta("_rd_vel"):
+		delay = 0.0
+	if String(s.get_meta("death_kind", "")) == "throat" and _orig_anim and _orig_anim.has_animation(clip):
+		delay = _orig_anim.get_animation(clip).length * 0.7    # Kehlschnitt: Original-Clip trägt den Ablauf
+	ragdoll.begin(hit, delay)
+
+
+## Endpose der Leiche (leer, solange keine vorliegt)
+func corpse_pose() -> PackedFloat32Array:
+	if is_instance_valid(ragdoll) and ragdoll.is_frozen():
+		return ragdoll.frozen_pose
+	return PackedFloat32Array()
+
+
+## Endpose übernehmen (Netz, Spielstand, Spät-Beitritt); false ohne passendes Skelett
+func apply_corpse_pose(pose: PackedFloat32Array, set_origin := true) -> bool:
+	if not is_instance_valid(ragdoll):
+		return false
+	return ragdoll.apply_pose(pose, set_origin)
 
 
 ## Tod: Haltungsschicht und Anschlag aus; die Waffe bleibt an der Hand und folgt der Todesanimation.

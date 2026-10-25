@@ -125,6 +125,42 @@ func _input(event: InputEvent) -> void:
 	if event.is_action_pressed("inventory") or event.is_action_pressed("pause"):
 		close()
 		get_viewport().set_input_as_handled()
+		return
+	# B-018 Bedienung [P]: Mausrad blättert die Spalte unter dem Zeiger, Entf/Rücktaste legt den markierten Gegenstand
+	# ab, Eingabe = Doppelklick-Aktion (Ausrüsten/Ablegen in die Taschen) für den markierten Gegenstand
+	if event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		var col := _column_at(screen.stage.get_local_mouse_position())
+		if not col.is_empty():
+			_scroll_by(String(col[0]), int(col[1]), -1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventKey and event.pressed and not event.echo and not sel.is_empty():
+		match (event as InputEventKey).keycode:
+			KEY_DELETE, KEY_BACKSPACE:
+				if sel["side"] == "own":
+					move_item("own", String(sel["from"]), int(sel["id"]), "own", "drop")
+					get_viewport().set_input_as_handled()
+			KEY_ENTER, KEY_KP_ENTER:
+				var s0 := sel.duplicate()
+				sel = {}
+				quick(String(s0["side"]), String(s0["from"]), int(s0["id"]))
+				get_viewport().set_input_as_handled()
+
+
+## Spalte (Seite, 0 Taschen / 1 Rucksack) unter einem Punkt der Bühne, sonst []
+func _column_at(at: Vector2) -> Array:
+	for side in ["own", "other"]:
+		if side == "other" and (other == null or not is_instance_valid(other)):
+			continue
+		var f: Dictionary = SIDE[side]
+		var cols := [f["pockets"], f["pack"]]
+		for c in 2:
+			var boxes: Array = cols[c]
+			var r := screen.rect(boxes[0])
+			for b in boxes:
+				r = r.merge(screen.rect(b))
+			if r.grow(4).has_point(at):
+				return [side, c]
+	return []
 
 
 func _process(delta: float) -> void:
@@ -365,9 +401,17 @@ func quick(side: String, from: String, id: int) -> String:
 		var want := SAS.slot_for(id)
 		if want == "" and FieldInventory.accepts("hands", id) and int(own["hands"]) < 0:
 			want = "hands"
+		# B-018: Langwaffe bei belegten Händen auf den freien Rückenplatz statt in die Taschen
+		if want == "hands" and int(own["hands"]) >= 0 and FieldInventory.accepts("shoulder", id):
+			want = "shoulder"
 		if want != "" and int(own.get(want, -1)) < 0 and FieldInventory.accepts(want, id):
 			to = want
 		return move_item("other", from, id, "own", to)
+	# B-018: Rücken ↔ Hände per Doppelklick; Langwaffe aus den Händen auf den freien Rücken
+	if from == "shoulder":
+		return move_item("own", from, id, "own", "hands")
+	if from == "hands" and FieldInventory.accepts("shoulder", id) and int(own["shoulder"]) < 0:
+		return move_item("own", from, id, "own", "shoulder")
 	if from == "items":
 		var want := SAS.slot_for(id)
 		if want in ["head", "uniform", "back"]:
@@ -418,6 +462,13 @@ func _setup_drag() -> void:
 		elif parts[1] != "area":
 			continue
 		(c as Control).set_drag_forwarding(_drag_from.bind(c, src), _can_drop.bind(target), _drop_on.bind(target))
+		# B-018: klare Plätze – Hinweis mit Platzname und Gegenstand unter dem Zeiger [P]
+		var tip := ""
+		if parts[1] == "slot" and SLOT_TEXT.has(String(target["to"])):
+			tip = SAS.text(int(SLOT_TEXT[String(target["to"])]), String(target["to"]))
+		if src.has("id"):
+			tip = (tip + ": " if tip != "" else "") + SAS.item_label(int(src["id"]))
+		(c as Control).tooltip_text = tip
 		if src.has("id"):
 			(c as Control).gui_input.connect(_right_click.bind(int(src["id"])))
 

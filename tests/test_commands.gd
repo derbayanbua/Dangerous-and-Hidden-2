@@ -265,14 +265,20 @@ func _run() -> void:
 	check(sq.formation == SquadManager.Formation.WEDGE, "Formation › Pfeil-Formation")
 	await cmd("command_all", [7, 2])
 	check(sq.formation == SquadManager.Formation.LINE, "Formation › Linie bilden")
+	# B-019: Abstand in Stufen 0…7 × 0,75 m + 1,5 m (hd2.exe 0x4563F0); 3,0 m = Stufe 2
 	await cmd("command_all", [7, 4])
-	check(is_equal_approx(sq.spacing, 2.0), "Formation › Enge Formation", str(sq.spacing))
+	check(is_equal_approx(sq.spacing, 2.25) and sq.spacing_level == 1, "Formation › Enge Formation (eine Stufe, 0,75 m)", str(sq.spacing))
 	await cmd("command_all", [7, 5])
 	await cmd("command_all", [7, 5])
-	check(is_equal_approx(sq.spacing, 4.0), "Formation › Formation ausweiten", str(sq.spacing))
+	check(is_equal_approx(sq.spacing, 3.75), "Formation › Formation ausweiten (Stufe 3 = 3,75 m)", str(sq.spacing))
 	sq.spacing = SquadManager.SPACING_MIN
 	await cmd("command_all", [7])
-	check(cm.entries[3][1] == CommandMenu.A_GREY, "Enge Formation ausgegraut bei kleinstem Abstand")
+	check(cm.entries[3][1] == CommandMenu.A_GREY and cm.entries[4][1] == 25, "Enge Formation ausgegraut bei kleinstem Abstand")
+	await key(KEY_0)
+	sq.spacing_level = SquadManager.SPACING_LEVELS
+	await key(KEY_7)
+	check(cm.entries[4][1] == CommandMenu.A_GREY and cm.entries[3][1] == 24 and is_equal_approx(sq.spacing, 6.75),
+		"Formation ausweiten ausgegraut bei größtem Abstand (6,75 m)")
 	await key(KEY_0)
 	await key(KEY_0)
 	sq.spacing = 3.0
@@ -330,8 +336,13 @@ func _run() -> void:
 		sq.brain_of(mate).set_order(SquadBrain.Order.HOLD)
 		cm.context_override = door
 		await cmd("command_3", [3])
-		check(cm.menu_id == 53 and cm.entries[0][0] == 7023 and cm.entries[0][1] == CommandMenu.ACT_OPEN
-			and cm.entries[1][1] == CommandMenu.A_GREY, "Aktion (Tür zu): Öffnen wählbar, Schließen ausgegraut")
+		# B-019: Original 0x4BF670 Fall 6 – unverschlossene Tür: Öffnen, Schließen, Hineing. & räumen, Granate in den Raum,
+		# Abschließen (nur mit Schlüssel); offen/zu ist keine Bedingung
+		var door_ids: Array = cm.entries.slice(0, 5).map(func(e): return e[0])
+		check(cm.menu_id == 53 and door_ids == [7023, 7041, 7040, 7037, 7019] and cm.entries[0][1] == CommandMenu.ACT_OPEN
+			and cm.entries[1][1] == CommandMenu.ACT_CLOSE and cm.entries[2][1] == CommandMenu.ACT_CLEAR
+			and cm.entries[4][1] == CommandMenu.A_GREY, "Aktion (Tür): Einträge wie Original, Abschließen ohne Schlüssel grau", str(door_ids))
+		check(cm.target_line() != "" and cm.target_line() != cm.text(7276), "Aktion: zweite Zeile = Name des Ziels", cm.target_line())
 		await key(KEY_1)
 		for i in 600:
 			if door.is_open:
@@ -455,8 +466,98 @@ func _run() -> void:
 	await key(KEY_0)
 	check(not cm.is_open, "Menü geschlossen")
 
+	await _b019(m, c, cm, sq, lead)
 	await _persistence(m, c, cm, sq, lead)
 	_finish()
+
+
+## B-019: Formation nach den Originaltabellen, Aktionsmenü am Menschen, Darstellung im Original-Frame „rollmenu“.
+func _b019(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadManager, lead: Soldier) -> void:
+	c.set_active(lead)
+	sq.clear_selection()
+	place(lead, 0, 22, 0.0)
+	lead.look_yaw = 0.0
+	# Formation Pfeil, Stufe 3 (Start wie Original 0x5A91A0/0x456440): Platz 1 links hinten, Platz 2 rechts hinten
+	sq.set_formation(SquadManager.Formation.WEDGE)
+	sq.spacing_level = 3
+	var f := sq._followers(lead)
+	var p1 := sq._raw_slot(1, lead) - lead.global_position
+	var p2 := sq._raw_slot(2, lead) - lead.global_position
+	check(f.size() >= 2 and p1.distance_to(Vector3(-3.75, 0, 3.75)) < 0.01 and p2.distance_to(Vector3(3.75, 0, 3.75)) < 0.01,
+		"Pfeil-Formation: Plätze (−1,−1)/(1,−1) × 3,75 m wie hd2.exe 0x8AB1D0", "%s %s" % [p1, p2])
+	sq.set_formation(SquadManager.Formation.COLUMN)
+	var c3 := sq._raw_slot(3, lead) - lead.global_position
+	check(c3.distance_to(Vector3(0, 0, 11.25)) < 0.01, "Kolonne: Platz 3 genau 3 × 3,75 m hinter dem Anführer", str(c3))
+	sq.set_formation(SquadManager.Formation.LINE)
+	var l2 := sq._raw_slot(2, lead) - lead.global_position
+	check(l2.distance_to(Vector3(-7.5, 0, 0)) < 0.01, "Linie: Platz 2 = 2 × 3,75 m links neben dem Anführer", str(l2))
+	sq.spacing_level = 0
+	sq.set_formation(SquadManager.Formation.WEDGE)
+	var slots := sq.formation_slots(lead)
+	var min_d := INF
+	var pts: Array = slots.values() + [lead.global_position]
+	for i in pts.size():
+		for j in range(i + 1, pts.size()):
+			min_d = minf(min_d, Vector2(pts[i].x - pts[j].x, pts[i].z - pts[j].z).length())
+	check(min_d >= SquadManager.SEPARATION - 0.01, "Trennung: Zielplätze mindestens 1,2 m auseinander (0x598550)", "%.2f m" % min_d)
+	sq.spacing_level = 3
+	check(absf(sq.slot_watch_offset(f[0]) - atan2(0.5, 1.0)) < 0.01, "Pfeil: Platz 1 sichert nach links vorn (Platzrichtung)")
+	# Aktionsmenü an einem Gegner: Töten / Leise töten / Gefangennehmen (nur ergeben)
+	var e := m.enemies[1] if m.enemies.size() > 1 else m.enemies[0]
+	var eb := reset_enemy(e, 4, 30, PI)
+	eb.enabled = false
+	cm.context_override = e
+	await cmd("command_all", [3])
+	var ids: Array = cm.entries.slice(0, 3).map(func(x): return x[0])
+	check(cm.menu_id == 53 and ids == [7045, 7046, 7038] and cm.entries[2][1] == CommandMenu.A_GREY,
+		"Aktion (Gegner): Töten, Leise töten, Gefangennehmen grau (ergibt sich nicht)", str(ids))
+	check(cm.target_line() == e.soldier_name, "Aktion: Zeile 2 = Name des Gegners")
+	await key(KEY_0)
+	await key(KEY_0)
+	eb.surrendered = true
+	var mate := sq.members[1]
+	place(mate, 4, 26, 0.0)
+	sq.brain_of(mate).clear_tasks()
+	sq.brain_of(mate).set_order(SquadBrain.Order.HOLD)
+	await cmd("command_2", [3])
+	check(cm.entries[2][1] == CommandMenu.ACT_CAPTURE, "Gegner ergibt sich: Gefangennehmen wählbar")
+	await key(KEY_3)
+	for i in 600:
+		if eb.captured:
+			break
+		await frames(1)
+	check(eb.captured, "Aktion › Gefangennehmen: Kamerad geht hin und nimmt gefangen")
+	await cmd("command_2", [3])
+	ids = cm.entries.slice(0, 4).map(func(x): return x[0])
+	check(ids == [7045, 7043, 7044, 7050] and cm.entries[2][1] == CommandMenu.ACT_UNIFORM,
+		"Aktion (Gefangener): Töten, Suchen & Mun. sammeln, Uniform benutzen, Gegenstände nehmen", str(ids))
+	await key(KEY_0)
+	await key(KEY_0)
+	# Befehl an genau den Soldaten unter dem Fadenkreuz: kein Ziel (0x4C10F0 Fall 3)
+	cm.context_override = mate
+	await act("command_2")
+	check(cm.context == null and cm.entries[2][1] == CommandMenu.A_GREY, "Soldat ist kein Aktionsziel für sich selbst")
+	await key(KEY_0)
+	cm.context_override = null
+	e.global_position = Vector3(-120, 30, -110)
+	e.set_physics_process(false)
+	# Darstellung: Original-Frame „rollmenu“ links über der Truppleiste
+	await act("command_all")
+	var r := cm.menu_rect()
+	var vs := cm.get_viewport().get_visible_rect().size
+	check(cm._panel != null and cm._panel.visible and absf(r.position.y / vs.y - 0.60292) < 0.01 and r.position.x < 1.0
+		and absf(r.size.y / vs.y - 0.284) < 0.01, "Menü im Original-Frame „rollmenu“ (x 0–0,226, y 0,603–0,887)", str(r))
+	if FileAccess.file_exists(OrigLevel.cache_root() + "/ui/hud/textures/x_mo2.png"):
+		check(cm.rollmenu_tex != null, "Hintergrund = Originaltextur x_mo2 (gameinterface.4ds)")
+	await key(KEY_0)
+	# Taktik-Plan: Befehl „an alle“ erreicht nur Soldaten ohne Plan (0x456020)
+	var two := sq.members[1]
+	var three := sq.members[2]
+	sq.brain_of(three).set_order(SquadBrain.Order.HOLD)
+	sq.order_one(two, SquadBrain.Order.MOVE, m.lb.ground(-20, 0, 0.0))
+	await cmd("command_all", [1, 1])
+	check(sq.has_plan(two) and sq.brain_of(three).order == SquadBrain.Order.FOLLOW, "Folgt mir (an alle) übergeht Soldaten mit Taktik-Plan")
+	await cmd("command_2", [8, 6])
 
 
 ## Befehle bleiben bestehen (Fehlerbericht 23.10.2026 „die folgen immer nur“): echte Tasten, 20 s Spielzeit, der

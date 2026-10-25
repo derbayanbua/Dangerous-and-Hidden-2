@@ -68,7 +68,7 @@ const PROFILE_KEYS := {
 	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models", "quality"],
 	"audio": ["master_volume", "music_volume", "sfx_volume", "speech_volume"],
 	"controls": ["mouse_sensitivity", "invert_y"],
-	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers"],
+	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"],
 	"multiplayer": ["voice_enabled", "voice_volume", "connection_type"],
 }
 ## Original „MEHRSPIELER-SPIEL-EINSTELLUNGEN“ (T2409): Voice-Chat ermöglichen (T2431, Original-Standard aus),
@@ -92,6 +92,9 @@ var hurt_feedback := true     ## Treffer-Richtungsanzeige beim Getroffenen (Serv
 var kill_cam := true          ## Kill-Cam nach dem eigenen Tod (src/ui/kill_cam.gd; Server-Regel killcam)
 ## BEWUSSTE ABWEICHUNG (Vorgabe Auftraggeber): Zielmarker/Randpfeile mit Entfernung (src/ui/objective_markers.gd)
 var objective_markers := true
+## B-016 BEWUSSTE ABWEICHUNG (Vorgabe Auftraggeber): Ragdoll-Physik für Gefallene (src/actors/ragdoll.gd);
+## aus = Original-Todesanimationen (anim.sav) wie im Original
+var ragdoll := true
 # --- aus dem Original-Setup (setup.exe, LS3D_setup), soweit heute sinnvoll ---
 ## VSync-Modus: 0 aus, 1 an, 2 adaptiv, 3 Dreifachpuffer (Original „Triple-Buffering“)
 var vsync_mode := 1
@@ -164,7 +167,7 @@ func load_settings() -> void:
 	shadows = _cfg.get_value("graphics", "shadows", shadows)
 	subtitles = _cfg.get_value("game", "subtitles", subtitles)
 	crosshair = _cfg.get_value("game", "crosshair", crosshair)
-	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers"]:
+	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"]:
 		set(k, _cfg.get_value("game", k, get(k)))
 	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		set(k, _cfg.get_value("graphics", k, get(k)))
@@ -202,7 +205,7 @@ func save_settings() -> void:
 	_cfg.set_value("graphics", "shadows", shadows)
 	_cfg.set_value("game", "subtitles", subtitles)
 	_cfg.set_value("game", "crosshair", crosshair)
-	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers"]:
+	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"]:
 		_cfg.set_value("game", k, get(k))
 	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		_cfg.set_value("graphics", k, get(k))

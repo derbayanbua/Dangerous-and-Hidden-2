@@ -442,6 +442,7 @@ func _order(hale: Soldier) -> void:
 	await _mission_end(hale, cands)
 	await _helmet_sp(hale)
 	await _backpack_sp(hale)
+	await _b018_sp(hale)
 
 
 ## B-014: Helm sichtbar (Kopfgegenstand), Helm-Trefferfläche zuerst, Abschießen → Flug → Ablagestapel, wieder aufsetzen
@@ -564,6 +565,184 @@ func _backpack_sp(hale: Soldier) -> void:
 	mate.remove_meta("mp_class")
 
 
+## B-018: Helmsitz am Kopfgelenk (0x7D1B60 Fall 1) in allen Haltungen an mehreren Figuren, kein Selbsttreffer (liegend,
+## Helm), zweite Langwaffe auf dem Rücken (sichtbar, Tausch Hände ↔ Rücken), Munition im Rucksack + Nachladen
+func _b018_sp(hale: Soldier) -> void:
+	var m := mission()
+	var mate: Soldier = null
+	for mm in m.squad.members:
+		if mm != hale and mm.alive:
+			mate = mm
+	if mate == null:
+		mate = hale
+	place(mate, 8, 20, 0.0)
+	if m.squad.brain_of(mate):
+		m.squad.brain_of(mate).hold_pos = mate.global_position
+	mate.health = mate.max_health
+	if Helmet.head_item(mate) < 0:
+		var inv0 := FieldInventory.view(mate)
+		inv0["head"] = Helmet.DEFAULT_ALLIED
+		FieldInventory.apply(mate, inv0, FieldInventory.weapon_pool(mate))
+	# --- 1. Helmsitz ---
+	for fig_name in ["en01", "ge03", "ge10"]:
+		var fig := Net.character_figure(null, fig_name)
+		if fig == null:
+			print("INFO B-018: Figur %s fehlt im Cache" % fig_name)
+			continue
+		mate.model.attach_orig(fig)
+		await frames(8)
+		for st in [Soldier.Stance.STAND, Soldier.Stance.CROUCH, Soldier.Stance.PRONE]:
+			mate.stance_request = st
+			mate.stance = st
+			await frames(25)
+			var mdl = mate.model
+			var vis: Node3D = mdl._helmet_vis
+			var sks: Array = mdl.orig_figure.find_children("*", "Skeleton3D", true, false) if mdl.orig_figure else []
+			if vis == null or sks.is_empty():
+				check(false, "B-018 Helm %s: Modell vorhanden" % fig_name)
+				continue
+			var sk := sks[0] as Skeleton3D
+			var bone: Transform3D = sk.global_transform * sk.get_bone_global_pose(sk.find_bone("f"))
+			var frame: Node3D = null
+			for c in vis.get_children():
+				if c is Node3D and not String(c.name).to_lower().begins_with("shadow"):
+					frame = c
+					break
+			var fxf: Transform3D = frame.global_transform if frame else vis.global_transform
+			var local: Transform3D = bone.affine_inverse() * fxf
+			var sc: Vector3 = bone.basis.get_scale()
+			var pos_ok: bool = (local.origin * sc).distance_to(Helmet.MOUNT_POS * sc) < 0.002
+			var rot_ok: bool = local.basis.orthonormalized().get_euler().length() < 0.01
+			# Helmmitte über der Kopfzone (Kopfachse), nicht im Gesicht
+			var head_c := bone.origin
+			var up := bone.basis.y.normalized()
+			var hc: Vector3 = mdl.helmet_transform().origin
+			var above := (hc - head_c).dot(up)
+			check(pos_ok and rot_ok and above > 0.08 and above < 0.2,
+				"B-018 Helm sitzt am Kopfgelenk (%s, Haltung %d, %.3f m über f)" % [fig_name, st, above],
+				"lokal %s / soll %s" % [local.origin, Helmet.MOUNT_POS])
+	mate.stance_request = Soldier.Stance.STAND
+	mate.stance = Soldier.Stance.STAND
+	await frames(20)
+	# --- 2. Kein Selbsttreffer (liegend, Strahl durch die eigene Helm- und Kopffläche) ---
+	mate.stance_request = Soldier.Stance.PRONE
+	mate.stance = Soldier.Stance.PRONE
+	await frames(30)
+	var k98 := WeaponDB.get_weapon(&"kar98k")
+	var helm0 := Helmet.head_item(mate)
+	var hp0 := mate.health
+	var hc2: Vector3 = mate.model.helmet_transform().origin
+	var dirs := [-mate.global_basis.z, (-mate.global_basis.z + Vector3.DOWN * 0.3).normalized()]
+	for d in dirs:
+		# Mündung hinter dem Kopf: Strahl läuft durch Helm, Kopf und Rumpf des Schützen (leere Ausschlussliste = nur der
+		# Ballistik-Selbstausschluss) und mit exclude_rids wie Soldier._fire_shot
+		Ballistics.fire(mate, hc2 - (d as Vector3) * 0.4, d, k98, [] as Array[RID], mate.team)
+		Ballistics.fire(mate, mate.eye_position(), d, k98, mate.exclude_rids(), mate.team)
+	await get_tree().create_timer(0.6).timeout
+	check(Helmet.head_item(mate) == helm0 and helm0 >= 0 and is_equal_approx(mate.health, hp0),
+		"B-018: eigener Schuss (liegend) trifft weder Helm noch Körper", "Helm %d→%d, LP %.1f→%.1f" % [helm0, Helmet.head_item(mate), hp0, mate.health])
+	var rids := mate.exclude_rids()
+	check(mate.model.helmet_rid().is_valid() and rids.has(mate.model.helmet_rid()), "B-018: Helmfläche in exclude_rids des Schützen")
+	# fremder Schütze trifft den Helm weiterhin (Gegenprobe, stehend wie _helmet_sp)
+	mate.stance_request = Soldier.Stance.STAND
+	mate.stance = Soldier.Stance.STAND
+	await frames(30)
+	var t: Vector3 = mate.model.helmet_transform().origin + Vector3.UP * 0.06
+	var src := t + Vector3(0, 0.8, 2.5)
+	Ballistics.fire(hale, src, (t - src).normalized(), k98, hale.exclude_rids(), hale.team)
+	var t0 := Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 2000 and Helmet.head_item(mate) >= 0:
+		await get_tree().physics_frame
+	check(Helmet.head_item(mate) < 0, "B-018 Gegenprobe: fremder Schuss schießt den Helm ab")
+	await get_tree().create_timer(4.5).timeout
+	mate.health = mate.max_health
+	if not mate.alive:
+		print("INFO B-018: Kamerad durch Durchschlag gefallen – weiter mit Hale")
+		mate = hale
+	mate.stance_request = Soldier.Stance.STAND
+	mate.stance = Soldier.Stance.STAND
+	await frames(20)
+	# --- 3. Zweite Langwaffe auf dem Rücken ---
+	mate.set_meta("mp_class", "Test")      # Originalpackregeln
+	var prim: Array = []
+	for id in range(1, 300):
+		if SAS.item_kind(id) == "weapon" and WeaponDB.from_orig(id) and WeaponDB.from_orig(id).slot == WeaponData.Slot.PRIMARY \
+				and SAS.ammo_of(id) >= 0 and not prim.has(id):
+			var mdl_name := String(OrigWeapons.info(WeaponDB.from_orig(id)).get("model", ""))
+			var probe := OrigWeapons.world_model(mdl_name) if mdl_name != "" else null
+			var has_link: bool = probe != null and probe.find_child("backlink", true, false) != null
+			if probe:
+				probe.free()
+			if has_link:
+				prim.append(id)
+		if prim.size() >= 2:
+			break
+	check(prim.size() == 2, "B-018: zwei Langwaffen mit backlink gefunden", str(prim))
+	if prim.size() < 2:
+		mate.remove_meta("mp_class")
+		return
+	var inv := FieldInventory.view(mate)
+	inv["hands"] = prim[0]
+	inv["shoulder"] = -1
+	inv["back"] = 101
+	inv["items"] = []
+	SAS.add_item(inv, prim[1], 1)
+	var am := SAS.ammo_of(prim[1])
+	SAS.add_item(inv, am, 5)
+	if SAS.ammo_of(prim[0]) != am:
+		SAS.add_item(inv, SAS.ammo_of(prim[0]), 4)
+	SAS.add_item(inv, 9, 8)
+	FieldInventory.apply(mate, inv, FieldInventory.weapon_pool(mate))
+	await frames(3)
+	var v := FieldInventory.view(mate)
+	var bw := FieldInventory.back_weapon(mate)
+	check(int(v["hands"]) == prim[0] and int(v["shoulder"]) == prim[1] and SAS.count_of(v, prim[1]) == 1
+		and not (v["items"] as Array).any(func(e): return int(e[0]) == prim[1]) and bw != null,
+		"B-018: zweite Langwaffe auf dem Rücken (nicht in Taschen/Rucksack)", str(v))
+	var back_vis: Node3D = mate.model._back_vis
+	var on_back := false
+	if back_vis and back_vis.is_inside_tree():
+		var rel := back_vis.global_position - mate.global_position
+		on_back = rel.dot(-mate.global_basis.z) < 0.05 and rel.y > 0.9 and rel.y < 1.9
+	check(back_vis != null and back_vis.get_parent() is BoneAttachment3D and on_back,
+		"B-018: Rückenwaffe sichtbar am Brustgelenk d (hinter dem Körper)",
+		str(back_vis.global_position - mate.global_position) if back_vis else "kein Modell")
+	check(OrigHud.shoulder_weapon(mate) == bw, "B-018: HUD-Schulterwaffe = Rückenwaffe")
+	await shot("b018_back")        # Fenster --shots=1: Rückenwaffe + Helm (test_output/inventory_b018_back.png)
+	# Ziehen ins Inventar (Taschen) → bleibt auf dem Rücken; Tausch per Waffenwahl derselben Art
+	var res := FieldInventory.move(mate, "shoulder", prim[1], mate, "items")
+	check(res == "" and int(FieldInventory.view(mate)["shoulder"]) == prim[1], "B-018: Langwaffe in die Taschen → zurück auf den Rücken", res)
+	mate.current_slot = WeaponData.Slot.PRIMARY
+	mate.tool = ""
+	var swapped := mate.select_slot(WeaponData.Slot.PRIMARY)
+	await frames(3)
+	v = FieldInventory.view(mate)
+	check(swapped and int(v["hands"]) == prim[1] and int(v["shoulder"]) == prim[0], "B-018: Taste 1 tauscht Hände ↔ Rücken", str(v))
+	# Inventar-Doppelklick: Rücken → Hände
+	var ui := inv_ui()
+	ui.open_for(mate)
+	await frames(2)
+	ui.quick("own", "shoulder", prim[0])
+	v = FieldInventory.view(mate)
+	check(int(v["hands"]) == prim[0] and int(v["shoulder"]) == prim[1], "B-018: Doppelklick Rücken → Hände (Tausch)", str(v))
+	ui.close()
+	# --- 4. Munition im Rucksack: Taschen-Auslastung ohne Munition, Nachladen greift zu ---
+	var cols := SAS.split_items(v)
+	var pack_ids: Array = (cols[1] as Array).map(func(e): return int(e[0]))
+	check(pack_ids.has(SAS.ammo_of(prim[0])) or pack_ids.has(am), "B-018: Magazine liegen im Rucksack", str(cols))
+	var w := mate.current_weapon()
+	if w:
+		var res0 := w.reserve
+		w.in_mag = 0
+		var started := mate.reload()
+		t0 = Time.get_ticks_msec()
+		while Time.get_ticks_msec() - t0 < 8000 and w.in_mag == 0:
+			await get_tree().physics_frame
+		check(res0 > 0 and started and w.in_mag > 0 and w.reserve < res0,
+			"B-018: Nachladen nimmt Magazine aus dem Rucksack", "Reserve %d → %d, Magazin %d" % [res0, w.reserve, w.in_mag])
+	mate.remove_meta("mp_class")
+
+
 ## Missionsende (Original 0x698F80 → 0x5A9040 → 0x5A8B50): SAS-Datensatz = aktuelles Inventar des Soldaten.
 ## Aufgehobenes bleibt, Abgelegtes/Verbrauchtes fehlt, Reihenfolge der Gruppen bleibt.
 func _mission_end(hale: Soldier, cands: Array) -> void:
@@ -678,6 +857,16 @@ func _mp() -> void:
 	var h0: int = Helmet.head_item(cl) if is_instance_valid(cl) else -1
 	check(h0 >= 0, "MP-Helm: Client-Soldat trägt einen Kopfgegenstand (Server)", str(h0))
 	if is_instance_valid(cl) and h0 >= 0:
+		# B-018: Schuss des Client-Soldaten auf dem Server (wie Net-Aktion „shot“ → Ballistics.fire mit Schütze = Netzfigur)
+		# durch die eigene Helm-/Kopffläche: kein Helmverlust, kein Schaden
+		var hp_c := cl.health
+		var hcc: Vector3 = cl.model.helmet_transform().origin if cl.model and cl.model.has_method("helmet_transform") else cl.eye_position()
+		var dcc := (-cl.global_basis.z + Vector3.DOWN * 0.2).normalized()
+		Ballistics.fire(cl, hcc - dcc * 0.4, dcc, WeaponDB.get_weapon(&"kar98k"), cl.exclude_rids(), cl.team)
+		Ballistics.fire(cl, hcc - dcc * 0.4, dcc, WeaponDB.get_weapon(&"kar98k"), [] as Array[RID], cl.team)
+		await get_tree().create_timer(0.5).timeout
+		check(Helmet.head_item(cl) == h0 and is_equal_approx(cl.health, hp_c), "B-018 MP: eigener Schuss trifft den eigenen Helm/Körper nicht",
+			"Helm %d, LP %.1f→%.1f" % [Helmet.head_item(cl), hp_c, cl.health])
 		Helmet.knock_off(cl, Vector3(0.2, 0.0, 0.1))
 		check(Helmet.head_item(cl) < 0 and not WeaponDB.wears_helmet(cl), "MP-Helm: Server nimmt den Helm vom Kopf")
 		var put_on := func() -> bool: return is_instance_valid(Net._soldiers.get(cid)) and Helmet.head_item(Net._soldiers.get(cid)) == h0

@@ -61,6 +61,9 @@ static func _soldier_view(s: Soldier) -> Dictionary:
 	for w in s.weapons:
 		if w:
 			ws.append(w)
+	var bw = back_weapon(s)
+	if bw:
+		ws.append(bw)
 	for w in s.get_meta("surrendered_weapons", []):
 		if w:
 			ws.append(w)
@@ -165,6 +168,56 @@ static func set_start_order(s: Soldier, inv: Dictionary) -> void:
 		if not order.has(int(e[0])):
 			order.append(int(e[0]))
 	s.set_meta("inv_order", order)
+
+
+## --- Rücken-/Schulterplatz (B-018) ------------------------------------------------------------------------------
+## Original [B]: Hände (+0x74, Halterung Fall 4 an hw1) und Rücken (Fall 0x10: Waffenmodell mit Dummy „backlink“ am
+## Gelenk d, 0x7D1B60) sind eigene Plätze; die zweite Langwaffe wird sichtbar auf dem Rücken getragen. Nachbau: die
+## Laufzeit hat je Waffenart nur einen Platz – eine zweite Langwaffe gleicher Art liegt als Meta „back_weapon“ (Weapon)
+## am Soldaten statt in den Taschen. Neue Langwaffen kommen auf den freien Rückenplatz [D Vorgabe Auftraggeber].
+
+static func back_weapon(s: Node) -> Weapon:
+	# Akteure ohne Inventardaten / freigegebene Knoten: kein Rückenplatz (B-020-Hinweis: Fehlerflut auf arctic1)
+	if s == null or not is_instance_valid(s) or not s.has_meta("back_weapon"):
+		return null
+	var bw: Variant = s.get_meta("back_weapon", null)
+	return bw if bw is Weapon else null
+
+
+## Freier Rückenplatz: erste Langwaffe aus Taschen/Rucksack dorthin
+static func _back_first(inv: Dictionary) -> void:
+	if int(inv.get("shoulder", -1)) >= 0:
+		return
+	for e in inv["items"]:
+		var id := int(e[0])
+		if accepts("shoulder", id):
+			SAS.remove_item(inv, id, 1)
+			inv["shoulder"] = id
+			return
+
+
+## Missionsstart/Ausrüstung: zweite Langwaffe aus der Ausrüstung auf den Rücken (einmal anwenden)
+static func settle_back(s: Soldier) -> void:
+	if not is_instance_valid(s) or not s.alive or s.has_meta("captured") or (Net.is_online and not Net.is_authority()):
+		return
+	var inv := view(s)
+	if int(inv["shoulder"]) >= 0:
+		return
+	for e in inv["items"]:
+		if accepts("shoulder", int(e[0])):
+			apply(s, inv, weapon_pool(s))
+			return
+
+
+## Hände ↔ Rücken tauschen (Waffenwahl derselben Art, Taste 1 bei gezogener Langwaffe); MP über den Server
+static func swap_back(s: Soldier) -> bool:
+	if not is_instance_valid(s) or back_weapon(s) == null:
+		return false
+	var inv := view(s)
+	var id := int(inv["shoulder"])
+	if id < 0:
+		return false
+	return request(s, s, "shoulder", id, s, "hands") == ""
 
 
 static func _tool(inv: Dictionary, id: int, n: int, in_hand: bool) -> void:
@@ -279,6 +332,9 @@ static func weapon_pool(n: Node) -> Array:
 		for w in (n as Soldier).weapons:
 			if w:
 				out.append(w)
+		var bw = n.get_meta("back_weapon", null)
+		if bw is Weapon:
+			out.append(bw)
 		for w in n.get_meta("surrendered_weapons", []):
 			if w:
 				out.append(w)
@@ -321,6 +377,8 @@ static func apply(n: Node, inv: Dictionary, pool: Array) -> void:
 		return
 	var s := n as Soldier
 	var captured := s.has_meta("captured")
+	if s.alive and not captured:
+		_back_first(inv)
 	var old_w := s.current_weapon()
 	var old_key := s.selected_key()
 	var total := {}
@@ -342,6 +400,7 @@ static func apply(n: Node, inv: Dictionary, pool: Array) -> void:
 	new_w.resize(WeaponData.SLOT_COUNT)
 	var surrendered: Array = []
 	var extra := {}
+	var back_w: Weapon = null
 	for id in order:
 		if TOOL_IDS.has(int(id)) or SAS.item_kind(int(id)) != "weapon":
 			continue
@@ -362,6 +421,15 @@ static func apply(n: Node, inv: Dictionary, pool: Array) -> void:
 				surrendered.append(wc)
 			continue
 		if slot >= new_w.size() or new_w[slot] != null:
+			# B-018: zweite Langwaffe auf dem Rücken-/Schulterplatz (Original: eigener Halterungsplatz 0x10, Modell am
+			# Gelenk d über „backlink“, 0x7D1B60) statt in Taschen/Rucksack
+			if back_w == null and int(id) == int(inv["shoulder"]) and not captured:
+				back_w = _take_pool(pool, int(id), s.team)
+				if back_w == null:
+					back_w = _new_weapon(wd)
+				if cnt > 1:
+					_bump(extra, int(id), cnt - 1)
+				continue
 			_bump(extra, int(id), cnt)
 			continue
 		var w := _take_pool(pool, int(id), s.team)
@@ -376,6 +444,8 @@ static func apply(n: Node, inv: Dictionary, pool: Array) -> void:
 	# Munition der Waffen (Magazine in den Taschen): Teilmagazin bleibt erhalten
 	var used_ammo := {}
 	var armed: Array = new_w.duplicate()
+	if back_w:
+		armed.append(back_w)
 	armed.append_array(surrendered)
 	for w0 in armed:
 		var w := w0 as Weapon
@@ -416,7 +486,14 @@ static func apply(n: Node, inv: Dictionary, pool: Array) -> void:
 	s.weapons.clear()
 	for w in new_w:
 		s.weapons.append(w as Weapon)
+	if back_w:
+		s.set_meta("back_weapon", back_w)
+	elif s.has_meta("back_weapon"):
+		s.remove_meta("back_weapon")
 	_refresh_head(s)
+	var mdl = s.get("model")
+	if mdl and mdl.has_method("refresh_back_weapon"):
+		mdl.call_deferred("refresh_back_weapon")
 	if not s.alive or captured:
 		return
 	_apply_hands(s, int(inv["hands"]), old_w, old_key)
@@ -508,7 +585,7 @@ static func move(src: Node, from: String, id: int, dst: Node, to: String) -> Str
 	if to in SLOTS:
 		var occ := int(b[to])
 		if occ >= 0:
-			if same and from in SLOTS:
+			if same and from in SLOTS and accepts(from, occ):
 				a[from] = occ
 			else:
 				SAS.add_item(b, occ, 1)
@@ -809,7 +886,8 @@ static func export_state(n: Node) -> Dictionary:
 		surr.append([String((w as Weapon).data.id), (w as Weapon).in_mag, (w as Weapon).reserve])
 	return {"w": w_out, "cur": s.current_slot, "tool": s.tool, "med": s.medkits, "bin": s.has_binoculars,
 		"exp": s.explosives, "mine": s.mines, "orig": s.get_meta("orig_items", []), "extra": s.get_meta("inv_extra", []),
-		"layout": s.get_meta("inv_layout", {}), "surr": surr, "order": s.get_meta("inv_order", [])}
+		"layout": s.get_meta("inv_layout", {}), "surr": surr, "order": s.get_meta("inv_order", []),
+		"back": ([String(back_weapon(s).data.id), back_weapon(s).in_mag, back_weapon(s).reserve] if back_weapon(s) else [])}
 
 
 ## Stand übernehmen (Client: vom Server; Server: Munitionsstand des anfragenden Spielers)
@@ -868,6 +946,18 @@ static func import_state(n: Node, d: Dictionary, ammo_only := false) -> void:
 	s.set_meta("inv_layout", (d.get("layout", {}) as Dictionary).duplicate())
 	if d.has("order"):
 		s.set_meta("inv_order", (d["order"] as Array).duplicate())
+	var bk: Array = d.get("back", [])
+	if bk.size() >= 3:
+		var bw := back_weapon(s)
+		if bw == null or String(bw.data.id) != String(bk[0]):
+			bw = Weapon.new(WeaponDB.get_weapon(StringName(bk[0])), false)
+		bw.in_mag = int(bk[1])
+		bw.reserve = int(bk[2])
+		s.set_meta("back_weapon", bw)
+	elif s.has_meta("back_weapon"):
+		s.remove_meta("back_weapon")
+	if s.model and s.model.has_method("refresh_back_weapon"):
+		s.model.call_deferred("refresh_back_weapon")
 	s.current_slot = clampi(int(d.get("cur", s.current_slot)), 0, WeaponData.SLOT_COUNT - 1)
 	s.tool = String(d.get("tool", ""))
 	if s.alive and (s.current_weapon() != old_w or not s.net_puppet):

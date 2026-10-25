@@ -56,6 +56,238 @@ func setup(m: Node, rt: LsRuntime, o: OrigLevel) -> void:
 	for e in d.get("document_places", []):
 		var p: Dictionary = e.get("params", {})
 		_place(e, "documents", int(p.get("action_text", 7051)), int(p.get("required_item", -1)))
+	_static_leaves()
+	_fences()
+
+
+# --- Zerschneidbare Zäune (B-017) -------------------------------------------------------------------------------
+## Original [B]: Zaunfelder sind 4DS-Frames mit Parameter „phobj … break <Modell>“ (hd2.exe 0x410B40: Physikobjekt,
+## Ersatzmodell nach dem Zerschneiden, Standard „plotdira“; ARCTIC1 114 Felder plot_a* mit Material 20 „Pletivo“ und
+## Ersatz m_plotdira). Aktionsmenü 0x4BF670 Fall 0x23: „Benutze Drahtschneider“ (T7035) nur mit Drahtschere im
+## Inventar (0x5A7ED0; Gegenstand 59 „wire-cutter“, items.sav). Skripte lesen/setzen den Zustand (r_arc1a_ploty.scr
+## speichert _ACTOR_GetState je Feld als SaveGameValue 111–223, r_ar3_ploty.scr stellt ihn mit SetActorState her).
+## Annahmen [E]: Zustand 0 = ganz, 1 = zerschnitten; Dauer 3 s, Abbruch bei > 1 m Bewegung; Klang Kat. 11 Nr. 25.
+const WIRE_CUTTER := 59
+const TXT_CUTTER := 7035
+const FENCE_CUT_TIME := 3.0
+
+func _fences() -> void:
+	if orig == null:
+		return
+	var f := FileAccess.open(orig.mission_dir + "/scene.glb", FileAccess.READ)
+	if f == null or f.get_length() < 20 or f.get_32() != 0x46546C67:
+		return
+	f.get_32()
+	f.get_32()
+	var ln := f.get_32()
+	f.get_32()
+	var j = JSON.parse_string(f.get_buffer(ln).get_string_from_utf8())
+	if typeof(j) != TYPE_DICTIONARY:
+		return
+	var re := RegEx.create_from_string("break([A-Za-z0-9_]+)")
+	for n in j.get("nodes", []):
+		var ex = n.get("extras", {})
+		if typeof(ex) != TYPE_DICTIONARY:
+			continue
+		var pr := String(ex.get("params", ""))
+		if not pr.begins_with("phobj"):
+			continue
+		var m := re.search(pr)
+		if m == null:
+			continue
+		var nm := String(n.get("name", ""))
+		var fr := runtime.find_frame(nm)
+		if fr == null:
+			continue
+		var c := OrigFence.new()
+		c.name = "Fence_" + nm.validate_node_name()
+		mission.dynamic_root.add_child(c)
+		c.init(self, fr, nm, m.get_string(1))
+		controls[nm.to_upper()] = c
+		fr.set_meta("orig_ctl", c)
+		stats["fences"] = int(stats.get("fences", 0)) + 1
+
+
+class OrigFence extends Interactable:
+	var host: OrigInteractive
+	var frame: Node3D
+	var break_model := ""
+	var cut := false
+	var floor_y := 0.0
+	var _left := 0.0
+	var _by: Soldier
+	var _from := Vector3.ZERO
+	var _snd: AudioStreamPlayer3D
+	var _broken: Node3D
+
+	func init(h: OrigInteractive, f: Node3D, nm: String, model: String) -> void:
+		host = h
+		frame = f
+		break_model = model
+		persistent_id = "ofence_" + nm
+		var box := OrigInteractive.world_aabb(f)
+		global_position = box.get_center()
+		floor_y = box.position.y
+		frame.set_meta("actor_state", 0)
+		_add_block()
+		_update_prompt()
+
+	## Original: Physikobjekt mit eigener Kollision (nicht in tree.klz). Das Drahtgeflecht hat Alpha-Material und bekam
+	## im Nachbau als „Laub“ keine Kollision – man lief hindurch. Wie die Klz-Pletivo-Flächen (Bit 0x100000,
+	## re_notes_script_anims §6): Kasten je Mesh auf Ebene 5 – sperrt Bewegung, Sicht und Geschosse gehen durch.
+	func _add_block() -> void:
+		var list: Array = frame.find_children("*", "MeshInstance3D", true, false)
+		if frame is MeshInstance3D:
+			list.append(frame)
+		for mi in list:
+			var me := mi as MeshInstance3D
+			if me.mesh == null:
+				continue
+			var bb := me.get_aabb()
+			var body := StaticBody3D.new()
+			body.name = "FenceBlock"
+			body.collision_layer = 1 << 4
+			body.collision_mask = 0
+			var cs := CollisionShape3D.new()
+			var box := BoxShape3D.new()
+			box.size = bb.size.max(Vector3(0.12, 0.12, 0.12))
+			cs.shape = box
+			cs.position = bb.get_center()
+			body.add_child(cs)
+			me.add_child(body)
+
+	func _update_prompt() -> void:
+		prompt = OrigInteractive.text(TXT_CUTTER, "Benutze Drahtschneider") + (" …" if _left > 0.0 else "")
+
+	func can_interact(s: Soldier) -> bool:
+		return enabled and not cut and s.global_position.y > floor_y - 1.0 and s.global_position.y < floor_y + 1.8
+
+	func interact(s: Soldier) -> void:
+		if cut or _left > 0.0:
+			return
+		if not host.allowed(s, WIRE_CUTTER):
+			Events.say("Keine Drahtschere.", 2.0)
+			return
+		if not OrigInteractive.has_item(s, WIRE_CUTTER):
+			Events.say("Drahtschere fehlt im Trupp – Zaun wird trotzdem geöffnet.", 2.0)
+		_by = s
+		_from = s.global_position
+		_left = FENCE_CUT_TIME
+		Events.say(OrigInteractive.text(TXT_CUTTER, "Benutze Drahtschneider") + " …", FENCE_CUT_TIME)
+		_snd = OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_WIRECUT, global_position, self)
+		_update_prompt()
+		super.interact(s)
+
+	func _physics_process(delta: float) -> void:
+		if _left <= 0.0:
+			return
+		if not is_instance_valid(_by) or not _by.alive or _by.global_position.distance_to(_from) > 1.0:
+			_left = 0.0
+			if is_instance_valid(_snd):
+				_snd.queue_free()
+			_update_prompt()
+			return
+		_left -= delta
+		if _left <= 0.0:
+			Events.emit_noise(global_position, 5.0, _by, _by.team, &"fence")
+			set_cut(true)
+
+	func set_cut(b: bool) -> void:
+		if not b or cut:
+			return
+		cut = true
+		_left = 0.0
+		frame.set_meta("actor_state", 1)
+		# Feld samt Kindern ausblenden, Kollision aus; Ersatzmodell (offenes Zaunfeld) an dieselbe Stelle
+		frame.visible = false
+		for b2 in frame.find_children("*", "CollisionObject3D", true, false):
+			var co := b2 as CollisionObject3D
+			co.collision_layer = 0
+			co.collision_mask = 0
+		var inst: Node3D = host.orig.model_instance(break_model) if host.orig else null
+		if inst:
+			inst.name = "Cut_" + String(frame.name).validate_node_name()
+			host.mission.dynamic_root.add_child(inst)
+			inst.global_transform = frame.global_transform
+			_broken = inst
+		_update_prompt()
+		if Net.is_online and is_inside_tree():
+			Net.object_state(self)
+
+	func set_actor_state(n: int) -> void:
+		set_cut(n != 0)
+
+	func net_state() -> Dictionary:
+		return {"cut": cut}
+
+	func net_apply(st: Dictionary, _snap: bool) -> void:
+		set_cut(bool(st.get("cut", cut)))
+
+	func serialize() -> Dictionary:
+		return {"enabled": enabled, "cut": cut}
+
+	func deserialize(d: Dictionary) -> void:
+		enabled = d.get("enabled", true)
+		set_cut(bool(d.get("cut", false)))
+
+
+# --- Statische Türflügel mit Klinke (B-017, ABWEICHUNG [D]) -----------------------------------------------------
+## Original [B]: Manche Eingangstüren sind keine Türakteure (kein Typ-6-Eintrag in scene2.bin), sondern statische
+## Frames mit Klinke „dhandle*“: AFRICA1 HL_DV09/HL_DV11 (Haupteingang vorne/hinten, in tree.klz gar nicht verlinkt),
+## NORMANDY2 m_H36 (am Startpunkt, Klz-Kiste). Im Original lassen sie sich nicht benutzen. Vorgabe Auftraggeber
+## (B-017): solche Flügel öffnen per Benutzen wie Drehtüren – Angel an der Kante gegenüber der Klinke, 90°, Drehsinn
+## zur freien Seite. Flügel ohne freien Durchgang dahinter (Attrappe vor einer Wand) bleiben unbenutzbar.
+const LEAF_MIN_H := 1.6
+const LEAF_MAX_H := 2.8
+
+func _static_leaves() -> void:
+	if orig == null or orig.root == null:
+		return
+	var seen := {}
+	for n in orig.root.find_children("dhandle*", "MeshInstance3D", true, false):
+		var leaf := n.get_parent() as MeshInstance3D
+		if leaf == null or seen.has(leaf) or leaf.has_meta("orig_ctl") or leaf.mesh == null or not leaf.is_visible_in_tree():
+			continue
+		seen[leaf] = true
+		var b := leaf.global_transform * leaf.get_aabb()
+		var wide := maxf(b.size.x, b.size.z)
+		var thin := minf(b.size.x, b.size.z)
+		if b.size.y < LEAF_MIN_H or b.size.y > LEAF_MAX_H or wide < 0.5 or wide > 1.4 or thin > 0.25:
+			continue
+		var p := leaf.get_parent()
+		var skip := false
+		while p != null and p != orig.root:
+			if p.has_meta("orig_ctl"):
+				skip = true            # Flügel eines echten Türakteurs
+				break
+			p = p.get_parent()
+		if skip:
+			continue
+		# Angel: senkrechte Kante gegenüber der Klinke
+		var hb := (n as MeshInstance3D).global_transform * (n as MeshInstance3D).get_aabb()
+		var along := Vector3.RIGHT if b.size.x >= b.size.z else Vector3.BACK
+		var c := b.get_center()
+		var hs := signf((hb.get_center() - c).dot(along))
+		if hs == 0.0:
+			hs = 1.0
+		var hinge := Vector3(c.x, b.position.y, c.z) - along * hs * wide * 0.5
+		var pivot := Node3D.new()
+		pivot.name = "Leaf_" + String(leaf.name).validate_node_name()
+		mission.dynamic_root.add_child(pivot)
+		pivot.global_position = hinge
+		leaf.reparent(pivot, true)
+		var e := {"name": String(leaf.name), "params": {"open_amount": PI * 0.5, "speed": PI * 0.5, "axis_gltf": [0, 1, 0],
+			"label_text": 7153}}
+		var d := OrigDoor.new()
+		d.name = "LeafDoor_" + String(leaf.name).validate_node_name()
+		mission.dynamic_root.add_child(d)
+		d.init(self, pivot, e, false)
+		d.persistent_id = "oleaf_%s_%d_%d" % [String(leaf.name), roundi(c.x * 10.0), roundi(c.z * 10.0)]
+		d.static_leaf = true
+		d.leaf_normal = Vector3.BACK if along == Vector3.RIGHT else Vector3.RIGHT
+		pivot.set_meta("orig_ctl", d)
+		controls["LEAF:" + String(leaf.name).to_upper() + ":%d" % stats.get("leaf_doors", 0)] = d
+		stats["leaf_doors"] = int(stats.get("leaf_doors", 0)) + 1
 
 
 static func text(id: int, fb: String) -> String:
@@ -266,6 +498,46 @@ class OrigDoor extends Interactable:
 	func _prepare_ignore() -> void:
 		_ignore_ready = true
 		_ignore = _own_rids()
+		if static_leaf:
+			_check_leaf()
+
+	var static_leaf := false          ## B-017: statischer Türflügel mit Klinke (kein Türakteur), siehe _static_leaves
+	var leaf_normal := Vector3.BACK
+
+	## Statischer Flügel: nur benutzbar, wenn hinter ihm Durchgang ist (Strahl quer durch die Öffnung frei, Boden auf
+	## beiden Seiten); Drehsinn zur Seite mit weniger Weltüberschneidung bei 90°.
+	func _check_leaf() -> void:
+		var space := frame.get_world_3d().direct_space_state
+		var box := OrigInteractive.world_aabb(frame)
+		var c := box.get_center()
+		var mid := Vector3(c.x, box.position.y + 1.0, c.z)
+		var q := PhysicsRayQueryParameters3D.create(mid - leaf_normal * 1.2, mid + leaf_normal * 1.2, 1)
+		q.exclude = _ignore
+		q.hit_back_faces = true
+		var free := space.intersect_ray(q).is_empty()
+		var floors := 0
+		for sd in [-1.0, 1.0]:
+			var at: Vector3 = Vector3(c.x, box.position.y, c.z) + leaf_normal * sd * 0.9
+			var fq := PhysicsRayQueryParameters3D.create(at + Vector3.UP * 0.6, at + Vector3.DOWN * 0.6, 1)
+			fq.exclude = _ignore
+			if not space.intersect_ray(fq).is_empty():
+				floors += 1
+		if not free or floors < 2:
+			enabled = false
+			return
+		var best := 1.0
+		var best_n := 1 << 30
+		for s in [1.0, -1.0]:
+			sgn = s
+			amount = open_amount
+			_apply()
+			var k := _overlaps(_ignore, false).size()
+			if k < best_n:
+				best_n = k
+				best = s
+		sgn = best
+		amount = 0.0
+		_apply()
 
 	func _own_rids() -> Array[RID]:
 		var out: Array[RID] = []

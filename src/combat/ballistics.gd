@@ -155,6 +155,14 @@ func _step(p: Projectile, delta: float) -> bool:
 	q.collide_with_areas = true
 	q.collide_with_bodies = true
 	var hit := space.intersect_ray(q)
+	# B-018: eigene Schüsse treffen nie den eigenen Körper oder Helm (liegend lagen Augpunkt/Mündung in der eigenen
+	# Helmfläche → Helm abgeschossen + Schaden). Trefferflächen des Schützen werden ausgenommen, auch solche, die nach
+	# dem Abschuss entstehen (Helm aufgesetzt, Figurwechsel) [D: Vorgabe Auftraggeber; Original-Ausschluss nicht dekodiert].
+	while not hit.is_empty() and hit.collider is Hitbox and p.shooter != null \
+			and (hit.collider as Hitbox).soldier == p.shooter:
+		p.exclude.append((hit.collider as Hitbox).get_rid())
+		q.exclude = p.exclude
+		hit = space.intersect_ray(q)
 	_whizz(p, next)
 	if hit.is_empty():
 		p.travelled += p.pos.distance_to(next)
@@ -187,6 +195,9 @@ func _step(p: Projectile, delta: float) -> bool:
 			if hb.zone == &"head" and WeaponDB.wears_helmet(hb.soldier) and not _has_helmet_box(hb.soldier):
 				helmet = _helmet_part(hb, hit.position)      # ohne Helmmodell: Näherung obere Kopfhälfte [P]
 			var zone: StringName = &"head" if hb.zone == Helmet.ZONE else hb.zone
+			# B-016: Trefferpunkt + Gelenk für den Ragdoll-Impuls (src/actors/ragdoll.gd)
+			hb.soldier.set_meta("_rd_hit", [hit.position, String(hb.get_meta("bone", ""))])
+			hb.soldier.set_meta("_rd_hit_ms", Time.get_ticks_msec())
 			hb.soldier.apply_hit(WeaponDB.bullet_hit_damage(base, zone, helmet, hb.soldier, p.shooter, not Net.is_online,
 				Game.difficulty()), zone, p.shooter, p.vel.normalized())
 			if hb.zone == Helmet.ZONE:

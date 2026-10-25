@@ -389,7 +389,31 @@ static func split_items(inv: Dictionary) -> Array:
 	var used := 0.0
 	var has_pack := is_backpack(int(inv.get("back", -1)))
 	var io: GDScript = load(ITEM_ORDER_PATH)
-	for e in io.order_entries(inv.get("items", [])):
+	var entries: Array = io.order_entries(inv.get("items", []))
+	# B-018 (Vorgabe Auftraggeber [D]): Munition/Granaten liegen bei angelegtem Rucksack zuerst im Rucksack, soweit Raum
+	# und Höchstgewicht reichen – sie bleiben griffbereit (Nachladen nimmt alle Magazine, Weapon.reserve), belasten aber
+	# die Taschen-Auslastung nicht.
+	var in_pack := {}
+	if has_pack:
+		var cap := backpack_space(int(inv.get("back", -1)))
+		var mx := backpack_max_weight(int(inv.get("back", -1)))
+		var p_sp := 0.0
+		var p_w := 0.0
+		for i in entries.size():
+			var e: Array = entries[i]
+			if not is_consumable(int(e[0])):
+				continue
+			var sp := space(int(e[0])) * int(e[1])
+			var wt := weight(int(e[0])) * int(e[1])
+			if p_sp + sp <= cap + 0.001 and (mx <= 0.0 or p_w + wt <= mx + 0.001):
+				in_pack[i] = true
+				p_sp += sp
+				p_w += wt
+	for i in entries.size():
+		var e: Array = entries[i]
+		if in_pack.has(i):
+			pack.append(e)
+			continue
 		var sp := space(int(e[0])) * int(e[1])
 		if not has_pack or used + sp <= POCKET_SPACE + 0.001:
 			pockets.append(e)
@@ -397,6 +421,17 @@ static func split_items(inv: Dictionary) -> Array:
 		else:
 			pack.append(e)
 	return [pockets, pack]
+
+
+## Verbrauchsgut (Magazine/Raketen, Granaten): zählt bei angelegtem Rucksack nicht zur Taschen-Auslastung (B-018)
+static func is_consumable(id: int) -> bool:
+	var k := item_kind(id)
+	if k == "ammo":
+		return true
+	if k == "weapon":
+		var wd := WeaponDB.from_orig(id)
+		return wd != null and wd.slot == WeaponData.Slot.GRENADE
+	return false
 
 
 ## Gewicht des Rucksackinhalts (kg)

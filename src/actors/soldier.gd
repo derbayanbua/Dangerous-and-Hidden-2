@@ -386,6 +386,10 @@ func exclude_rids() -> Array[RID]:
 		for hb in model.orig_zones:      # Trefferzonen der Original-Figur (an Gelenken, bei Figurwechsel neu)
 			if is_instance_valid(hb):
 				r.append(hb.get_rid())
+		if model.has_method("helmet_rid"):
+			var hr: RID = model.helmet_rid()
+			if hr.is_valid():
+				r.append(hr)      # B-018: eigene Helmfläche (Zone „helmet“) nie selbst treffen
 	if is_instance_valid(mounted) and mounted.has_method("shot_exclusions"):
 		r.append_array(mounted.shot_exclusions())
 	if vehicle != null and is_instance_valid(vehicle) and vehicle is CollisionObject3D:
@@ -426,6 +430,9 @@ func _physics_process(delta: float) -> void:
 	if not alive:
 		velocity.x = 0
 		velocity.z = 0
+		if corpse_pinned:
+			velocity = Vector3.ZERO      # B-016: Ragdoll-Leiche liegt fest (Ursprung = Boden unter dem Becken)
+			return
 		if not is_on_floor():
 			velocity.y -= _gravity * delta
 			move_and_slide()
@@ -1427,6 +1434,12 @@ func select_slot(slot: int) -> bool:
 			toggle_binoculars()
 		tool = ""                      # vom Hilfsmittel zurück zur Waffe (Setter: Ziehen)
 		return true
+	# B-018: dieselbe Waffenart erneut wählen tauscht Hände ↔ Rücken (zweite Langwaffe, FieldInventory.back_weapon)
+	if tool == "" and slot == current_slot and alive:
+		var bw := FieldInventory.back_weapon(self)
+		if bw and int(bw.data.slot) == slot and FieldInventory.swap_back(self):
+			play_weapon_action("draw")
+			return true
 	if slot < 0 or slot >= weapons.size() or weapons[slot] == null or slot == current_slot:
 		return false
 	if slot == WeaponData.Slot.GRENADE and weapons[slot].total_ammo() <= 0:
@@ -1555,6 +1568,7 @@ func apply_hit(amount: float, zone: StringName, attacker: Node, direction: Vecto
 	# Zonen-/Helmfaktoren rechnet der Aufrufer (Ballistics → WeaponDB.zone_damage, hd2.exe 0x5A1C90)
 	health -= amount
 	last_attacker = attacker
+	set_meta("_rd_amount", amount)       # B-016: Ragdoll-Impuls nach Schaden
 	damaged.emit(amount, zone)
 	Events.soldier_damaged.emit(self, amount, zone, attacker)
 	if health <= 0.0:
@@ -1577,6 +1591,8 @@ func die(attacker: Node = null, direction := Vector3.ZERO) -> void:
 	trigger = false
 	move_input = Vector3.ZERO
 	if vehicle != null and is_instance_valid(vehicle):
+		if vehicle is RigidBody3D:
+			set_meta("_rd_vel", (vehicle as RigidBody3D).linear_velocity)   # B-016: Ragdoll erbt die Fahrt
 		vehicle.leave(self)       # Gefallene fallen aus dem Fahrzeug
 	collision_layer = 0          # Leichen blockieren keine Bewegung
 	_apply_capsule(Stance.PRONE)
@@ -1598,12 +1614,57 @@ func die(attacker: Node = null, direction := Vector3.ZERO) -> void:
 	Events.soldier_died.emit(self, attacker)
 
 
+# --- B-016 Ragdoll-Leiche ------------------------------------------------------
+## Ragdoll-Leiche liegt fest: Ursprung (Leichenort für Durchsuchen, Blutlache, KI-Leichenfund, MP-Reichweite)
+## am Boden unter dem Becken, keine Schwerkraft mehr.
+var corpse_pinned := false
+
+
+func pin_corpse(pos: Vector3) -> void:
+	corpse_pinned = true
+	velocity = Vector3.ZERO
+	global_position = pos
+	net_target = pos
+
+
+func unpin_corpse() -> void:
+	corpse_pinned = false
+
+
+## Leiche ohne Todesablauf (Spät-Beitritt im Mehrspieler, Spielstand): kein Schrei, keine Ereignisse
+func become_corpse() -> void:
+	if not alive:
+		return
+	alive = false
+	health = 0.0
+	trigger = false
+	move_input = Vector3.ZERO
+	collision_layer = 0
+	for hb in find_children("*", "Hitbox", true, false):
+		(hb as Hitbox).collision_layer = 0
+	remove_from_group("team_%d" % team)
+	add_to_group("corpses")
+	model.set_dead_instant()
+	for c in get_children():
+		if c is Pickups.Loot:
+			(c as Pickups.Loot).enabled = true
+
+
 # --- Spielstand --------------------------------------------------------------
 
 func serialize() -> Dictionary:
 	var ws := []
 	for w in weapons:
 		ws.append(w.serialize() if w else null)
+	var d := _serialize_base(ws)
+	if not alive and model and model.has_method("corpse_pose"):
+		var cp: PackedFloat32Array = model.corpse_pose()
+		if not cp.is_empty():
+			d["corpse_pose"] = Array(cp)       # B-016: Ragdoll-Endpose
+	return d
+
+
+func _serialize_base(ws: Array) -> Dictionary:
 	return {
 		"pos": [global_position.x, global_position.y, global_position.z],
 		"yaw": look_yaw, "health": health, "stamina": stamina, "stance": stance,
@@ -1637,3 +1698,5 @@ func deserialize(d: Dictionary) -> void:
 		remove_from_group("team_%d" % team)
 		add_to_group("corpses")
 		model.set_dead_instant()
+		if d.has("corpse_pose") and model.has_method("apply_corpse_pose"):
+			model.apply_corpse_pose(PackedFloat32Array(d["corpse_pose"]))

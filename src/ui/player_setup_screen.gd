@@ -515,17 +515,7 @@ var pack_ofs := 0
 
 
 func split_columns(i: Dictionary) -> Array:
-	var pockets: Array = []
-	var pack: Array = []
-	var used := 0.0
-	for e in i.get("items", []):
-		var sp := SAS.space(int(e[0])) * int(e[1])
-		if used + sp <= SAS.POCKET_SPACE + 0.001 or not SAS.is_backpack(int(i.get("back", -1))):
-			pockets.append(e)
-			used += sp
-		else:
-			pack.append(e)
-	return [pockets, pack]
+	return SAS.split_items(i)     # B-018: gleiche Aufteilung wie SAS-/Ingame-Inventar (Munition zuerst in den Rucksack)
 
 
 func _equip_panel() -> void:
