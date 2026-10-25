@@ -102,6 +102,9 @@ static func _klz_key(n: String) -> String:
 	return n.validate_node_name()
 
 
+const PROXY_MAX_EXTENT := 40.0     ## m: größere versteckte Körper sind keine Ersatzkörper (Kartenränder, Taktikgrenze)
+
+
 func _build_orig_collision() -> void:
 	var meshes: Array = []          # [MeshInstance3D, versteckt, Flächen, Volumen, Kiste]
 	_klz_walk(root, "", false, meshes)
@@ -118,7 +121,11 @@ func _build_orig_collision() -> void:
 		var wb := mi.global_transform * mi.get_aabb()
 		var ramp: bool = not e[1] and mi.mesh.get_faces().size() <= 48 and sh.y >= 0.5 and wb.size.y >= 0.4 \
 			and wb.size.y <= 6.0 and maxf(wb.size.x, wb.size.z) <= 15.0      # keine Dachflächen/Hänge
-		if (e[1] and sh.x >= 0.2) or ramp:
+		# Ersatzkörper sind Treppen-/Podestkörper, keine kartengroßen Hilfsflächen: CZECH1 „tactical_mode_border/border03“
+		# (versteckt, Klz-Fläche, ~ganzer Bahnhof) hob sonst die Kollision von 2403 sichtbaren Frames auf (Treppen, Möbel;
+		# test_stairs CZECH1 0/5) [B-010]
+		var huge: bool = maxf(wb.size.x, wb.size.z) > PROXY_MAX_EXTENT or String(mi.get_path()).contains("tactical_mode")
+		if ((e[1] and sh.x >= 0.2) or ramp) and not huge:
 			proxies.append((mi.global_transform * mi.get_aabb()).grow(0.3))
 			proxy_names.append(String(mi.name))
 			proxy_strict.append(ramp and not e[1])
@@ -144,8 +151,14 @@ func _build_orig_collision() -> void:
 					if dbg:
 						print("KLZ: %s (%s) -> Ersatz %s" % [mi.name, mi.get_parent().name, proxy_names[k]])
 					break
-		# Klz-Ebenen wirken beidseitig: Ersatzkörper/Treppenuntersichten (ARCTIC2 T2_strop_03) zeigen teils nach unten
-		_mesh_collider(mi, collide, e[1] or mi.has_meta("klz_proxy"))
+		# Klz-Ebenen wirken beidseitig (Ersatzkörper/Treppenuntersichten ARCTIC2 T2_strop_03 zeigen teils nach unten);
+		# ebenso Wände: von hinten/innen getroffene einseitige Trimeshes ließen Kamera-Kugel und Figur durch (Fix A1
+		# 24.10.2026, test_a1_collision). Klz-Flächenlink = Kollision auch bei Alpha-Material (ARCTIC1 Gelände-
+		# Kacheln Object121–154 mit Überblendschicht G_A1_10T galten als „Laub“ -> keine Kollision -> Durchfallen).
+		if Game.cli.has("collision_legacy"):       # Vergleichslauf alter Stand (test_a1_collision vorher/nachher)
+			_mesh_collider(mi, collide, e[1] or mi.has_meta("klz_proxy"))
+		else:
+			_mesh_collider(mi, collide, true, e[2])
 		if e[5]:
 			# Klz-Bit 0x100000 (Grenze „Border - enemy filter“, Drahtgeflecht, Zeltplane): sperrt nur Bewegung, Sicht und
 			# Geschosse gehen durch (Ebene 5 wie Zäune) [P, docs/re_notes_script_anims.md §6]
@@ -286,10 +299,12 @@ func _add_collision(n: Node) -> void:
 
 
 ## Gras/Wasser erfassen und (collide) Trimesh-Kollision anlegen
-func _mesh_collider(mi: MeshInstance3D, collide: bool, two_sided := false) -> void:
+func _mesh_collider(mi: MeshInstance3D, collide: bool, two_sided := false, klz_faces := false) -> void:
 	var foliage := mi.mesh != null and _is_foliage(mi)
-	if foliage and mi.get_aabb().size.y < 1.5:
+	if foliage and mi.get_aabb().size.y < 1.5 and not klz_faces:
 		grass_nodes.append(mi)
+	if klz_faces:
+		foliage = false        # Original: in tree.klz als Flächen verlinkt -> begehbar/fest, egal welches Material
 	if mi.mesh and not foliage and _is_water(mi):
 		# Wasserfläche (QuadPatch/„more“, Material VODA*/MORE*): keine Kollision, als Wasserbereich merken
 		var box: AABB = mi.global_transform * mi.get_aabb() if mi.is_inside_tree() else mi.get_aabb()
@@ -324,7 +339,9 @@ static func _is_water(mi: MeshInstance3D) -> bool:
 	if box.size.y > 0.8 or box.size.x * box.size.z < 16.0:
 		return false       # Wasser ist eine große, flache Fläche
 	var nm := String(mi.name).to_lower() + "|" + String(mi.get_parent().name).to_lower()
-	if nm.contains("quadpatch") or nm.begins_with("more0") or nm.contains("|more0"):
+	# „more“ = Meer (ARCTIC1 more2 = U-Boot-Becken mit Filmtextur, ohne Klz-Link; war einseitig nach unten
+	# orientiert und kollidierte erst mit beidseitigen Trimeshes -> sperrte das Navmesh der Bunkertreppe)
+	if nm.contains("quadpatch") or nm.begins_with("more") or nm.contains("|more"):
 		return true
 	for i in mi.mesh.get_surface_count():
 		var m := mi.get_active_material(i)

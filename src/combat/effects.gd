@@ -80,7 +80,57 @@ func muzzle_flash(pos: Vector3, dir: Vector3) -> void:
 	mesh.material_override = m
 	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	light.add_child(mesh)
+	if Settings.quality >= 1:
+		# B-013: hochauflösender Mündungsstern (prozedurale Textur), quer und längs zur Laufrichtung
+		mesh.visible = false
+		var star := _flash_star_texture(128 if Settings.quality >= 3 else 64)
+		for i in 2:
+			var qd := MeshInstance3D.new()
+			var qm := QuadMesh.new()
+			qm.size = Vector2(0.38, 0.38) if i == 0 else Vector2(0.22, 0.5)
+			qd.mesh = qm
+			var fm := StandardMaterial3D.new()
+			fm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			fm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			fm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+			fm.albedo_texture = star
+			fm.albedo_color = Color(1.0, 0.8, 0.5)
+			fm.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED if i == 0 else BaseMaterial3D.BILLBOARD_FIXED_Y
+			qd.material_override = fm
+			qd.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			light.add_child(qd)
+			qd.rotation.z = randf() * TAU
+			if i == 1:
+				qd.position = Vector3(0, 0, 0)
 	get_tree().create_timer(0.045, false).timeout.connect(light.queue_free)
+
+
+static var _star_tex := {}
+
+
+## Mündungsstern: heller Kern mit 5–6 unregelmäßigen Zacken
+static func _flash_star_texture(res: int) -> Texture2D:
+	if _star_tex.has(res):
+		return _star_tex[res]
+	var img := Image.create(res, res, false, Image.FORMAT_RGBA8)
+	var c := float(res) * 0.5
+	var spikes := [0.0, 1.1, 2.0, 3.3, 4.2, 5.3]
+	for y in res:
+		for x in res:
+			var p := Vector2(x + 0.5 - c, y + 0.5 - c) / c
+			var r := p.length()
+			var ang := atan2(p.y, p.x)
+			var s := 0.0
+			for sa in spikes:
+				var da := absf(wrapf(ang - float(sa), -PI, PI))
+				s = maxf(s, clampf(1.0 - da * 6.0, 0.0, 1.0) * clampf(1.0 - r, 0.0, 1.0))
+			var core := clampf(1.0 - r * 2.4, 0.0, 1.0)
+			var a := clampf(core + s * 0.9, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1.0, 0.9 + 0.1 * core, 0.7 + 0.3 * core, a))
+	img.generate_mipmaps()
+	var tex := ImageTexture.create_from_image(img)
+	_star_tex[res] = tex
+	return tex
 
 
 ## Einschlag: Staub, Einschussloch und Original-Einschlagklang je Untergrund (hdmaterials.def +0x30)
@@ -99,55 +149,67 @@ func blood(pos: Vector3, normal: Vector3, dir := Vector3.ZERO, zone: StringName 
 
 ## Explosion: sound = [Kategorie, Gruppe] der Klangtabelle (Standard Kat. 6/0 „Explosion Grenade“),
 ## leer = ohne Klang (z. B. wenn das Original-Objekt seinen Zerstörungsklang selbst spielt).
-func explosion(pos: Vector3, radius: float, sound: Array = [6, 0]) -> void:
+## B-013 (rein optisch, Schaden/Radius bleiben bei den Aufrufern aus items.sav): GPU-Feuerball, Rauchsäule, Trümmer,
+## Funken, Druckwelle, Hitzeflimmern, Licht, Kamera-Erschütterung, Brandfleck-Decal (src/combat/explosion_fx.gd).
+## kind (optional, z. B. B-011): &"artillery", &"air", &"vehicle", &"water" – nur Darstellung.
+func explosion(pos: Vector3, radius: float, sound: Array = [6, 0], kind: StringName = &"") -> void:
 	var parent := _parent()
 	if parent == null:
 		return
 	if sound.size() >= 2:
 		OrigAudio.play_group(int(sound[0]), int(sound[1]), pos)
-	var light := OmniLight3D.new()
-	light.light_color = Color(1.0, 0.6, 0.25)
-	light.light_energy = 12.0
-	light.omni_range = radius * 3.0
-	parent.add_child(light)
-	light.global_position = pos + Vector3.UP
-	var tw := light.create_tween()
-	tw.tween_property(light, "light_energy", 0.0, 0.6)
-	tw.tween_callback(light.queue_free)
-	var p := CPUParticles3D.new()
-	p.one_shot = true
-	p.amount = 60
-	p.lifetime = 2.5
-	p.explosiveness = 0.95
-	p.direction = Vector3.UP
-	p.spread = 70.0
-	p.initial_velocity_min = 3.0
-	p.initial_velocity_max = 12.0
-	p.gravity = Vector3(0, -3.0, 0)
-	p.damping_min = 2.0
-	p.damping_max = 4.0
-	p.scale_amount_min = 1.0
-	p.scale_amount_max = 3.0
-	var sm := SphereMesh.new()
-	sm.radius = 0.5
-	sm.height = 1.0
-	sm.radial_segments = 8
-	sm.rings = 4
-	p.mesh = sm
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = Color(0.2, 0.18, 0.16)
-	mat.vertex_color_use_as_albedo = true
-	p.material_override = mat
-	var grad := Gradient.new()
-	grad.set_color(0, Color(1.0, 0.7, 0.3))
-	grad.add_point(0.15, Color(0.3, 0.27, 0.24))
-	grad.set_color(grad.get_point_count() - 1, Color(0.15, 0.15, 0.15))
-	p.color_ramp = grad
-	parent.add_child(p)
-	p.global_position = pos
-	p.emitting = true
-	p.finished.connect(p.queue_free)
-	_decal(pos + Vector3.UP * 0.2, Vector3.UP, _hole_tex, radius * 0.4)
+	if kind == &"" and sound.size() >= 2 and int(sound[0]) == OrigAudio.CAT_EXPLOSION and int(sound[1]) == OrigAudio.EXP_WATER:
+		kind = &"water"
+	last_explosion = ExplosionFx.spawn(parent, pos, radius, Settings.quality, kind)
+	explosion_count += 1
+	var big := kind == &"artillery" or kind == &"air"
+	shake(pos, clampf(radius / 5.0, 0.4, 2.0) * (1.6 if big else 1.0))
+	if kind != &"water":
+		var res: int = 256 if Settings.quality >= 3 else 128
+		_decal(pos + Vector3.UP * 0.2, Vector3.UP, ExplosionFx.scorch_texture(res), radius * (0.55 if Settings.quality >= 1 else 0.4))
+
+
+const ExplosionFx := preload("res://src/combat/explosion_fx.gd")
+var last_explosion := {}       ## {"node", "parts", "lifetime"} der letzten Explosion (Tests, B-011)
+var explosion_count := 0
+var _shake := 0.0
+var _shake_cam: Camera3D
+
+
+## Kamera-Erschütterung: Stärke fällt mit der Entfernung zur aktiven Kamera (bis ≈ 60 m), klingt in ≈ 0,6 s ab.
+## Wirkt über h_offset/v_offset (CameraRig nutzt sie nicht) → keine Änderung an Zielrichtung/Ballistik.
+func shake(pos: Vector3, strength: float) -> void:
+	var cam: Camera3D = get_viewport().get_camera_3d() if is_inside_tree() else null
+	if cam == null:
+		return
+	var d := cam.global_position.distance_to(pos)
+	var s := strength * clampf(1.0 - d / 60.0, 0.0, 1.0)
+	if s <= 0.01:
+		return
+	if _shake_cam != cam and is_instance_valid(_shake_cam):
+		_shake_cam.h_offset = 0.0
+		_shake_cam.v_offset = 0.0
+	_shake_cam = cam
+	_shake = maxf(_shake, s)
+
+
+func shake_amount() -> float:
+	return _shake
+
+
+func _process(dt: float) -> void:
+	if _shake <= 0.0:
+		return
+	_shake = maxf(_shake - dt * 1.8, 0.0)
+	if not is_instance_valid(_shake_cam):
+		_shake = 0.0
+		return
+	var a := _shake * _shake * 0.04
+	_shake_cam.h_offset = randf_range(-a, a)
+	_shake_cam.v_offset = randf_range(-a, a)
+	if _shake <= 0.0:
+		_shake_cam.h_offset = 0.0
+		_shake_cam.v_offset = 0.0
 
 
 func _puff(pos: Vector3, normal: Vector3, color: Color, amount: int) -> void:
@@ -166,13 +228,35 @@ func _puff(pos: Vector3, normal: Vector3, color: Color, amount: int) -> void:
 	p.gravity = Vector3(0, -2.0, 0)
 	p.scale_amount_min = 0.5
 	p.scale_amount_max = 1.2
-	var bm := BoxMesh.new()
-	bm.size = Vector3(0.05, 0.05, 0.05)
-	p.mesh = bm
 	var mat := StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	if Settings.quality >= 1:
+		# B-013: weiche, wachsende Staubwolke (Billboard mit Rauschtextur) statt Würfelchen
+		var qm := QuadMesh.new()
+		qm.size = Vector2(0.28, 0.28)
+		p.mesh = qm
+		mat.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
+		mat.albedo_texture = ExplosionFx.puff_texture(128 if Settings.quality >= 3 else 64)
+		mat.vertex_color_use_as_albedo = true
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		p.lifetime = 1.1
+		p.damping_min = 2.0
+		p.damping_max = 4.0
+		p.gravity = Vector3(0, -0.4, 0)
+		var sc := Curve.new()
+		sc.add_point(Vector2(0, 0.4))
+		sc.add_point(Vector2(1, 1.6))
+		p.scale_amount_curve = sc
+		var g := Gradient.new()
+		g.set_color(0, Color(1, 1, 1, 0.9))
+		g.set_color(1, Color(1, 1, 1, 0.0))
+		p.color_ramp = g
+	else:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.05, 0.05, 0.05)
+		p.mesh = bm
 	p.material_override = mat
 	parent.add_child(p)
 	p.global_position = pos

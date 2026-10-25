@@ -373,17 +373,7 @@ func _item_box(frame: String, id: int, shift := Vector2.ZERO, count := 0) -> voi
 ## Taschen (bis 12 Raumeinheiten), der Rest in den Rucksack. Reihenfolge ItemOrder: Aufnahmereihenfolge wie im
 ## Original (0x6A3080/0x672280), Munition direkt unter ihrer Waffe in der Liste (Vorgabe Auftraggeber)
 func split_columns(inv: Dictionary) -> Array:
-	var pockets: Array = []
-	var pack: Array = []
-	var used := 0.0
-	for e in ItemOrder.order_entries(inv.get("items", [])):
-		var sp := SAS.space(int(e[0])) * int(e[1])
-		if used + sp <= SAS.POCKET_SPACE + 0.001 or int(inv.get("back", -1)) < 0:
-			pockets.append(e)
-			used += sp
-		else:
-			pack.append(e)
-	return [pockets, pack]
+	return SAS.split_items(inv)     # B-014: Rucksackspalte nur mit angelegtem Rucksack
 
 
 func _equip_panel(inv: Dictionary, w: float, over: bool) -> void:
@@ -769,6 +759,13 @@ func give(idx: int, id: int, count := -1, want := "") -> bool:
 		if w > _strength(idx) + 0.001:
 			_say("Zu schwer für %s." % SAS.display_name(idx))
 			return false
+		if slot == "back":
+			# Original 0x6A3080: Rucksacktausch nur, wenn der neue den bisherigen Inhalt fasst (B-014)
+			var trial := inv.duplicate(true)
+			trial["back"] = id
+			if not SAS.fits(trial):
+				_say("%s: Inhalt passt nicht." % SAS.item_label(id))
+				return false
 		SAS.remove_item(store, id, 1)
 		if old >= 0:
 			SAS.add_item(store, old, 1)
@@ -801,7 +798,7 @@ func unequip(idx: int, slot: String) -> void:
 	inv[slot] = -1
 	SAS.add_item(_storage(), id, 1)
 	# ohne Rucksack passt der Inhalt evtl. nicht mehr -> Überzähliges zurück ins Lager
-	while SAS.inv_space(inv) > SAS.inv_capacity(inv) + 0.001 and not inv["items"].is_empty():
+	while not SAS.fits(inv) and not inv["items"].is_empty():
 		var e: Array = inv["items"].back()
 		take_back(idx, int(e[0]), int(e[1]))
 	_refresh()

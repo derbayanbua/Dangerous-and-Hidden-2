@@ -26,20 +26,35 @@ var ACTIONS := {
 	"weapon_2": ["Waffe 2 (Pistole)", KEY_2],
 	"weapon_3": ["Waffe 3 (Raketenwerfer)", KEY_3],
 	"grenade": ["Granate werfen", KEY_G],
-	"binoculars": ["Fernglas", KEY_4],
+	# Waffen-/Ausrüstungswahl 1–8 (Entscheid Auftraggeber 24.10.2026): 4 Messer, 5 Granate in die Hand,
+	# 6 Sprengstoff, 7 Mine, 8 Verbandskasten in die Hand. Fernglas auf B wie im Original (Options.bin T2849).
+	"equip_4": ["Ausrüstung 4 (Messer)", KEY_4],
+	"equip_5": ["Ausrüstung 5 (Granate)", KEY_5],
+	"equip_6": ["Ausrüstung 6 (Sprengstoff)", KEY_6],
+	"equip_7": ["Ausrüstung 7 (Mine)", KEY_7],
+	"equip_8": ["Ausrüstung 8 (Verbandskasten)", KEY_8],
+	"binoculars": ["Fernglas", KEY_B],
 	# Erste Hilfe: Schnelltaste H (Vorgabe Auftraggeber; das Original hat keine Taste, nur das Inventar –
 	# Options.bin „profile“: H unbelegt). „Folgen“ (eigene Direkttaste, kein Original) deshalb auf U.
 	"medkit": ["Erste Hilfe (Verbandskasten)", KEY_H],
 	"weapon_next": ["Auswahl weiter (Waffen / Sitzplatz)", "mouse:5"],
 	"weapon_prev": ["Auswahl zurück (Waffen / Sitzplatz)", "mouse:4"],
-	"fire_mode": ["Feuermodus", KEY_B],
+	"fire_mode": ["Feuermodus", "mouse:3"],     # bis 24.10.2026 B (B = Fernglas wie im Original)
 	"interact": ["Benutzen", KEY_F],
 	"camera_toggle": ["Kamera 1./3. Person", KEY_V],
-	"soldier_1": ["Soldat 1", KEY_F1],
-	"soldier_2": ["Soldat 2", KEY_F2],
-	"soldier_3": ["Soldat 3", KEY_F3],
-	"soldier_4": ["Soldat 4", KEY_F4],
+	# Direktes Übernehmen ohne Doppeldruck: bleibt als umbelegbare Aktion, Standard unbelegt (F1–F4 jetzt select_soldier_n)
+	"soldier_1": ["Soldat 1 übernehmen (direkt)", null],
+	"soldier_2": ["Soldat 2 übernehmen (direkt)", null],
+	"soldier_3": ["Soldat 3 übernehmen (direkt)", null],
+	"soldier_4": ["Soldat 4 übernehmen (direkt)", null],
 	"soldier_next": ["Nächster Soldat", KEY_TAB],
+	# Original „SOLDAT 1–4 WÄHLEN“ (T2862–2865; Original-Tasten 1–4). Entscheid Auftraggeber 24.10.2026: auf F1–F4,
+	# zusammengeführt mit dem bisherigen Soldatenwechsel (ersetzt soldier_1…4): einmal = markieren/entmarkieren,
+	# zweimal kurz hintereinander = Soldat übernehmen (PlayerController._on_select_soldier).
+	"select_soldier_1": ["Soldat 1 wählen (1× markieren, 2× übernehmen)", KEY_F1],
+	"select_soldier_2": ["Soldat 2 wählen (1× markieren, 2× übernehmen)", KEY_F2],
+	"select_soldier_3": ["Soldat 3 wählen (1× markieren, 2× übernehmen)", KEY_F3],
+	"select_soldier_4": ["Soldat 4 wählen (1× markieren, 2× übernehmen)", KEY_F4],
 	"order_move": ["Befehl: Dorthin bewegen", KEY_X],
 	"order_follow": ["Befehl: Folgen", KEY_U],
 	"order_hold": ["Befehl: Position halten", KEY_J],
@@ -202,5 +217,7 @@ func load_bindings() -> void:
 			InputMap.action_add_event(action, ev)
 
 
-const KEYS_VERSION := 2
-const OLD_DEFAULTS := {"medkit": KEY_5, "order_follow": KEY_H}
+## Stand 3 (24.10.2026, B-012): Fernglas 4 -> B, Feuermodus B -> mittlere Maustaste; gespeicherte alte Standards umstellen
+const KEYS_VERSION := 3
+const OLD_DEFAULTS := {"medkit": KEY_5, "order_follow": KEY_H, "binoculars": KEY_4, "fire_mode": KEY_B,
+	"soldier_1": KEY_F1, "soldier_2": KEY_F2, "soldier_3": KEY_F3, "soldier_4": KEY_F4}

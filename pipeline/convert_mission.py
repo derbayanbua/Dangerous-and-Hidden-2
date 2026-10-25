@@ -515,7 +515,7 @@ def convert(mission):
     with open(os.path.join(out, "scene.json"), "w", encoding="utf-8") as f:
         json.dump({"mission": mdir, "objects": entries, "actors": actors, "scripts": script_map,
                    "waypoints": waypoints}, f, indent=1)
-    convert_texts()
+    convert_all_texts()
     # Godot soll den Cache nicht importieren (wird zur Laufzeit per GLTFDocument geladen)
     open(os.path.join(CACHE, ".gdignore"), "w").close()
     print("scene.json: %d Objekte; Texturen: %d, fehlend: %s" % (len(entries), len(textures.done), sorted(textures.missing)[:10]))
@@ -523,9 +523,30 @@ def convert(mission):
         print("  WARNUNG", e)
 
 
+## Zeichensatz je Sprachordner (Windows-Codepages der Originalfassungen; Tschechisch = mitteleuropäisch)
+TEXT_ENCODINGS = {"czech": "cp1250", "japan": "cp932"}
+
+
+def convert_all_texts():
+    """B-007: alle in der Installation vorhandenen Sprachen (Text\\<sprache>) -> texts_<sprache klein>.json."""
+    root = os.path.join(ORIG, "Text")
+    done = []
+    for d in sorted(os.listdir(root)):
+        p = os.path.join(root, d)
+        if not os.path.isdir(p) or d.lower() == "fonts":
+            continue
+        names = [f.lower() for f in os.listdir(p)]
+        if not any(n == "dialogs.bin" or (n.startswith("texty") and n.endswith(".txt")) for n in names):
+            continue
+        convert_texts(d)
+        done.append(d)
+    return done
+
+
 def convert_texts(lang="german"):
     """Original-Texte (Dialoge/Untertitel + Spieltexte) -> orig_cache/texts_<lang>.json {id: text}."""
     texts = {}
+    enc = TEXT_ENCODINGS.get(lang.lower(), "cp1252")
     base = os.path.join(ORIG, "Text", lang)
     dlg = None
     for fn in os.listdir(base):
@@ -542,24 +563,27 @@ def convert_texts(lang="german"):
                 if t == 0x09C7:
                     cur = struct.unpack_from("<I", dlg, p + 6)[0]
                 elif t == 0x09C8 and cur is not None:
-                    texts[str(cur)] = dlg[p + 6:p + ln].split(b"\0")[0].decode("cp1252", "replace")
+                    texts[str(cur)] = dlg[p + 6:p + ln].split(b"\0")[0].decode(enc, "replace")
                 elif t in (0x09C4, 0x09C6):
                     walk(p + 6, p + ln)
                 p += ln
         walk(0, len(dlg))
     for fn in os.listdir(base):
         if fn.lower().startswith("texty") and fn.lower().endswith(".txt"):
-            for line in open(os.path.join(base, fn), encoding="cp1252", errors="replace"):
+            for line in open(os.path.join(base, fn), encoding=enc, errors="replace"):
                 line = line.strip()
                 if not line or line.startswith(";"):
                     continue
                 parts = line.split(None, 1)
                 if len(parts) == 2 and parts[0].isdigit() and parts[1].startswith('"'):
                     texts.setdefault(str(int(parts[0])), parts[1].split('"')[1])
-    with open(os.path.join(CACHE, "texts_%s.json" % lang), "w", encoding="utf-8") as f:
+    with open(os.path.join(CACHE, "texts_%s.json" % lang.lower()), "w", encoding="utf-8") as f:
         json.dump(texts, f, ensure_ascii=False, indent=0)
     print("Texte (%s): %d" % (lang, len(texts)))
 
 
 if __name__ == "__main__":
-    convert(sys.argv[1])
+    if sys.argv[1] == "--texts":       # nur Texte aller Sprachen (B-007)
+        print("Sprachen:", ", ".join(convert_all_texts()))
+    else:
+        convert(sys.argv[1])

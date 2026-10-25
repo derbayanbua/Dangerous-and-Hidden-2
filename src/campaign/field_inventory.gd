@@ -5,7 +5,8 @@ extends RefCounted
 ## docs/re_notes_ingame_inventory.md). Hier: Logik und Mehrspieler-Abgleich; Darstellung in IngameInventory.
 ##
 ## Modell wie im SAS-Bildschirm: {hands, shoulder, head, uniform, back, items: [[Gegenstand, Anzahl]]}
-## (Taschen + Rucksack = ein gemeinsames Inventar, Vereinfachung des Auftraggebers). Die Laufzeit des Soldaten
+## (Taschen + Rucksack als eine Liste, Vereinfachung des Auftraggebers; B-014: Rucksackraum nur mit angelegtem
+## Rucksack, Rucksack ablegen/tauschen nur wenn der Inhalt passt, SAS.fits). Die Laufzeit des Soldaten
 ## (Waffen mit Magazin/Reserve, Granaten, Verbände, Fernglas, Sprengstoff, Minen) bleibt die Wahrheit:
 ## view() leitet das Inventar daraus ab, apply() schreibt es nach jeder Aktion zurück. Was die Laufzeit nicht
 ## abbildet (zweite Waffe derselben Art, Munition ohne Waffe), liegt in Meta „inv_extra“, Kopf/Uniform/Rücken
@@ -51,6 +52,7 @@ static func view(n: Node) -> Dictionary:
 
 
 static func _soldier_view(s: Soldier) -> Dictionary:
+	Helmet.ensure_default(s)       # B-014: Standardhelm der Figur als echter Kopfgegenstand
 	var inv := SAS.new_inventory()
 	var explained := {}
 	var hand_w: Weapon = s.current_weapon() if s.tool == "" else null
@@ -207,11 +209,26 @@ const DEFAULT_SPACE := 40.0
 
 
 static func capacity(n: Node, inv: Dictionary) -> float:
-	if n is Soldier and not n.has_meta("sas"):
+	if n is Soldier and not strict_rules(n):
 		return maxf(SAS.inv_capacity(inv), DEFAULT_SPACE)
 	if not n is Soldier:
 		return 9999.0
 	return SAS.inv_capacity(inv)
+
+
+## Original-Packregeln (Taschen 12, Rucksackraum nur mit Rucksack, B-014): Kader (SAS) und Mehrspielerfiguren mit
+## Original-Ausrüstung (SPIELER-SETUP bzw. Klassenvorlage). Übungsfiguren behalten DEFAULT_SPACE [P].
+static func strict_rules(n: Node) -> bool:
+	return n is Soldier and (n.has_meta("sas") or n.has_meta("mp_loadout") or n.has_meta("mp_class"))
+
+
+## Passt das Inventar nach einer Aktion noch (Raum Taschen + Rucksack, Rucksack-Höchstgewicht)?
+static func fits(n: Node, inv: Dictionary) -> bool:
+	if not n is Soldier:
+		return true
+	if not strict_rules(n):
+		return SAS.inv_space(inv) <= capacity(n, inv) + 0.001
+	return SAS.fits(inv)
 
 
 static func is_empty(n: Node) -> bool:
@@ -399,6 +416,7 @@ static func apply(n: Node, inv: Dictionary, pool: Array) -> void:
 	s.weapons.clear()
 	for w in new_w:
 		s.weapons.append(w as Weapon)
+	_refresh_head(s)
 	if not s.alive or captured:
 		return
 	_apply_hands(s, int(inv["hands"]), old_w, old_key)
@@ -497,9 +515,13 @@ static func move(src: Node, from: String, id: int, dst: Node, to: String) -> Str
 		b[to] = id
 	else:
 		SAS.add_item(b, id, n)
+	# Rucksack ablegen/tauschen (B-014, Original 0x6A3080): nur, wenn der Inhalt danach in Taschen bzw. den neuen
+	# Rucksack passt – ohne Rucksack gibt es keinen Rucksackraum
+	if from == "back" and src is Soldier and (src as Soldier).alive and not fits(src, a):
+		return "%s: Inhalt passt nicht in die Taschen" % SAS.item_label(id)
 	# Raum (Taschen + Rucksack) und Gewicht (≤ Kraft): nur prüfen, wenn die Aktion die Last erhöht
 	var before := view(dst)
-	if SAS.inv_space(b) > capacity(dst, b) + 0.001 and SAS.inv_space(b) > SAS.inv_space(before) + 0.001:
+	if not fits(dst, b) and (SAS.inv_space(b) > SAS.inv_space(before) + 0.001 or to == "back"):
 		return "Kein Platz (Taschen + Rucksack)"
 	# Traglast nur für Kadersoldaten (Kraft aus HumanStore.def); Übungs-/MP-Figuren haben keinen Kraftwert [P]
 	if not same and dst.has_meta("sas") and SAS.inv_weight(b) > strength(dst) + 0.001 \
@@ -557,6 +579,9 @@ static func drop(src: Node, from: String, id: int) -> String:
 		n = 1
 	else:
 		SAS.remove_item(a, id, n)
+	# Rucksack wegwerfen nur, wenn der Inhalt in die Taschen passt (B-014, wie move)
+	if from == "back" and src is Soldier and (src as Soldier).alive and not fits(src, a):
+		return "%s: Inhalt passt nicht in die Taschen" % SAS.item_label(id)
 	var pool := weapon_pool(src)
 	var src3 := src as Node3D
 	var pile: Pile = pile_near(src3.global_position) if src3 else null
@@ -626,6 +651,13 @@ class Pile extends Interactable:
 		if first < 0:
 			return
 		var model := String(OrigInteractive.item_info(first).get("model", ""))
+		if Helmet.is_head_item(first):
+			# Kopfgegenstand (B-014): Helmmodell um seine Mitte, aufrecht auf dem Boden
+			_vis = Helmet.loose_model(first)
+			if _vis:
+				_vis.position.y = (_vis.get_meta("size") as Vector3).y * 0.5
+				add_child(_vis)
+				return
 		_vis = OrigWeapons.world_model(model) if model != "" else null
 		if _vis == null:
 			var mi := MeshInstance3D.new()
@@ -840,6 +872,15 @@ static func import_state(n: Node, d: Dictionary, ammo_only := false) -> void:
 	s.tool = String(d.get("tool", ""))
 	if s.alive and (s.current_weapon() != old_w or not s.net_puppet):
 		s._on_weapon_switched()
+	_refresh_head(s)
+
+
+## Kopfgegenstand am Modell nachführen (B-014: Helm aufgesetzt/abgenommen/abgeschossen)
+static func _refresh_head(s: Soldier) -> void:
+	if Helmet.head_item(s) >= 0 and s.has_meta("helmet_lost"):
+		s.remove_meta("helmet_lost")
+	if s.model and s.model.has_method("refresh_helmet"):
+		s.model.refresh_helmet()
 
 
 ## Client: Stand vom Server (Net._inv_state); fehlende Ablagestapel werden angelegt

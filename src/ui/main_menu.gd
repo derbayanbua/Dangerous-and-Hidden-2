@@ -71,8 +71,7 @@ func _ready() -> void:
 	_menu_dir = OrigLevel.cache_root() + "/ui/menu"
 	var s = LsRuntime._read_json(_menu_dir + "/menu_spec.json")
 	spec = s if typeof(s) == TYPE_DICTIONARY else {}
-	var t = LsRuntime._read_json(OrigLevel.cache_root() + "/texts_german.json")
-	texts = t if typeof(t) == TYPE_DICTIONARY else {}
+	texts = Settings.orig_texts()   # B-007: gewählte Sprachfassung (gemeinsame Instanz)
 	_setup_audio()
 	_fit.call_deferred()
 	var req: Dictionary = Game.menu_request
@@ -728,7 +727,7 @@ func _page_network() -> void:
 	_yesno(276, text(2431), Settings.voice_enabled, func(v: bool): Settings.voice_enabled = v)
 	_label(Rect2(67, 330, 337, 18), text(2432), 14, TEXT_COLOR)
 	_slider(352, Settings.voice_volume, 0.0, 1.0, func(v: float): Settings.voice_volume = v).name = "svoice"
-	_label(Rect2(67, 430, 412, 40), "Sprechen: %s halten (Push-to-talk)" % InputSetup.binding_text("voice_talk"), 13, TEXT_COLOR)
+	_label(Rect2(67, 430, 412, 40), tr("Sprechen: %s halten (Push-to-talk)") % InputSetup.binding_text("voice_talk"), 13, TEXT_COLOR)
 
 
 func _opt_page(page: String) -> void:
@@ -857,46 +856,48 @@ func _page_graphics() -> void:
 ## Anzeige & Setup: Optionen aus dem Original-Setup (setup.exe), soweit heute sinnvoll, plus moderne Ergänzungen
 func _page_display() -> void:
 	_label(Rect2(67, 140, 412, 18), "Anzeige & Setup (aus dem Original-Setup):", 16, TEXT_COLOR)
-	_label(Rect2(67, 160, 412, 18), "Grafikkarte: " + RenderingServer.get_video_adapter_name(), 12, TEXT_COLOR)
+	_label(Rect2(67, 160, 412, 18), tr("Grafikkarte:") + " " + RenderingServer.get_video_adapter_name(), 12, TEXT_COLOR)
 	var y := 184.0
 	var ri := Settings.RESOLUTIONS.find(Settings.resolution)
-	_cycle(Rect2(67, y, 412, 32), "AUFLÖSUNG: " + Settings.resolution_name(Settings.resolution), func():
+	_cycle(Rect2(67, y, 412, 32), tr("AUFLÖSUNG:") + " " + tr(Settings.resolution_name(Settings.resolution)), func():
 		Settings.resolution = Settings.RESOLUTIONS[(maxi(ri, 0) + 1) % Settings.RESOLUTIONS.size()])
 	y += 38
 	_yesno(y, "VOLLBILD", Settings.fullscreen, func(v: bool): Settings.fullscreen = v)
 	y += 38
-	_cycle(Rect2(67, y, 412, 32), "VSYNC: " + Settings.VSYNC_NAMES[Settings.vsync_mode], func():
+	_cycle(Rect2(67, y, 412, 32), tr("VSYNC:") + " " + tr(Settings.VSYNC_NAMES[Settings.vsync_mode]), func():
 		Settings.vsync_mode = (Settings.vsync_mode + 1) % 4, true, "bvsync")
 	y += 38
 	var fi := Settings.FPS_STEPS.find(Settings.max_fps)
-	_cycle(Rect2(67, y, 412, 32), "BILDRATE: " + ("UNBEGRENZT" if Settings.max_fps == 0 else "MAX. %d" % Settings.max_fps), func():
+	_cycle(Rect2(67, y, 412, 32), tr("BILDRATE:") + " " + (tr("UNBEGRENZT") if Settings.max_fps == 0 else "MAX. %d" % Settings.max_fps), func():
 		Settings.max_fps = Settings.FPS_STEPS[(maxi(fi, 0) + 1) % Settings.FPS_STEPS.size()], true, "bfps")
 	y += 38
-	_cycle(Rect2(67, y, 412, 32), "KANTENGLÄTTUNG: " + Settings.AA_NAMES[Settings.aa_mode], func():
+	_cycle(Rect2(67, y, 412, 32), tr("KANTENGLÄTTUNG:") + " " + tr(Settings.AA_NAMES[Settings.aa_mode]), func():
 		Settings.aa_mode = (Settings.aa_mode + 1) % Settings.AA_NAMES.size(), true, "baa")
 	y += 38
-	_cycle(Rect2(67, y, 412, 32), "TEXTUREN: " + Settings.TEXTURE_NAMES[Settings.texture_quality], func():
+	_cycle(Rect2(67, y, 412, 32), tr("TEXTUREN:") + " " + tr(Settings.TEXTURE_NAMES[Settings.texture_quality]), func():
 		Settings.texture_quality = (Settings.texture_quality + 1) % 3, true, "btex")
 	y += 38
-	_cycle(Rect2(67, y, 412, 32), "ANISOTROPE FILTERUNG: " + Settings.ANISO_NAMES[Settings.anisotropy], func():
+	_cycle(Rect2(67, y, 412, 32), tr("ANISOTROPE FILTERUNG:") + " " + tr(Settings.ANISO_NAMES[Settings.anisotropy]), func():
 		Settings.anisotropy = (Settings.anisotropy + 1) % 5, true, "baniso")
 	y += 38
 	var scales := [1.0, 0.85, 0.7, 0.5]
 	var si := scales.find(snappedf(Settings.render_scale, 0.05))
-	_cycle(Rect2(67, y, 412, 32), "3D-RENDERSKALIERUNG: %d %%" % int(Settings.render_scale * 100.0), func():
+	_cycle(Rect2(67, y, 412, 32), tr("3D-RENDERSKALIERUNG: %d %%") % int(Settings.render_scale * 100.0), func():
 		Settings.render_scale = scales[(maxi(si, 0) + 1) % scales.size()])
 	y += 38
 	var fovs := [60.0, 70.0, 80.0, 90.0, 100.0]
 	var fo := fovs.find(Settings.fov)
-	_cycle(Rect2(67, y, 412, 32), "SICHTFELD: %d°" % int(Settings.fov), func():
+	_cycle(Rect2(67, y, 412, 32), tr("SICHTFELD: %d°") % int(Settings.fov), func():
 		Settings.fov = fovs[(maxi(fo, 0) + 1) % fovs.size()])
 	y += 38
 	_yesno(y, "BEI INAKTIVEM FENSTER PAUSIEREN", Settings.pause_unfocused, func(v: bool): Settings.pause_unfocused = v)
 	y += 38
-	_yesno(y, "ZUSATZEFFEKTE (SSIL, SDFGI)", Settings.quality >= 3, func(v: bool): Settings.quality = 3 if v else 2)
+	# B-013: Grafikstufe Niedrig … 4K Ultra (ersetzt den früheren Schalter „Zusatzeffekte“)
+	_cycle(Rect2(67, y, 412, 32), "GRAFIKSTUFE: " + Settings.QUALITY_NAMES[Settings.quality].to_upper(), func():
+		Settings.quality = (Settings.quality + 1) % Settings.QUALITY_NAMES.size(), true, "bquality")
 	y += 38
 	# BEWUSSTE ABWEICHUNG (Auftraggeber): dreistufig; „AUS“ = Original BLUTFLECKEN NEIN
-	_cycle(Rect2(67, y, 412, 32), "BLUT: " + Settings.BLOOD_NAMES[Settings.blood_level], func():
+	_cycle(Rect2(67, y, 412, 32), tr("BLUT:") + " " + tr(Settings.BLOOD_NAMES[Settings.blood_level]), func():
 		Settings.blood_level = (Settings.blood_level + 1) % 3, true, "bblood")
 	_cycle(Rect2(67, 670, 412, 33), text(2410), func(): options_page = "graphics")
 	_label(Rect2(67, 638, 412, 26), "Texturänderung wirkt beim nächsten Laden einer Mission.", 11, TEXT_COLOR)
@@ -933,13 +934,14 @@ func _page_controls() -> void:
 const KEY_CATEGORIES := [
 	[2452, ["move_forward", "move_back", "move_left", "move_right", "run", "stance_stand", "stance_crouch",
 		"stance_prone", "lean_left", "lean_right"]],
-	[2453, ["fire", "aim", "reload", "fire_mode", "weapon_1", "weapon_2", "weapon_3", "grenade", "weapon_next", "weapon_prev",
-		"drop_item"]],
+	[2453, ["fire", "aim", "reload", "fire_mode", "weapon_1", "weapon_2", "weapon_3", "equip_4", "equip_5",
+		"equip_6", "equip_7", "equip_8", "grenade", "weapon_next", "weapon_prev", "drop_item"]],
 	[2454, ["interact", "binoculars", "medkit", "camera_toggle", "objectives", "quicksave", "quickload", "pause",
 		"console", "chat_all", "chat_team", "voice_talk"]],
 	[2455, ["command_all", "command_1", "command_2", "command_3", "command_4", "command_5", "command_6",
 		"order_move", "order_follow", "order_hold", "order_roe", "order_formation"]],
-	[2456, ["tactical_map", "inventory", "soldier_1", "soldier_2", "soldier_3", "soldier_4", "soldier_next", "order_stance",
+	[2456, ["tactical_map", "inventory", "select_soldier_1", "select_soldier_2", "select_soldier_3", "select_soldier_4",
+		"soldier_1", "soldier_2", "soldier_3", "soldier_4", "soldier_next", "order_stance",
 		"order_grenade"]],
 ]
 
@@ -956,7 +958,7 @@ func _page_keys() -> void:
 		b.size = Vector2(406, 29)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		var waiting := _waiting_action == action
-		b.text = "%s:   %s" % [InputSetup.display_name(action), "… Taste drücken …" if waiting else InputSetup.binding_text(action)]
+		b.text = "%s:   %s" % [InputSetup.display_name(action), tr("… Taste drücken …") if waiting else InputSetup.binding_text(action)]
 		b.add_theme_font_size_override("font_size", 14)
 		b.add_theme_color_override("font_color", TEXT_HOVER if waiting else TEXT_COLOR)
 		b.add_theme_color_override("font_hover_color", TEXT_HOVER)
@@ -1001,12 +1003,19 @@ func _page_game() -> void:
 	# v1.12: der frühere Punkt "Kindersicherung" heißt "FADENKREUZ ZULASSEN" (Text 20212)
 	_yesno(289, text(20212) if texts.has("20212") else "FADENKREUZ ZULASSEN", Settings.crosshair,
 		func(v: bool): Settings.crosshair = v)
+	# BEWUSSTE ABWEICHUNG (Vorgabe Auftraggeber): Zielmarker/Randpfeile für aktive Missionsziele (Standard an)
+	_yesno(245, "ZIELMARKIERUNGEN", Settings.objective_markers, func(v: bool): Settings.objective_markers = v)
 	# Ergänzungen (kein Original-Punkt): FPS-Anzeige (SP+MP), Namen/Trefferanzeige im Mehrspieler
 	_yesno(377, "FPS ANZEIGEN", Settings.show_fps, func(v: bool): Settings.show_fps = v)
 	_yesno(421, "NAMEN ÜBER SPIELERN (MP)", Settings.show_names, func(v: bool): Settings.show_names = v)
 	_yesno(465, "TREFFERANZEIGE SCHÜTZE (MP)", Settings.hit_feedback, func(v: bool): Settings.hit_feedback = v)
 	_yesno(509, "TREFFER-RICHTUNG GETROFFENER (MP)", Settings.hurt_feedback, func(v: bool): Settings.hurt_feedback = v)
 	_yesno(553, "KILL-CAM (MP)", Settings.kill_cam, func(v: bool): Settings.kill_cam = v)
+	# B-007 (Ergänzung): Sprachfassung – Originaltexte aus texts_<sprache>.json, eigene Texte über locale/ui_texts.csv
+	var langs := Settings.available_languages()
+	_cycle(Rect2(67, 597, 412, 32), tr("SPRACHE:") + " " + Settings.language_name(), func():
+		Settings.set_language(langs[(maxi(langs.find(Settings.language), 0) + 1) % langs.size()]), langs.size() > 1, "blanguage")
+	_label(Rect2(67, 633, 412, 18), "Sprachausgabe nur in den Sprachen der Installation.", 11, TEXT_COLOR)
 
 
 # --- Profile (Original change_profile.4ds) ---------------------------------------

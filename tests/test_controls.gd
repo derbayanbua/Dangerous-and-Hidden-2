@@ -19,6 +19,28 @@ func _run() -> void:
 	check(keys.has("slot:0") and keys.has("slot:3") and keys.has("slot:1") and keys.has("slot:4") and keys.has("slot:2")
 		and keys.has("explosive") and keys.has("mine") and keys.has("medkit") and keys.has("binoculars"),
 		"Ausrüstung: Primär, Raketenwerfer, Pistole, Messer, Granate, Sprengstoff, Mine, Erste Hilfe, Fernglas", str(keys))
+	# Direkttasten 1–8 (Entscheid Auftraggeber 24.10.2026), Fernglas B, Feuermodus mittlere Maustaste, F1–F4 Soldat wählen
+	var kc := func(a: String) -> int:
+		var ev := InputMap.action_get_events(a)
+		return (ev[0] as InputEventKey).physical_keycode if ev.size() > 0 and ev[0] is InputEventKey else -1
+	var fm := InputMap.action_get_events("fire_mode")
+	check(kc.call("weapon_1") == KEY_1 and kc.call("weapon_2") == KEY_2 and kc.call("weapon_3") == KEY_3
+		and kc.call("equip_4") == KEY_4 and kc.call("equip_5") == KEY_5 and kc.call("equip_6") == KEY_6
+		and kc.call("equip_7") == KEY_7 and kc.call("equip_8") == KEY_8 and kc.call("binoculars") == KEY_B
+		and kc.call("select_soldier_1") == KEY_F1 and kc.call("select_soldier_4") == KEY_F4
+		and fm.size() > 0 and fm[0] is InputEventMouseButton and (fm[0] as InputEventMouseButton).button_index == MOUSE_BUTTON_MIDDLE,
+		"Belegung: 1–8 Waffen/Ausrüstung, B Fernglas, MMT Feuermodus, F1–F4 Soldat wählen")
+	await tap("equip_4")
+	check(s.current_slot == WeaponData.Slot.MELEE, "Taste 4: Messer")
+	await tap("equip_6")
+	check(s.tool == "explosive", "Taste 6: Sprengstoff in der Hand", s.tool)
+	await tap("weapon_1")
+	await seconds(0.8)
+	check(s.tool == "" and s.current_slot == WeaponData.Slot.PRIMARY, "Taste 1: zurück zur Primärwaffe")
+	await tap("binoculars")
+	check(s.using_binoculars, "B: Fernglas")
+	await tap("binoculars")
+	await seconds(0.5)
 	# Mausrad öffnet die Auswahl, Linksklick wählt (ohne zu feuern)
 	await tap("weapon_next")
 	check(c.selection_open and m.hud.selection_visible(), "Mausrad öffnet die Auswahlliste")

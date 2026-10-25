@@ -12,7 +12,7 @@ extends "res://tests/test_gameplay.gd"
 const MIN_TREADS := 4
 const RISE_MIN := 0.07
 const RISE_MAX := 0.35
-const MAP_TIMEOUT_S := 420.0
+const MAP_TIMEOUT_S := 660.0
 
 var max_stairs := 8
 var rows: Array[String] = []
@@ -98,11 +98,9 @@ func _test_map(id: String) -> void:
 		folder = "eigen (prozedural)"
 	await frames(10)
 	_freeze_world(m)
-	for i in 6000:
-		if m.nav_ready:
-			break
+	while not m.nav_ready:      # große Karten (NORWAY: Kachelbake + Inselbrücken ≈ 3 min) – zeitbasiert warten
 		await get_tree().process_frame
-		if Time.get_ticks_msec() - t0 > 360000:
+		if Time.get_ticks_msec() - t0 > 480000:
 			break
 	var nav_s := (Time.get_ticks_msec() - t0) / 1000.0 - load_s
 	var ts0 := Time.get_ticks_msec()
@@ -343,7 +341,9 @@ func _free(space: PhysicsDirectSpaceState3D, p: Vector3) -> bool:
 	cap.radius = 0.25
 	cap.height = 1.6
 	params.shape = cap
-	params.transform = Transform3D(Basis(), p + Vector3(0, 0.12 + 0.8, 0))
+	# Unterkante 0,42 m über dem Tritt: Treppen mit echter Stufenkollision (CZECH1/4 nach dem B-010-Ersatzkörperfix) –
+	# die nächste Setzstufe (bis 0,3 m) darf nicht schon als fehlender Kopfraum zählen
+	params.transform = Transform3D(Basis(), p + Vector3(0, 0.42 + 0.8, 0))
 	params.collision_mask = 1
 	return space.intersect_shape(params, 1).is_empty()
 

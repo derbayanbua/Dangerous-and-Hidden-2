@@ -97,8 +97,7 @@ static func _load() -> void:
 	if _loaded:
 		return
 	_loaded = true
-	var t = LsRuntime._read_json(OrigLevel.cache_root() + "/texts_german.json")
-	_texts = t if typeof(t) == TYPE_DICTIONARY else {}
+	_texts = Settings.orig_texts()   # B-007: gewählte Sprachfassung (gemeinsame Instanz)
 	var c = LsRuntime._read_json(OrigLevel.cache_root() + "/commands.json")
 	if typeof(c) == TYPE_DICTIONARY:
 		_voices = c.get("voices", {})
@@ -248,10 +247,7 @@ func recipients() -> Array[Soldier]:
 		if target_index < sq.members.size() and sq.members[target_index].alive and sq.members[target_index] != sq.leader():
 			r.append(sq.members[target_index])
 		return r
-	for m in sq.alive_members():
-		if m != sq.leader():
-			r.append(m)
-	return r
+	return sq.order_recipients()    # markierte Kameraden (Einzelauswahl 1–4), sonst alle
 
 
 func _rebuild() -> void:
@@ -265,6 +261,15 @@ func _rebuild() -> void:
 			context = find_context()
 			if context == null:
 				_grey(2)
+				_grey(5)
+			# Vorgabe Auftraggeber (B-012, nicht aus 0x4BFFE0 belegt): „Stiller Angriff“/„Stille Aktion“ nur, wenn
+			# mindestens ein Empfänger eine Schalldämpferwaffe (Primär oder Pistole) trägt.
+			var quiet_ok := false
+			for s in rec:
+				if has_silenced(s):
+					quiet_ok = true
+			if not quiet_ok:
+				_grey(4)
 				_grey(5)
 			var plans := 0
 			for s in rec:
@@ -505,6 +510,18 @@ func _label_of(code: int) -> int:
 		if int(e[1]) == code:
 			return int(e[0])
 	return -1
+
+
+## Trägt der Soldat eine Schalldämpferwaffe (De Lisle, Sten Mk II S, Welrod, K98k/MP 40 SD …)?
+## Merkmal: Klangklasse „silenced_*“ bzw. Original-Geräuschweite < 20 m (wie BotTraits).
+static func has_silenced(s: Soldier) -> bool:
+	if s == null:
+		return false
+	for slot in [WeaponData.Slot.PRIMARY, WeaponData.Slot.SIDEARM]:
+		var w: Weapon = s.weapons[slot] if s.weapons.size() > slot else null
+		if w and w.data and (String(w.data.sound).begins_with("silenced") or w.data.noise_radius < 20.0):
+			return true
+	return false
 
 
 func _has_grenade(s: Soldier) -> bool:

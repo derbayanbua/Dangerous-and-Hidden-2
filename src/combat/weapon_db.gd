@@ -148,10 +148,9 @@ static func orig_item_of(w) -> int:
 static func wears_helmet(s: Node) -> bool:
 	if s == null:
 		return false
-	for it in s.get_meta("orig_items", []):
-		var eq = OrigInteractive.item_info(int(it)).get("equip_raw", [])
-		if eq is Array and (eq as Array).size() > 1 and int(eq[1]) == HEAD_ITEM_CATEGORY:
-			return true
+	# B-014: nur der Gegenstand auf dem Kopf-Platz zählt (Helm in der Tasche oder abgeschossen schützt nicht)
+	if s.has_meta("orig_items") or s.has_meta("inv_layout") or s.has_meta("helmet_lost"):
+		return Helmet.head_item(s) >= 0
 	# Original-Menschen (actors.bin) und SAS-Kader im Einzelspieler: nur der Kopfgegenstand zählt (0x455670 prüft das
 	# Modell des Kopf-Inventarplatzes +0x74); ohne Kopfgegenstand kein Helm – die Platzhalter-Helmform „stahlhelm“
 	# von spawn_enemy gab z. B. ARCTIC1 „metar“ (nur Uniform + P08) fälschlich einen Helm (Kopftreffer ×0,2 statt ×5)

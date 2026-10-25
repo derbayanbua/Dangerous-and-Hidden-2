@@ -520,7 +520,7 @@ func split_columns(i: Dictionary) -> Array:
 	var used := 0.0
 	for e in i.get("items", []):
 		var sp := SAS.space(int(e[0])) * int(e[1])
-		if used + sp <= SAS.POCKET_SPACE + 0.001 or int(i.get("back", -1)) < 0:
+		if used + sp <= SAS.POCKET_SPACE + 0.001 or not SAS.is_backpack(int(i.get("back", -1))):
 			pockets.append(e)
 			used += sp
 		else:

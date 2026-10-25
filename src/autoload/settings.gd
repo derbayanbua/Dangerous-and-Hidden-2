@@ -14,12 +14,18 @@ const RESOLUTIONS: Array[Vector2i] = [
 	Vector2i(1920, 1200), Vector2i(2560, 1080), Vector2i(2560, 1440), Vector2i(3440, 1440),
 	Vector2i(3840, 1600), Vector2i(3840, 2160), Vector2i(5120, 2160),
 ]
-const QUALITY_NAMES: PackedStringArray = ["Niedrig", "Mittel", "Hoch", "Ultra"]
+## BEWUSSTE ABWEICHUNG (B-013, Auftraggeber 24.10.2026): Stufe 4 „4K Ultra“ = 4K-Texturen (textures_4k), längere
+## Schatten-/Sicht-/LOD-Weiten, SSAO/SSIL/SDFGI/SSR, volumetrischer Nebel, TAA bzw. FSR 2, volle Wolken/Explosionen.
+## Niedrig bleibt bewusst schlank (prozeduraler Himmel ohne Wolkenshader, wenige Partikel) für schwache PCs/WARP.
+const QUALITY_NAMES: PackedStringArray = ["Niedrig", "Mittel", "Hoch", "Ultra", "4K Ultra"]
+const QUALITY_4K := 4
 
 var resolution := Vector2i.ZERO
 var fullscreen := true
 var vsync := true
-var quality := 2           ## 0..3, siehe QUALITY_NAMES
+var quality := 2:          ## 0..4, siehe QUALITY_NAMES
+	set(v):
+		quality = clampi(v, 0, QUALITY_NAMES.size() - 1)
 var render_scale := 1.0    ## 0.5..1.0 (FSR 1 bei < 1)
 var fov := 70.0
 var mouse_sensitivity := 0.12
@@ -62,7 +68,7 @@ const PROFILE_KEYS := {
 	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models", "quality"],
 	"audio": ["master_volume", "music_volume", "sfx_volume", "speech_volume"],
 	"controls": ["mouse_sensitivity", "invert_y"],
-	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam"],
+	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers"],
 	"multiplayer": ["voice_enabled", "voice_volume", "connection_type"],
 }
 ## Original „MEHRSPIELER-SPIEL-EINSTELLUNGEN“ (T2409): Voice-Chat ermöglichen (T2431, Original-Standard aus),
@@ -84,6 +90,8 @@ var show_names := true
 var hit_feedback := true
 var hurt_feedback := true     ## Treffer-Richtungsanzeige beim Getroffenen (Server-Regel hurtindicator)
 var kill_cam := true          ## Kill-Cam nach dem eigenen Tod (src/ui/kill_cam.gd; Server-Regel killcam)
+## BEWUSSTE ABWEICHUNG (Vorgabe Auftraggeber): Zielmarker/Randpfeile mit Entfernung (src/ui/objective_markers.gd)
+var objective_markers := true
 # --- aus dem Original-Setup (setup.exe, LS3D_setup), soweit heute sinnvoll ---
 ## VSync-Modus: 0 aus, 1 an, 2 adaptiv, 3 Dreifachpuffer (Original „Triple-Buffering“)
 var vsync_mode := 1
@@ -103,6 +111,18 @@ const ANISO_NAMES := ["AUS", "2×", "4×", "8×", "16×"]
 ## Original „Wenn inakt. aussetz.“: Spiel pausieren, wenn das Fenster den Fokus verliert
 var pause_unfocused := true
 
+## B-007 Sprache: Ordnername der Originalfassung (HD2_orig\Text\<ordner>, Cache texts_<ordner klein>.json),
+## Godot-Locale für die eigenen Oberflächentexte (res://locale/ui_texts.csv, Schlüssel = deutscher Text) und
+## Anzeigename. Japanisch fehlt: die Installation enthält dort nur TEXTY_DD.txt (60 Texte, kein Menü/Dialog).
+const LANGUAGES := [
+	["german", "de", "Deutsch"], ["english", "en_GB", "English (UK)"], ["EnglishUS", "en_US", "English (US)"],
+	["french", "fr", "Français"], ["italian", "it", "Italiano"], ["spanish", "es", "Español"], ["czech", "cs", "Čeština"],
+]
+signal language_changed
+var language := "german"       ## rechnerweit (wie die installierte Sprachfassung des Originals), Sektion setup
+var _orig_texts := {}          ## gemeinsame Instanz: Halter (Menü, LsRuntime, SAS …) sehen Umschaltungen sofort
+var _orig_texts_lang := ""
+
 var _cfg := ConfigFile.new()
 
 
@@ -116,6 +136,11 @@ func _ready() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--fps"):
 			show_fps = a != "--fps=0"                  # --fps[=1] (Kommandozeile, nicht gespeichert)
+		elif a.begins_with("--language="):
+			language = a.get_slice("=", 1)             # Kommandozeile (Tests), nicht gespeichert
+	if available_languages().find(language) < 0:
+		language = "german"
+	_apply_locale()
 	add_child(preload("res://src/ui/fps_overlay.gd").new())
 	apply()
 
@@ -139,7 +164,7 @@ func load_settings() -> void:
 	shadows = _cfg.get_value("graphics", "shadows", shadows)
 	subtitles = _cfg.get_value("game", "subtitles", subtitles)
 	crosshair = _cfg.get_value("game", "crosshair", crosshair)
-	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam"]:
+	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers"]:
 		set(k, _cfg.get_value("game", k, get(k)))
 	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		set(k, _cfg.get_value("graphics", k, get(k)))
@@ -147,6 +172,7 @@ func load_settings() -> void:
 		set(k, _cfg.get_value("setup", k, get(k)))
 	for k in PROFILE_KEYS["multiplayer"]:
 		set(k, _cfg.get_value("multiplayer", k, get(k)))
+	language = String(_cfg.get_value("setup", "language", language))
 
 
 func save_settings() -> void:
@@ -176,15 +202,78 @@ func save_settings() -> void:
 	_cfg.set_value("graphics", "shadows", shadows)
 	_cfg.set_value("game", "subtitles", subtitles)
 	_cfg.set_value("game", "crosshair", crosshair)
-	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam"]:
+	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers"]:
 		_cfg.set_value("game", k, get(k))
 	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		_cfg.set_value("graphics", k, get(k))
 	for k in ["vsync_mode", "max_fps", "aa_mode", "texture_quality", "anisotropy", "pause_unfocused"]:
 		_cfg.set_value("setup", k, get(k))
+	_cfg.set_value("setup", "language", language)
 	for k in PROFILE_KEYS["multiplayer"]:
 		_cfg.set_value("multiplayer", k, get(k))
 	_cfg.save(PATH)
+
+
+# --- Sprache (B-007) -----------------------------------------------------------------
+
+## Sprachordner, für die der Konverter Originaltexte erzeugt hat (Deutsch immer, auch ohne Cache)
+func available_languages() -> PackedStringArray:
+	var out: PackedStringArray = []
+	for l in LANGUAGES:
+		if l[0] == "german" or FileAccess.file_exists(texts_path(l[0])):
+			out.append(l[0])
+	return out
+
+
+static func texts_path(lang: String) -> String:
+	return OrigLevel.cache_root() + "/texts_%s.json" % lang.to_lower()
+
+
+func language_name(lang := "") -> String:
+	var l: String = lang if lang != "" else language
+	for e in LANGUAGES:
+		if e[0] == l:
+			return e[2]
+	return l
+
+
+func locale_of(lang: String) -> String:
+	for e in LANGUAGES:
+		if e[0] == lang:
+			return e[1]
+	return "de"
+
+
+## Originaltexte der gewählten Sprache (ID → Text); fehlende IDs aus der deutschen Fassung.
+## Immer dieselbe Dictionary-Instanz: beim Umschalten wird sie neu befüllt.
+func orig_texts() -> Dictionary:
+	if _orig_texts_lang != language:
+		_orig_texts_lang = language
+		_orig_texts.clear()
+		for l in (["german"] if language == "german" else ["german", language]):
+			var f := FileAccess.open(texts_path(l), FileAccess.READ)
+			if f:
+				var d = JSON.parse_string(f.get_as_text())
+				if typeof(d) == TYPE_DICTIONARY:
+					_orig_texts.merge(d, true)
+	return _orig_texts
+
+
+## Sprache umschalten: Originaltexte neu laden, Godot-Locale setzen, Missionstitel neu anmelden
+func set_language(lang: String) -> void:
+	if available_languages().find(lang) < 0:
+		lang = "german"
+	language = lang
+	orig_texts()
+	_apply_locale()
+	var g := get_node_or_null("/root/Game")
+	if g and g.has_method("_register_orig_missions"):
+		g._register_orig_missions()
+	language_changed.emit()
+
+
+func _apply_locale() -> void:
+	TranslationServer.set_locale(locale_of(language))
 
 
 func apply() -> void:
@@ -218,8 +307,17 @@ func apply() -> void:
 	vp.mesh_lod_threshold = 0.0 if high_models else 4.0
 	_apply_aa(vp)
 	vp.scaling_3d_scale = clampf(scale_3d, 0.25, 1.0)
-	vp.scaling_3d_mode = Viewport.SCALING_3D_MODE_FSR if vp.scaling_3d_scale < 0.99 else Viewport.SCALING_3D_MODE_BILINEAR
+	vp.scaling_3d_mode = _scaling_mode(vp.scaling_3d_scale)
 	changed.emit()
+
+
+## FSR 1 bei reduzierter Renderauflösung; „4K Ultra“ nutzt FSR 2 (zeitliche Hochskalierung inkl. Kantenglättung)
+func _scaling_mode(s: float) -> Viewport.Scaling3DMode:
+	if s >= 0.99:
+		return Viewport.SCALING_3D_MODE_BILINEAR
+	if quality >= QUALITY_4K:
+		return Viewport.SCALING_3D_MODE_FSR2
+	return Viewport.SCALING_3D_MODE_FSR
 
 
 ## Profil gewechselt: Profiloptionen laden (fehlen sie, bleiben die aktuellen Werte)
@@ -239,14 +337,17 @@ func _apply_aa(vp: Viewport) -> void:
 	vp.msaa_3d = [Viewport.MSAA_DISABLED, Viewport.MSAA_DISABLED, Viewport.MSAA_2X, Viewport.MSAA_4X,
 		Viewport.MSAA_8X, Viewport.MSAA_DISABLED][clampi(aa_mode, 0, 5)]
 	vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_FXAA if aa_mode == 1 else Viewport.SCREEN_SPACE_AA_DISABLED
-	vp.use_taa = aa_mode == 5
+	# 4K Ultra: TAA, sofern nicht ausdrücklich MSAA gewählt (FXAA/aus werden zu TAA aufgewertet)
+	vp.use_taa = aa_mode == 5 or (quality >= QUALITY_4K and aa_mode <= 1)
+	if vp.use_taa:
+		vp.screen_space_aa = Viewport.SCREEN_SPACE_AA_DISABLED
 	vp.anisotropic_filtering_level = [Viewport.ANISOTROPY_DISABLED, Viewport.ANISOTROPY_2X, Viewport.ANISOTROPY_4X,
 		Viewport.ANISOTROPY_8X, Viewport.ANISOTROPY_16X][clampi(anisotropy, 0, 4)]
 
 
 ## Ordner-Suffixe der Texturfassungen in Reihenfolge der Bevorzugung (gewählte Stufe, dann niedriger)
 func texture_suffixes() -> Array:
-	if texture_quality >= 2:
+	if texture_quality >= 2 or quality >= QUALITY_4K:
 		return ["_4k", "_hd", ""]
 	if texture_quality == 1:
 		return ["_hd", ""]
@@ -307,16 +408,34 @@ static func _gcd(a: int, b: int) -> int:
 ## Wendet die Qualitätsstufe auf ein WorldEnvironment und die Sonne an.
 ## Wird von der Mission beim Laden und bei jeder Änderung aufgerufen.
 func apply_to_world(env: Environment, sun: DirectionalLight3D) -> void:
+	var q := clampi(quality, 0, QUALITY_4K)
 	if env:
 		env.adjustment_enabled = true          # Sättigung/Kontrast der Mission bleiben erhalten
 		env.adjustment_brightness = gamma
-		env.ssao_enabled = quality >= 1
-		env.ssil_enabled = quality >= 3
-		env.sdfgi_enabled = quality >= 3
-		env.glow_enabled = quality >= 1
-		env.volumetric_fog_enabled = quality >= 2
+		env.ssao_enabled = q >= 1
+		env.ssil_enabled = q >= 3
+		env.sdfgi_enabled = q >= 3
+		env.sdfgi_use_occlusion = q >= 4
+		env.sdfgi_cascades = 6 if q >= 4 else 4
+		env.ssr_enabled = q >= 4
+		env.glow_enabled = q >= 1
+		env.volumetric_fog_enabled = q >= 2
+	var rs_q: int = [0, 1, 2, 2, 3][q]    # RenderingServer-Qualitätsstufen (sehr niedrig … hoch/ultra)
+	RenderingServer.environment_set_ssao_quality([RenderingServer.ENV_SSAO_QUALITY_VERY_LOW,
+		RenderingServer.ENV_SSAO_QUALITY_LOW, RenderingServer.ENV_SSAO_QUALITY_MEDIUM,
+		RenderingServer.ENV_SSAO_QUALITY_HIGH][rs_q], q >= 4, 0.5, 2, 50.0, 300.0)
+	RenderingServer.environment_set_volumetric_fog_volume_size([64, 64, 64, 96, 128][q], [32, 48, 64, 96, 128][q])
+	RenderingServer.directional_shadow_atlas_set_size([2048, 2048, 4096, 4096, 8192][q], true)
+	RenderingServer.directional_soft_shadow_filter_set_quality([RenderingServer.SHADOW_QUALITY_HARD,
+		RenderingServer.SHADOW_QUALITY_SOFT_VERY_LOW, RenderingServer.SHADOW_QUALITY_SOFT_LOW,
+		RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM, RenderingServer.SHADOW_QUALITY_SOFT_HIGH][q])
 	if sun:
 		sun.shadow_enabled = shadows
-		sun.directional_shadow_max_distance = [60.0, 120.0, 200.0, 300.0][quality]
-		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if quality == 0 else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
-	_apply_aa(get_viewport())
+		sun.directional_shadow_max_distance = [60.0, 120.0, 200.0, 300.0, 500.0][q]
+		sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if q == 0 else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	var vp := get_viewport()
+	vp.positional_shadow_atlas_size = [2048, 2048, 4096, 4096, 8192][q]
+	if high_models:
+		vp.mesh_lod_threshold = 0.0 if q >= 2 else 1.0
+	_apply_aa(vp)
+	vp.scaling_3d_mode = _scaling_mode(vp.scaling_3d_scale)

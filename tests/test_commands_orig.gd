@@ -266,9 +266,11 @@ func _run() -> void:
 	var p3 := {}
 	for s in sq.alive_members():
 		p3[s] = s.global_position
+	# B-012 (Entscheid Auftraggeber): F3 einmal = markieren, zweimal kurz hintereinander = übernehmen
+	await key(KEY_F3)
 	await key(KEY_F3)
 	var nl := sq.leader()
-	check(nl == sq.members[2] and m.controller.active == nl, "Soldatenwechsel F3", nl.soldier_name)
+	check(nl == sq.members[2] and m.controller.active == nl, "Soldatenwechsel F3 (2× drücken)", nl.soldier_name)
 	await walk("move_forward", 6.0)
 	await seconds(14.0)
 	var stay := true

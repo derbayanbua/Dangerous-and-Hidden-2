@@ -19,13 +19,21 @@ func _ready() -> void:
 
 func _maps() -> Array:
 	var sel := String(Game.cli.get("maps", "mp"))
-	if sel != "mp":
-		return Array(sel.split(",", false))
+	var campaign: Array = ["a1_blizzard", "a2_erkundung", "a3_rendezvous"]
+	for e in Game.ORIG_CAMPAIGN:
+		campaign.append(e[0])
 	var out: Array = []
 	for id in Game.MP_MAPS:
 		if not String(id).begins_with("mp_arena_"):
 			out.append(id)
-	return out
+	match sel:
+		"mp":
+			return out
+		"campaign":
+			return campaign
+		"all":
+			return campaign + out
+	return Array(sel.split(",", false))
 
 
 func _run() -> void:
@@ -59,8 +67,12 @@ func _test_map(id: String) -> void:
 		check(false, "%s: geladen" % id)
 		rows.append("| %s | – | – | – | – | Laden fehlgeschlagen |" % id)
 		return
-	while not m.nav_ready and Time.get_ticks_msec() - t0 < 300000:
+	while is_instance_valid(m) and not m.nav_ready and Time.get_ticks_msec() - t0 < 600000:
 		await get_tree().process_frame
+	if not is_instance_valid(m):
+		check(false, "%s: Mission bleibt geladen" % id)
+		rows.append("| %s | – | – | – | – | Mission vorzeitig entladen |" % id)
+		return
 	await frames(5)
 	var nav_map := m.nav_region.get_navigation_map()
 	var polys := 0
@@ -78,6 +90,21 @@ func _test_map(id: String) -> void:
 		pts.append(["Zone " + String(z.name), _ground(m, (z.xf as Transform3D).origin)])
 		for s in z.get("slots", []):
 			pts.append(["Platz " + String(z.name), _ground(m, s.pos as Vector3)])
+	if pts.is_empty() and m.get("squad") != null:
+		await _skip_intro(m)
+	if pts.is_empty():
+		# Kampagnenkarte: Startlage aller Soldaten (Trupp, Gegner, NPC) außer in Fahrzeugen/Stellungen
+		for s in get_tree().get_nodes_in_group("soldiers"):
+			var so := s as Soldier
+			if so == null or not so.is_inside_tree() or so.vehicle != null:
+				continue
+			if so.mounted != null or not so.alive:
+				continue
+			var q := PhysicsRayQueryParameters3D.create(so.global_position + Vector3.UP, so.global_position + Vector3.DOWN * 30.0, 1)
+			if m.get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+				print("   (übersprungen: %s ohne Boden bei %s – versteckt/fällt)" % [so.name, _v(so.global_position)])
+				continue
+			pts.append(["%s %s" % ["Trupp" if so.team == 0 else "Soldat", so.name], _ground(m, so.global_position)])
 	var on := 0
 	var reach := 0
 	var notes: Array[String] = []
@@ -124,6 +151,43 @@ func _test_map(id: String) -> void:
 	check(polys > 0, "%s: Navigationsnetz vorhanden" % id, str(polys))
 	check(on == n_pts, "%s: alle Spawns/Zonen auf dem Netz" % id, "%d/%d" % [on, n_pts])
 	check(reach == n_pts, "%s: Netz zusammenhängend (alle Punkte erreichbar)" % id, "%d/%d" % [reach, n_pts])
+
+
+func key(code: Key) -> void:
+	for pressed in [true, false]:
+		var ev := InputEventKey.new()
+		ev.keycode = code
+		ev.physical_keycode = code
+		ev.pressed = pressed
+		Input.parse_input_event(ev)
+		Input.flush_buffered_events()
+		await get_tree().process_frame
+
+
+## Kampagne: Zwischensequenz wie ein Spieler überspringen und Landung abwarten (ARCTIC1 beginnt mit dem Absprung),
+## damit die Trupp-Lage der tatsächliche Spielbeginn ist (wie test_commands_orig).
+func _skip_intro(m: Mission) -> void:
+	for i in 600:
+		var rt0 = m.get("runtime")
+		if (rt0 and bool(rt0.get("in_cutscene"))) or m.elapsed > 12.0:
+			break
+		await frames(1)
+	await seconds(1.5)
+	for i in 60:
+		var rt = m.get("runtime")
+		if (m.controller == null or m.controller.input_enabled) and not (rt and bool(rt.get("in_cutscene"))):
+			break
+		await key(KEY_SPACE)
+		await seconds(0.5)
+	var calm := 0.0
+	for i in 60:
+		var ok := true
+		for s in m.squad.members:
+			ok = ok and (not s.alive or (s.is_on_floor() and absf(s.velocity.y) < 0.5))
+		calm = calm + 0.5 if ok else 0.0
+		if calm >= 2.0:
+			break
+		await seconds(0.5)
 
 
 ## Draufsicht des Netzes (Fehlersuche): Polygone grau (heller = höher), Punkte grün = erreichbar, rot = nicht,

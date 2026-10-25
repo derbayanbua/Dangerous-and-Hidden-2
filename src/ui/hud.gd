@@ -32,6 +32,7 @@ var _center_label: Label
 var _font_size := 16
 var _binoc_mask: TextureRect
 var orig_hud: OrigHud
+var objective_markers: ObjectiveMarkers
 
 
 ## Schwarze Maske mit zwei überlappenden Kreisen (Fernglas-Optik).
@@ -119,6 +120,11 @@ func setup(m: Mission) -> void:
 				_stance_label.get_parent().get_parent(), _compass]:
 			n.visible = false
 		_msg_box.position.y = -230    # über der Truppleiste
+	# BEWUSSTE ABWEICHUNG (Vorgabe Auftraggeber): Zielmarker/Randpfeile, hinter den HUD-Feldern (fix_a2_marker)
+	objective_markers = ObjectiveMarkers.new()
+	_root.add_child(objective_markers)
+	_root.move_child(objective_markers, 1)
+	objective_markers.setup(mission)
 	Events.message.connect(_on_message)
 	Events.mission_finished.connect(_on_finished)
 	Events.objective_updated.connect(func(_id): _refresh_objectives())

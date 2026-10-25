@@ -13,6 +13,7 @@ var actors_root: Node3D
 var effects_root: Node3D
 var env: Environment
 var sun: DirectionalLight3D
+var sky_fx: Node3D        ## src/world/sky_fx.gd (B-013: Wolkenhimmel, Wolkenschatten)
 var squad: SquadManager
 var controller: PlayerController
 var rig: CameraRig
@@ -210,6 +211,10 @@ func _setup_environment() -> void:
 	add_child(sun)
 	_configure_environment(env, sun)
 	Settings.apply_to_world(env, sun)
+	# B-013: Wolkenhimmel + Wolkenschatten (übernimmt die eben eingestellten Missionsfarben)
+	sky_fx = preload("res://src/world/sky_fx.gd").new()
+	add_child(sky_fx)
+	sky_fx.setup(self, env, sun)
 
 
 func _bake_navigation() -> void:
@@ -220,7 +225,7 @@ func _bake_navigation() -> void:
 	nm.agent_radius = 0.2
 	nm.agent_height = 1.6    # Treppen unter Deckenkanten (AFRICA1-Dach) bleiben im Netz
 	nm.agent_max_climb = 0.4
-	nm.agent_max_slope = 40.0
+	nm.agent_max_slope = 50.0     # = Soldier.floor_max_angle (steile Original-Ersatzrampen, z. B. ARCTIC1 x_schody05 ≈ 37–45°)
 	nm.cell_size = 0.2
 	nm.cell_height = 0.2
 	nm.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
@@ -234,30 +239,28 @@ func _bake_navigation() -> void:
 	_bake_tiles.call_deferred(nm)
 
 
-## Große Originalkarten (AFRICA5/6, NORWAY: > 1 km) überschreiten im Ganzen die Recast-Grenze (Godot bricht mit
-## „would likely crash the engine“ ab → leeres Netz). Daher in Kacheln NAV_TILE × NAV_TILE m backen (Randzone
-## border_size, Kanten verbinden sich in der Navigationskarte); kleine Karten = eine Kachel wie bisher.
-const NAV_TILE := 160.0
+## Große Originalkarten (AFRICA2/4/5, ARCTIC4, NORWAY: > 1 km) überschreiten im Ganzen die Recast-Grenze (Godot bricht
+## mit „would likely crash the engine“ ab → leeres Netz; eine gröbere Zelle erodiert Türen/Treppen zu Inseln und ließ
+## ARCTIC4 bei 0,4 m mit Speichermangel abstürzen). Daher in Kacheln NAV_TILE × NAV_TILE m mit unveränderter Zelle
+## 0,2 m backen – nacheinander (gleichzeitige Bakes sprengten den Speicher und lieferten leere Kacheln), Randzone
+## border_size + edge_max_error ≤ 1 (Godot-Vorgabe für deckungsgleiche Kachelkanten), Kanten verbinden sich in der
+## Navigationskarte. Kleine Karten = ein Stück wie bisher.
+const NAV_TILE := 128.0
+const NAV_TILE_BORDER := 2.0
 var _nav_pending := 0
 var _nav_regions: Array[NavigationRegion3D] = []
+var _nav_queue: Array = []
 
 
 func _bake_tiles(nm: NavigationMesh) -> void:
 	var src := NavigationMeshSourceGeometryData3D.new()
 	NavigationServer3D.parse_source_geometry_data(nm, src, nav_region)
-	# In einem Stück backen. Godot bricht ab, wenn das Raster zu viele Säulen hätte (Absturzschutz, beobachtet:
-	# AFRICA5_MP 1182 × 1180 m bei 0,2 m = 35 Mio. scheitert, 0,3 m = 15,5 Mio. geht) → Zelle so weit vergröbern, dass
-	# höchstens NAV_MAX_COLUMNS bleiben (Radius = eine Zelle, Navigationskarte auf dieselbe Zelle).
 	var box := src.get_bounds()
-	var cs := nm.cell_size
-	while (box.size.x / cs) * (box.size.z / cs) > NAV_MAX_COLUMNS and cs < 1.0:
-		cs = snappedf(cs + 0.1, 0.1)
-	if cs > nm.cell_size:
-		nm.cell_size = cs
-		nm.agent_radius = cs
-		print("NAV: Karte %.0f × %.0f m → Zelle %.1f m" % [box.size.x, box.size.z, cs])
 	# Navigationskarte gehört zur Welt des Hauptfensters und bleibt über Kartenwechsel bestehen → immer setzen
 	NavigationServer3D.map_set_cell_size(nav_region.get_navigation_map(), nm.cell_size)
+	if (box.size.x / nm.cell_size) * (box.size.z / nm.cell_size) > NAV_MAX_COLUMNS or Game.cli.has("nav_tiles"):
+		_bake_tiled(nm, src)
+		return
 	NavigationServer3D.bake_from_source_geometry_data_async(nm, src, _nav_whole_done.bind(nm, src))
 
 
@@ -276,43 +279,107 @@ func _nav_whole_done(nm: NavigationMesh, src: NavigationMeshSourceGeometryData3D
 		_nav_pending = 1
 		_nav_tile_done(nav_region, nm)
 		return
-	# Godot verweigert sehr große Karten (Raster > ~2^24 Säulen, z. B. AFRICA5 1,2 × 1,2 km bei 0,2 m) → in einem
-	# Stück mit gröberer Zelle (0,3 m, Radius eine Zelle) backen; Navigationskarte auf dieselbe Zelle stellen.
-	if nm.cell_size < 0.95:
-		var coarse := nm.duplicate() as NavigationMesh
-		coarse.cell_size = snappedf(nm.cell_size + 0.1, 0.1)
-		coarse.agent_radius = coarse.cell_size
-		NavigationServer3D.map_set_cell_size(nav_region.get_navigation_map(), coarse.cell_size)
-		print("NAV: Bake verweigert → Zelle %.1f m" % coarse.cell_size)
-		NavigationServer3D.bake_from_source_geometry_data_async(coarse, src, _nav_whole_done.bind(coarse, src))
-		return
+	# Godot verweigert den Bake im Ganzen (Raster zu groß, auch durch den Höhenumfang) → Kacheln
+	_bake_tiled(nm, src)
+
+
+func _bake_tiled(nm: NavigationMesh, src: NavigationMeshSourceGeometryData3D) -> void:
 	var box := src.get_bounds()
 	var nx := maxi(ceili(box.size.x / NAV_TILE), 1)
 	var nz := maxi(ceili(box.size.z / NAV_TILE), 1)
 	if nx * nz == 1:
 		nx = 2           # nur bei zu großem Höhenumfang: dennoch teilen
-	print("NAV: Karte zu groß für einen Bake (%.0f × %.0f m, Höhe %.0f m, ab %s) → %d Kacheln" % [box.size.x,
-		box.size.z, box.size.y, str(box.position), nx * nz])
+	print("NAV: Kachelbake %.0f × %.0f m (Höhe %.0f m) → %d Kacheln, Zelle %.2f m" % [box.size.x, box.size.z, box.size.y,
+		nx * nz, nm.cell_size])
 	_nav_pending = nx * nz
 	_nav_regions.clear()
-	var tw := box.size.x / nx
-	var td := box.size.z / nz
+	_nav_queue.clear()
+	var focus := nav_focus_points()
+	# Kachelraster auf das Zellraster legen: Recast rundet border_size auf ganze Zellen AUF (2,0 m / 0,2 m = 10,000…02 →
+	# 11 Zellen = 2,2 m), dann fehlen zwischen den Kacheln 0,4 m und die Kanten verbinden sich nicht (AFRICA2_MP_ZONE:
+	# Südhälfte abgetrennt). Daher Rand = ganze Zellen (knapp darunter angegeben), Kachelmaße/-ursprung Vielfache der Zelle.
+	var cs := nm.cell_size
+	var border_cells := ceili(NAV_TILE_BORDER / cs - 0.01)
+	var border := border_cells * cs
+	var tw := ceilf((box.size.x + cs) / nx / cs) * cs
+	var td := ceilf((box.size.z + cs) / nz / cs) * cs
+	var ox := floorf(box.position.x / cs) * cs
+	var oz := floorf(box.position.z / cs) * cs
 	for ix in nx:
 		for iz in nz:
 			var tile := nm.duplicate() as NavigationMesh
-			# Godot-Kachelbake: Filter-AABB = Kachel + Randzone, border_size = Randzone → Recast schneidet den Rand
-			# nach dem Erodieren wieder ab, die Kachelkanten liegen deckungsgleich und verbinden sich
-			tile.border_size = 2.0
-			tile.filter_baking_aabb = AABB(Vector3(box.position.x + ix * tw - 2.0, box.position.y - 1.0,
-				box.position.z + iz * td - 2.0), Vector3(tw + 4.0, box.size.y + 2.0, td + 4.0))
+			tile.border_size = border - cs * 0.05
+			tile.edge_max_error = 1.0
+			tile.filter_baking_aabb = AABB(Vector3(ox + ix * tw - border, box.position.y - 1.0, oz + iz * td - border),
+				Vector3(tw + 2.0 * border, box.size.y + 2.0, td + 2.0 * border))
+			if not focus.is_empty() and not _near_focus(tile.filter_baking_aabb, focus):
+				_nav_pending -= 1
+				continue
 			var reg := nav_region
 			if ix + iz > 0:
 				reg = NavigationRegion3D.new()
 				reg.name = "Nav_%d_%d" % [ix, iz]
 				add_child(reg)
 			_nav_regions.append(reg)
-			NavigationServer3D.bake_from_source_geometry_data_async(tile, src, _nav_tile_done.bind(reg, tile))
+			_nav_queue.append([reg, tile])
+	if _nav_queue.is_empty():
+		push_warning("NAV: keine Kachel im Spielbereich – kein Navigationsnetz")
+		nav_ready = true
+		return
+	print("NAV: %d von %d Kacheln im Spielbereich (≤ %.0f m um Soldaten/Spawns/Zonen/Leitern)" % [_nav_queue.size(), nx * nz,
+		NAV_FOCUS_MARGIN])
+	_nav_t0 = Time.get_ticks_msec()
+	_bake_next_tile(src)
 
+
+## Spielbereich für den Kachelbake sehr großer Karten (AFRICA6 5,7 × 4 km = 1395 Kacheln): nur Kacheln im Umkreis
+## NAV_FOCUS_MARGIN um diese Punkte werden gebacken. Missionen können ergänzen (super aufrufen).
+const NAV_FOCUS_MARGIN := 250.0
+
+
+func nav_focus_points() -> PackedVector3Array:
+	var out := PackedVector3Array()
+	for s in get_tree().get_nodes_in_group("soldiers"):
+		out.append((s as Node3D).global_position)
+	for l in get_tree().get_nodes_in_group("ladders"):
+		out.append((l as Node3D).global_position)
+	var sps = get("_spawn_points")
+	if sps is Array:
+		for sp in sps:
+			out.append(sp.pos)
+	var zs = get("_zones")
+	if zs is Array:
+		for z in zs:
+			out.append((z.xf as Transform3D).origin)
+	return out
+
+
+static func _near_focus(box: AABB, focus: PackedVector3Array) -> bool:
+	var b := box.grow(NAV_FOCUS_MARGIN)
+	for p in focus:
+		if p.x >= b.position.x and p.x <= b.end.x and p.z >= b.position.z and p.z <= b.end.z:
+			return true
+	return false
+
+
+var _nav_t0 := 0
+
+
+func _bake_next_tile(src: NavigationMeshSourceGeometryData3D) -> void:
+	if not is_inside_tree() or _nav_queue.is_empty():
+		return
+	var job: Array = _nav_queue.pop_front()
+	NavigationServer3D.bake_from_source_geometry_data_async(job[1], src, _nav_tile_baked.bind(job[0], job[1], src))
+
+
+func _nav_tile_baked(reg: NavigationRegion3D, tile: NavigationMesh, src: NavigationMeshSourceGeometryData3D) -> void:
+	if not is_inside_tree():
+		return
+	if _nav_queue.is_empty():
+		print("NAV: Kacheln gebacken in %d ms" % (Time.get_ticks_msec() - _nav_t0))
+	else:
+		_bake_next_tile.call_deferred(src)
+	_nav_tile_done(reg, tile)
 
 func _nav_tile_done(reg: NavigationRegion3D, tile: NavigationMesh) -> void:
 	if not is_instance_valid(reg):
@@ -342,14 +409,29 @@ func _nav_tile_done(reg: NavigationRegion3D, tile: NavigationMesh) -> void:
 				break
 			if i == 7199:
 				push_warning("NAV: Navigationskarte nach 2 min noch nicht abgeglichen")
-		if Game.cli.has("nav_bridges"):      # Inselbrücken: ungetestet → nur auf Anforderung (Backlog)
-			_bridge_islands()
-		_add_ladder_links()
-		if not ladder_links.is_empty() or not bridge_links.is_empty():
-			await get_tree().physics_frame
-			await get_tree().physics_frame
+		if not Game.cli.has("no_nav_bridges"):   # Inselbrücken/Kletterstellen (B-010), abschaltbar zur Messung
+			await _bridge_islands()
 			if not is_inside_tree():
 				return
+		_add_ladder_links()
+		if not ladder_links.is_empty() or not bridge_links.is_empty():
+			# Verbindungen wirken erst nach einem vollständigen (asynchronen) Abgleich der Navigationskarte – zwei
+			# Physikschritte reichten nicht (ARCTIC1: nur 26 von 271 Links begehbar) → warten, bis ein Link-Pfad
+			# über die letzte Verbindung führt (höchstens 30 s)
+			var links: Array[NavigationLink3D] = []
+			links.append_array(bridge_links)
+			links.append_array(ladder_links)
+			var probe_l: NavigationLink3D = links[-1]
+			var map2 := nav_region.get_navigation_map()
+			for i in 1800:
+				await get_tree().physics_frame
+				if not is_inside_tree():
+					return
+				var pth := NavigationServer3D.map_get_path(map2, probe_l.global_transform * probe_l.start_position,
+					probe_l.global_transform * probe_l.end_position, true)
+				if i >= 2 and pth.size() > 0 and pth[pth.size() - 1].distance_to(probe_l.global_transform * probe_l.end_position) < 0.6:
+					print("NAV: Verbindungen wirksam nach %d Physikschritten" % i)
+					break
 		nav_ready = true
 		var polys := 0
 		for r in _nav_regions:
@@ -369,46 +451,84 @@ func _nav_tile_done(reg: NavigationRegion3D, tile: NavigationMesh) -> void:
 ## (waagerecht ≤ BRIDGE_MAX_GAP, Höhenunterschied ≤ Soldier.STEP_HEIGHT); passt die Soldatenkapsel frei hindurch
 ## (Formabfrage über die Strecke, Boden darunter), entsteht eine NavigationLink3D in beide Richtungen.
 const BRIDGE_MAX_GAP := 1.2
+const BRIDGE_SPACING := 6.0   ## m: je Inselpaar höchstens eine Verbindung je Feld dieser Größe
+var _dbg_sizes: Array = []
+const CLIMB_MAX_GAP := 1.6     ## Kletterstelle: waagerechter Abstand Netzkante unten ↔ oben (Mauerdicke + Erosion)
 var bridge_links: Array[NavigationLink3D] = []
+
+
+var _slice := 0
 
 
 func _bridge_islands() -> void:
 	var t0 := Time.get_ticks_msec()
-	var verts := PackedVector3Array()
-	var island := PackedInt32Array()       # Vertex -> Insel
-	var base := 0
-	var uf: Array = []                     # Union-Find über Polygone (global nummeriert; Array = Referenz)
+	_slice = t0
+	# Eckpunkte aller Regionen verschweißen (Kacheln teilen Randpunkte), Inseln per Union-Find über Polygone
+	var weld := {}                         # Vector3i -> globaler Punkt
+	var gpos := PackedVector3Array()
+	var uf: Array = []
+	var edges := {}                        # Vector2i(a, b) -> [Anzahl, Polygon]
 	var pcount := 0
-	var vpoly: Array = []                  # Vertex -> Polygon (global)
 	for r in _nav_regions:
 		var nm := r.navigation_mesh
 		if nm == null:
 			continue
 		var vs := nm.get_vertices()
 		var xf := r.global_transform
+		var gid := PackedInt32Array()
 		for v in vs:
-			verts.append(xf * v)
-			vpoly.append(-1)
+			var w := xf * v
+			var key := Vector3i((w * 10.0).round())
+			if not weld.has(key):
+				weld[key] = gpos.size()
+				gpos.append(w)
+			gid.append(weld[key])
 		for pi in nm.get_polygon_count():
+			if Time.get_ticks_msec() - _slice > 8:      # Zeitscheiben: große Karten (NORWAY 14 s) ohne Standbild
+				await get_tree().process_frame
+				_slice = Time.get_ticks_msec()
+				if not is_inside_tree():
+					return
 			uf.append(pcount)
-			for k in nm.get_polygon(pi):
-				var gv := base + k
-				if vpoly[gv] < 0:
-					vpoly[gv] = pcount
+			var poly := nm.get_polygon(pi)
+			for k in poly.size():
+				# Verbunden sind Polygone nur über gemeinsame Kanten (Godot-Navigationskarte), nicht über einen
+				# gemeinsamen Eckpunkt (AFRICA5_MP: Bunkerboden berührt das Gelände nur an einer Ecke)
+				var gv := gid[poly[k]]
+				var gn := gid[poly[(k + 1) % poly.size()]]
+				var ek := Vector2i(mini(gv, gn), maxi(gv, gn))
+				if edges.has(ek):
+					edges[ek][0] += 1
+					_uf_union(uf, edges[ek][1], pcount)
 				else:
-					_uf_union(uf, vpoly[gv], pcount)
+					edges[ek] = [1, pcount]
 			pcount += 1
-		base += vs.size()
 	if pcount == 0:
 		return
-	island.resize(verts.size())
+	# Prüfpunkte = Randkanten (nur von einem Polygon benutzt) alle 0,4 m abgetastet: die nächste Stelle zweier Inseln
+	# liegt meist mitten auf langen Wandkanten, nicht an Eckpunkten
+	var verts := PackedVector3Array()
+	var island := PackedInt32Array()
 	var isl_size := {}
-	for i in verts.size():
-		island[i] = _uf_find(uf, vpoly[i]) if vpoly[i] >= 0 else -1
-		if island[i] >= 0:
-			isl_size[island[i]] = int(isl_size.get(island[i], 0)) + 1
+	for ek in edges:
+		var e: Array = edges[ek]
+		if e[0] != 1:
+			continue
+		var isl := _uf_find(uf, e[1])
+		isl_size[isl] = int(isl_size.get(isl, 0)) + 1
+		var a: Vector3 = gpos[ek.x]
+		var b: Vector3 = gpos[ek.y]
+		var n := maxi(ceili(a.distance_to(b) / 0.4), 1)
+		for i in n:
+			verts.append(a.lerp(b, float(i) / n))
+			island.append(isl)
 	if isl_size.size() < 2:
 		return
+	if Game.cli.has("bridge_debug"):
+		var xz := String(Game.cli["bridge_debug"]).split_floats(",")
+		for i in verts.size():
+			if Vector2(verts[i].x - xz[0], verts[i].z - xz[1]).length() < 2.5:
+				print("   Randpunkt %s Insel %d (%d Kanten)" % [verts[i], island[i], isl_size[island[i]]])
 	# Raster 1,5 m
 	var grid := {}
 	for i in verts.size():
@@ -420,6 +540,11 @@ func _bridge_islands() -> void:
 		grid[k].append(i)
 	var best := {}                         # Inselpaar -> [Abstand, a, b]
 	for i in verts.size():
+		if Time.get_ticks_msec() - _slice > 8:      # Zeitscheiben: große Karten (NORWAY 14 s) ohne Standbild
+			await get_tree().process_frame
+			_slice = Time.get_ticks_msec()
+			if not is_inside_tree():
+				return
 		var ii := island[i]
 		if ii < 0:
 			continue
@@ -435,14 +560,22 @@ func _bridge_islands() -> void:
 					if jj <= ii:
 						continue
 					var b := verts[j]
-					if absf(a.y - b.y) > Soldier.STEP_HEIGHT:
+					var dy := absf(a.y - b.y)
+					if dy > Soldier.CLIMB_MAX:
 						continue
 					var d := Vector2(a.x - b.x, a.z - b.z).length()
-					if d > BRIDGE_MAX_GAP:
+					if d > (BRIDGE_MAX_GAP if dy <= Soldier.STEP_HEIGHT else CLIMB_MAX_GAP):
 						continue
-					var key := Vector2i(ii, jj)
-					if not best.has(key) or d < best[key][0]:
-						best[key] = [d, a, b]
+					# Bewertung: Stufe/Schwelle vor Kletterstelle (Höhe zählt dreifach)
+					var score: float = d + (0.0 if dy <= Soldier.STEP_HEIGHT else 3.0 * dy)
+					# je Inselpaar und BRIDGE_SPACING-Feld der beste Kandidat: lange Nahtstellen (Geländeteile, Wegränder)
+					# brauchen viele Übergänge, sonst entstehen Umwege über eine einzige Brücke
+					var key := Vector3i(ii, jj, 0)
+					var bcell := Vector2i(floori(a.x / BRIDGE_SPACING), floori(a.z / BRIDGE_SPACING))
+					var per: Dictionary = best.get(key, {})
+					if not per.has(bcell) or score < per[bcell][0]:
+						per[bcell] = [score, a, b]
+						best[key] = per
 	var space := get_world_3d().direct_space_state
 	var cap := CapsuleShape3D.new()
 	cap.radius = 0.25
@@ -450,30 +583,78 @@ func _bridge_islands() -> void:
 	var params := PhysicsShapeQueryParameters3D.new()
 	params.shape = cap
 	params.collision_mask = 1 | (1 << 4)
+	var n_climb := 0
 	for key in best:
-		var a: Vector3 = best[key][1]
-		var b: Vector3 = best[key][2]
-		# Kapsel (Unterkante 0,45 m über dem höheren Punkt) muss frei vom einen zum anderen Punkt gleiten können
-		var lift := maxf(a.y, b.y) - a.y + 0.45 + cap.height * 0.5
-		params.transform = Transform3D(Basis(), a + Vector3.UP * lift)
-		params.motion = Vector3(b.x - a.x, b.y - a.y, b.z - a.z)
-		var cm := space.cast_motion(params)
-		if cm.is_empty() or cm[0] < 0.99:
-			continue
+		if Time.get_ticks_msec() - _slice > 8:      # Zeitscheiben: große Karten (NORWAY 14 s) ohne Standbild
+			await get_tree().process_frame
+			_slice = Time.get_ticks_msec()
+			if not is_inside_tree():
+				return
+		if Game.cli.has("bridge_debug"):
+			_dbg_sizes = [isl_size.get(key.x, 0), isl_size.get(key.y, 0)]
+		var per: Dictionary = best[key]
+		for bc in per:
+			var cand: Array = per[bc]
+			var r := _try_bridge(space, params, cap, cand[1], cand[2])
+			if r == 2:
+				n_climb += 1
+	print("NAV: %d Inseln, %d Inselbrücken, davon %d Kletterstellen (%d ms)" % [isl_size.size(), bridge_links.size(), n_climb,
+		Time.get_ticks_msec() - t0])
+
+
+## Verbindung prüfen und anlegen: 0 = verworfen, 1 = Brücke (Schwelle/Spalt), 2 = Kletterstelle
+func _try_bridge(space: PhysicsDirectSpaceState3D, params: PhysicsShapeQueryParameters3D, cap: CapsuleShape3D,
+		p: Vector3, q: Vector3) -> int:
+	var a: Vector3 = p if p.y <= q.y else q          # a = unten
+	var b: Vector3 = q if p.y <= q.y else p
+	var climb := b.y - a.y > Soldier.STEP_HEIGHT
+	var dbg := false
+	if Game.cli.has("bridge_debug"):         # --bridge_debug=x,z: Kandidaten im Umkreis von 6 m mit Ergebnis ausgeben
+		var xz := String(Game.cli["bridge_debug"]).split_floats(",")
+		dbg = Vector2(a.x - xz[0], a.z - xz[1]).length() < 6.0 or Vector2(b.x - xz[0], b.z - xz[1]).length() < 6.0
+	if dbg:
+		print("BRIDGE? %s -> %s (dy %.2f, d %.2f) Inselgrößen %s" % [a, b, b.y - a.y, Vector2(a.x - b.x, a.z - b.z).length(), str(_dbg_sizes)])
+	if climb:
+		# Kletterstelle (Soldier.try_climb bis CLIMB_MAX): Kopffreiheit über dem unteren Punkt bis über die Oberkante
+		params.transform = Transform3D(Basis(), a + Vector3.UP * (0.45 + cap.height * 0.5))
+		params.motion = Vector3.UP * (b.y - a.y)
+		var up := space.cast_motion(params)
+		if up.is_empty() or up[0] < 0.99:
+			if dbg:
+				print("   kein Kopfraum ", up)
+			return 0
+	# Kapsel (Unterkante 0,45 m über dem höheren Punkt) muss frei vom einen zum anderen Punkt gleiten können
+	var lift := b.y - a.y + 0.45 + cap.height * 0.5
+	params.transform = Transform3D(Basis(), a + Vector3.UP * lift)
+	params.motion = Vector3(b.x - a.x, 0.0, b.z - a.z)
+	var cm := space.cast_motion(params)
+	if cm.is_empty() or cm[0] < 0.99:
+		if dbg:
+			print("   Weg versperrt ", cm)
+		return 0
+	if not climb:
 		# Boden in der Mitte (keine Brücke über Abgründe)
 		var mid := (a + b) * 0.5
 		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(mid + Vector3.UP * 0.5, mid + Vector3.DOWN * 0.6, 1))
 		if hit.is_empty():
-			continue
-		var link := NavigationLink3D.new()
-		link.name = "IslandBridge_%d" % bridge_links.size()
-		link.bidirectional = true
-		link.start_position = a
-		link.end_position = b
-		dynamic_root.add_child(link)
-		bridge_links.append(link)
-	print("NAV: %d Inseln, %d Inselbrücken (%d ms)" % [isl_size.size(), bridge_links.size(), Time.get_ticks_msec() - t0])
-
+			return 0
+	var link := NavigationLink3D.new()
+	link.name = ("ClimbLink_%d" if climb else "IslandBridge_%d") % bridge_links.size()
+	link.bidirectional = true
+	# Endpunkte liegen genau auf den Randkanten → je 0,15 m ins eigene Polygon versetzen (auf der Kante verbindet
+	# die Navigationskarte den Link nicht zuverlässig)
+	var hd := Vector3(b.x - a.x, 0.0, b.z - a.z)
+	if hd.length() > 0.05:
+		hd = hd.normalized() * 0.15
+		a -= hd
+		b += hd
+	link.start_position = NavigationServer3D.map_get_closest_point(nav_region.get_navigation_map(), a)
+	link.end_position = NavigationServer3D.map_get_closest_point(nav_region.get_navigation_map(), b)
+	if climb:
+		link.set_meta("climb", true)
+	dynamic_root.add_child(link)
+	bridge_links.append(link)
+	return 2 if climb else 1
 
 static func _uf_find(uf: Array, x: int) -> int:
 	while uf[x] != x:
@@ -513,6 +694,10 @@ func _add_ladder_links() -> void:
 		link.start_position = a
 		link.end_position = b
 		link.set_meta("ladder", l)
+		for o in get_tree().get_nodes_in_group("ladders"):
+			if o != l and o.at_top and o.top.is_equal_approx(top) and o.bottom.is_equal_approx(bottom):
+				link.set_meta("ladder_top", o)
+				break
 		dynamic_root.add_child(link)
 		ladder_links.append(link)
 	if not ladder_links.is_empty():

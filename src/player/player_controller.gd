@@ -301,6 +301,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		squad.set_active(3)
 	elif event.is_action_pressed("soldier_next"):
 		squad.cycle_active()
+	elif _select_key(event) >= 0:
+		_on_select_soldier(_select_key(event))
+	elif _equip_key(event) >= 0:
+		_on_equip(_equip_key(event))
 	elif event.is_action_pressed("order_move"):
 		var p := rig.crosshair_point(150.0)
 		squad.order_all(SquadBrain.Order.MOVE, p)
@@ -330,6 +334,62 @@ func _unhandled_input(event: InputEvent) -> void:
 			if b and m != active:
 				b.stance_override = st if b.stance_override != st else -1
 		Events.say("Befehl: Haltung %s" % ["Stehen", "Hocken", "Liegen"][st], 2.0)
+
+
+## „SOLDAT n WÄHLEN“ (F1–F4, Entscheid Auftraggeber 24.10.2026), zusammengeführt mit dem Soldatenwechsel:
+## einmal = Kamerad markieren/entmarkieren (grau in der Truppleiste), zweimal innerhalb DOUBLE_TAP = übernehmen.
+## Eigener (gesteuerter) Soldat: Taste wirkt nicht. Mehrspieler (nur ein Soldat): keine Wirkung.
+const DOUBLE_TAP := 0.4
+var _last_select := -1
+var _last_select_t := -10.0
+
+
+func _on_select_soldier(i: int) -> void:
+	if Net.is_online or i >= squad.members.size():
+		return
+	var now := Time.get_ticks_msec() / 1000.0
+	var s := squad.members[i]
+	if i == _last_select and now - _last_select_t <= DOUBLE_TAP:
+		_last_select = -1
+		if squad.set_active(i):              # entfernt auch die Markierung des Übernommenen
+			Events.say("Übernommen: %s" % s.soldier_name, 1.5)
+		return
+	_last_select = i
+	_last_select_t = now
+	if squad.toggle_select(i):
+		Events.say("%s %s" % [s.soldier_name, "markiert" if squad.is_selected(s) else "nicht mehr markiert"], 1.5)
+
+
+## Ausrüstungstasten 4–8 (equip_4…8): Teamplatz-unabhängige Auswahl wie in der Mausrad-Liste.
+var EQUIP_KEYS := {4: "slot:%d" % WeaponData.Slot.MELEE, 5: "slot:%d" % WeaponData.Slot.GRENADE, 6: "explosive",
+	7: "mine", 8: "medkit"}
+
+
+func _equip_key(event: InputEvent) -> int:
+	for n in EQUIP_KEYS:
+		if event.is_action_pressed("equip_%d" % n):
+			return n
+	return -1
+
+
+func _on_equip(n: int) -> void:
+	if active.vehicle != null:
+		return
+	var key: String = EQUIP_KEYS[n]
+	for it in active.selection_entries():
+		if String(it["key"]) == key:
+			active.apply_selection(key)
+			Events.say("%s: %s" % [active.soldier_name, String(it["label"])], 1.5)
+			return
+	Events.say("Nicht vorhanden.", 1.2)
+
+
+## Teamplatz (0–3) einer Markiertaste „select_soldier_1…4“, sonst −1.
+func _select_key(event: InputEvent) -> int:
+	for i in 4:
+		if event.is_action_pressed("select_soldier_%d" % (i + 1)):
+			return i
+	return -1
 
 
 func _physics_process(_delta: float) -> void:

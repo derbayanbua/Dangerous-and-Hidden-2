@@ -37,6 +37,31 @@ func _run() -> void:
 	light["back"] = 101         # backpack EN: +30
 	check(SAS.can_add(light, 30.0, 9, 10), "Mit Rucksack mehr Platz – ohne Umschichten zwischen Tasche und Rucksack")
 	check(not SAS.can_add(light, 5.0, 29), "Traglast: Bren (10,1 kg) bei Kraft 5 kg abgelehnt")
+	# B-014: Rucksackraum nur mit angelegtem Rucksack (Original 0x6A3080, Rucksack-Höchstgewicht Verhaltensblock Typ 7)
+	var bp := SAS.new_inventory()
+	for i in 12:
+		SAS.add_item(bp, 9)
+	bp["back"] = 231              # Tauchgerät im Rücken-Platz: kein Rucksack → kein Rucksackraum
+	check(SAS.inv_capacity(bp) == 12.0 and not SAS.can_add(bp, 99.0, 9) and (SAS.split_items(bp)[1] as Array).is_empty(),
+		"B-014: Rücken-Platz ohne Rucksack (Tauchgerät) gibt keinen Raum, Anzeige ohne Rucksackspalte")
+	bp["back"] = 101
+	SAS.add_item(bp, 9, 5)
+	check(SAS.fits(bp) and (SAS.split_items(bp)[1] as Array).size() > 0, "B-014: mit Rucksack EN passt der Überhang in den Rucksack")
+	var nobp := bp.duplicate(true)
+	nobp["back"] = -1
+	check(not SAS.fits(nobp) and SAS.overloaded(nobp, 99.0), "B-014: Rucksack weg → Inhalt passt nicht mehr (überladen, Start gesperrt)")
+	check(is_equal_approx(SAS.backpack_max_weight(101), 30.0) and is_equal_approx(SAS.backpack_max_weight(228), 40.0),
+		"B-014: Rucksack-Höchstgewicht aus items.sav (EN 30 kg, EN3 40 kg)")
+	var heavy := SAS.new_inventory()
+	heavy["back"] = 100           # pom-backpack: Raum 50, 100 kg
+	var n_bren := 0
+	while SAS.pack_weight(heavy) <= 30.5 and n_bren < 12:
+		SAS.add_item(heavy, 29)
+		n_bren += 1
+	var heavy_ok := SAS.fits(heavy)
+	heavy["back"] = 101           # backpack EN: nur 30 kg
+	check(heavy_ok and SAS.pack_weight(heavy) > 30.0 and not SAS.fits(heavy),
+		"B-014: Rucksackinhalt über dem Höchstgewicht des Rucksacks (EN 30 kg) passt nicht", "%d Bren, %.1f kg" % [n_bren, SAS.pack_weight(heavy)])
 
 	# --- Waffen aus der Originaltabelle ---
 	var delisle := WeaponDB.from_orig(7)

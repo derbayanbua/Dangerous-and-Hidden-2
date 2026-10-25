@@ -100,6 +100,11 @@ static func _helmet_part(hb: Hitbox, pos: Vector3) -> bool:
 	return (pos - c).dot(up) >= 0.0
 
 
+static func _has_helmet_box(s: Node) -> bool:
+	var m = s.get("model") if s else null
+	return m != null and m.has_method("has_helmet_box") and bool(m.has_helmet_box())
+
+
 ## Zonenreihenfolge des Originals (0x455670 prüft die Volumen in fester Reihenfolge, nicht nach Abstand):
 ## Körper vor Kopf/Helm vor Armen vor Beinen. Liegt z. B. ein Arm vor der Brust, zählt der Rumpftreffer.
 const ZONE_ORDER := [&"torso", &"head", &"arm", &"leg"]
@@ -172,12 +177,23 @@ func _step(p: Projectile, delta: float) -> bool:
 			return true
 		if is_instance_valid(hb.soldier) and hb.soldier.has_method("apply_hit"):
 			hits += 1
-			hb = _priority_zone(space, hb, hit.position, p.vel.normalized())
+			# B-014: das Helmmodell wird im Original zuerst geprüft (0x455670 → Zone 11): trifft der Strahl zuerst die
+			# Helmfläche, bleibt es ein Helmtreffer; sonst feste Zonenreihenfolge (die Helmfläche zählt dort nicht)
+			if hb.zone != Helmet.ZONE:
+				hb = _priority_zone(space, hb, hit.position, p.vel.normalized())
 			# Trefferzone wie im Original (Kopf ×5, Helm, Arme ×0,2, Beine ×0,33); im Einzelspieler zusätzlich der
 			# Schwierigkeitsgrad (hd2.exe 0x5A1C90) – gemeinsame Quelle WeaponDB.bullet_hit_damage
-			var helmet := hb.zone == &"head" and WeaponDB.wears_helmet(hb.soldier) and _helmet_part(hb, hit.position)
-			hb.soldier.apply_hit(WeaponDB.bullet_hit_damage(base, hb.zone, helmet, hb.soldier, p.shooter, not Net.is_online,
-				Game.difficulty()), hb.zone, p.shooter, p.vel.normalized())
+			var helmet := hb.zone == Helmet.ZONE and WeaponDB.wears_helmet(hb.soldier)
+			if hb.zone == &"head" and WeaponDB.wears_helmet(hb.soldier) and not _has_helmet_box(hb.soldier):
+				helmet = _helmet_part(hb, hit.position)      # ohne Helmmodell: Näherung obere Kopfhälfte [P]
+			var zone: StringName = &"head" if hb.zone == Helmet.ZONE else hb.zone
+			hb.soldier.apply_hit(WeaponDB.bullet_hit_damage(base, zone, helmet, hb.soldier, p.shooter, not Net.is_online,
+				Game.difficulty()), zone, p.shooter, p.vel.normalized())
+			if hb.zone == Helmet.ZONE:
+				# Helm getroffen: Funken statt Blut, Helm fliegt vom Kopf (Vorgabe Auftraggeber, Helmet.knock_off)
+				Effects.impact(hit.position, hit.normal)
+				Helmet.knock_off(hb.soldier as Soldier, p.vel)
+				return false
 		Effects.blood(hit.position, hit.normal, p.vel.normalized(), hb.zone, hb.soldier)
 	else:
 		# Zerstörbare Objekte (z. B. Suchscheinwerfer) bieten on_bullet_hit an

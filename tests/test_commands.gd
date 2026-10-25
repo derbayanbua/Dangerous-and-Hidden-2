@@ -339,7 +339,23 @@ func _run() -> void:
 			await frames(1)
 		check(door.is_open, "Aktion › Öffnen: Kamerad geht hin und öffnet die Tür")
 		await seconds(1.0)
+		# B-012: Stille Aktion/Stiller Angriff nur mit Schalldämpferwaffe (Vorgabe Auftraggeber)
+		var keep_w: Array = [mate.weapons[0], mate.weapons[1]]
+		mate.weapons[0] = Weapon.new(WeaponDB.get_weapon(&"kar98k"))
+		mate.weapons[1] = null
+		await act("command_3")
+		check(cm.entries[4][1] == CommandMenu.A_GREY and cm.entries[5][1] == CommandMenu.A_GREY and cm.entries[3][1] == 54,
+			"Ohne Schalldämpfer: Stiller Angriff/Stille Aktion ausgegraut, Schl. Beweg. wählbar")
+		await key(KEY_6)
+		check(cm.is_open and cm.menu_id == CommandMenu.MAIN, "Taste 6 auf ausgegrauter Stille Aktion wirkungslos")
+		await key(KEY_0)
+		mate.weapons[0] = Weapon.new(WeaponDB.get_weapon(&"mp40_sd"))
+		await act("command_3")
+		check(cm.entries[4][1] == 55 and cm.entries[5][1] == 56, "Mit Schalldämpferwaffe (MP 40 SD): leise Menüs wählbar")
+		await key(KEY_0)
 		await cmd("command_3", [6])
+		mate.weapons[0] = keep_w[0]
+		mate.weapons[1] = keep_w[1]
 		check(cm.menu_id == 56 and cm.entries[1][1] == CommandMenu.ACT_CLOSE, "Stille Aktion (Tür offen): Schließen wählbar")
 		await key(KEY_2)
 		for i in 300:
@@ -366,6 +382,63 @@ func _run() -> void:
 	await seconds(7.0)
 	check(hurt.health > hp0, "Aktion › Erste Hilfe: Kamerad versorgt", "%.0f → %.0f" % [hp0, hurt.health])
 	cm.context_override = null
+
+	# --- B-012: Einzelauswahl „SOLDAT n WÄHLEN“ mit echten Tasten (vorläufig 5–8, Original 1–4) ---
+	c.set_active(lead)
+	sq.clear_selection()
+	var s2 := sq.members[1]
+	var s3 := sq.members[2]
+	for mm in [s2, s3, sq.members[3]]:
+		sq.brain_of(mm).clear_tasks()
+		sq.brain_of(mm).set_order(SquadBrain.Order.HOLD)
+	var slot_before := lead.current_slot
+	var fk := InputMap.action_get_events("select_soldier_2")
+	check(fk.size() > 0 and (fk[0] as InputEventKey).physical_keycode == KEY_F2, "Soldat 2 wählen = F2 (Entscheid Auftraggeber)")
+	await key(KEY_F2)
+	check(sq.is_selected(s2) and not sq.is_selected(s3) and lead.current_slot == slot_before and sq.leader() == lead,
+		"F2 einmal: Soldat 2 markiert (kein Wechsel)")
+	await seconds(0.5)
+	await key(KEY_F1)
+	check(not sq.is_selected(lead) and sq.leader() == lead, "Anführer selbst ist nicht markierbar")
+	await seconds(0.5)
+	var hud: OrigHud = null
+	for n in get_tree().root.find_children("*", "", true, false):
+		if n is OrigHud:
+			hud = n
+			break
+	check(hud != null or not FileAccess.file_exists(OrigLevel.cache_root() + "/ui/hud/hud_spec.json"), "Original-HUD vorhanden")
+	if hud and hud.elements.has("select01"):
+		await idle(2)
+		var sel_el: Control = hud.elements["select01"]["node"]
+		var sel_el2: Control = hud.elements["select02"]["node"] if hud.elements.has("select02") else null
+		check(sel_el.visible and (sel_el2 == null or not sel_el2.visible), "Truppleiste: markierter Soldat grau hinterlegt (select01)")
+	await cmd("command_all", [1, 1])
+	check(sq.brain_of(s2).order == SquadBrain.Order.FOLLOW and sq.brain_of(s3).order == SquadBrain.Order.HOLD,
+		"Befehl an alle wirkt nur auf die Markierten")
+	await key(KEY_F3)
+	await seconds(0.5)
+	await act("order_hold")
+	check(sq.brain_of(s2).order == SquadBrain.Order.HOLD and sq.brain_of(s3).order == SquadBrain.Order.HOLD
+		and sq.brain_of(sq.members[3]).order == SquadBrain.Order.HOLD, "Direkttaste (J) an zwei Markierte")
+	await act("order_follow")
+	check(sq.brain_of(sq.members[3]).order == SquadBrain.Order.HOLD and sq.brain_of(s3).order == SquadBrain.Order.FOLLOW,
+		"Unmarkierter Soldat 4 bleibt bei Befehl an die Auswahl")
+	await key(KEY_F2)
+	await seconds(0.5)
+	await key(KEY_F3)
+	await seconds(0.5)
+	check(sq.selected.is_empty(), "Erneutes Drücken hebt die Markierung auf")
+	await act("order_follow")
+	check(sq.brain_of(sq.members[3]).order == SquadBrain.Order.FOLLOW, "Ohne Markierung: Befehl an alle")
+	var w1 := InputMap.action_get_events("weapon_1")
+	check(w1.size() > 0 and (w1[0] as InputEventKey).physical_keycode == KEY_1, "Belegung 1 = Waffe 1 unverändert")
+	# F2 zweimal schnell = Soldat 2 übernehmen, danach zurück auf Soldat 1
+	await key(KEY_F2)
+	await key(KEY_F2)
+	check(sq.leader() == s2 and c.active == s2 and not sq.is_selected(s2), "F2 zweimal: Soldat 2 übernommen (Markierung weg)")
+	await key(KEY_F1)
+	await key(KEY_F1)
+	check(sq.leader() == lead, "F1 zweimal: zurück auf Soldat 1")
 
 	# --- Mausrad + Linksklick ---
 	var shots0 := Ballistics.shots_fired

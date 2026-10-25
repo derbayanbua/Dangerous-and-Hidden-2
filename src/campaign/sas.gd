@@ -49,8 +49,7 @@ static func _load() -> void:
 	if typeof(w) == TYPE_DICTIONARY:
 		for wp in w.get("weapons", []):
 			_weapons[int(wp["id"])] = wp
-	var t = LsRuntime._read_json(OrigLevel.cache_root() + "/texts_german.json")
-	_texts = t if typeof(t) == TYPE_DICTIONARY else {}
+	_texts = Settings.orig_texts()   # B-007: gewählte Sprachfassung (gemeinsame Instanz)
 
 
 static func text(id: int, fallback := "") -> String:
@@ -358,19 +357,74 @@ static func inv_space(inv: Dictionary) -> float:
 	return s
 
 
+## Raum Taschen (12) + Rucksack nur, wenn tatsächlich ein Rucksack im Rücken-Platz liegt (B-014, Original 0x6A3080)
 static func inv_capacity(inv: Dictionary) -> float:
 	return POCKET_SPACE + backpack_space(int(inv.get("back", -1)))
 
 
 static func overloaded(inv: Dictionary, strength: float) -> bool:
-	return inv_weight(inv) > strength + 0.001 or inv_space(inv) > inv_capacity(inv) + 0.001
+	return inv_weight(inv) > strength + 0.001 or not fits(inv)
 
 
-## Passt der Gegenstand (Anzahl) ins gemeinsame Inventar? Gewicht ≤ Kraft, Raum ≤ Taschen + Rucksack
+## --- Taschen und Rucksack (B-014, re_notes_roster_inventory §4, hd2.exe 0x6A3080) [B] -----------------------------
+## Original: zwei Behälter – Taschen max. 12 Raumeinheiten, Rucksackinhalt ≤ Raum und ≤ Höchstgewicht des Rucksacks im
+## Rücken-Platz (Verhaltensblock Typ 7, inventory_rules.json back_slot_items); ohne Rucksack gibt es keinen Rucksackraum,
+## Rucksacktausch nur, wenn der neue den Inhalt fasst. Nachbau: eine Liste, die der Reihe nach (ItemOrder wie die
+## Anzeige) erst die Taschen, dann den Rucksack füllt (split_items) – kein Umschichten von Hand [P Vereinfachung].
+const ITEM_ORDER_PATH := "res://src/ui/item_order.gd"   ## zur Laufzeit geladen (kein Preload-Zyklus mit SAS)
+
+
+static func backpack_max_weight(id: int) -> float:
+	_load()
+	for b in _rules.get("back_slot_items", []):
+		if int(b["item"]) == id:
+			return float(b.get("max_weight_kg", 0.0))
+	return 0.0
+
+
+## [Taschen, Rucksack] als Stapellisten; ohne Rucksack bleibt alles in den Taschen (dann ggf. > 12 = überladen)
+static func split_items(inv: Dictionary) -> Array:
+	var pockets: Array = []
+	var pack: Array = []
+	var used := 0.0
+	var has_pack := is_backpack(int(inv.get("back", -1)))
+	var io: GDScript = load(ITEM_ORDER_PATH)
+	for e in io.order_entries(inv.get("items", [])):
+		var sp := space(int(e[0])) * int(e[1])
+		if not has_pack or used + sp <= POCKET_SPACE + 0.001:
+			pockets.append(e)
+			used += sp
+		else:
+			pack.append(e)
+	return [pockets, pack]
+
+
+## Gewicht des Rucksackinhalts (kg)
+static func pack_weight(inv: Dictionary) -> float:
+	var w := 0.0
+	for e in split_items(inv)[1]:
+		w += weight(int(e[0])) * int(e[1])
+	return w
+
+
+## Passt der Inhalt in Taschen + angelegten Rucksack (Raum und Rucksack-Höchstgewicht)?
+static func fits(inv: Dictionary) -> bool:
+	if inv_space(inv) > inv_capacity(inv) + 0.001:
+		return false
+	var back := int(inv.get("back", -1))
+	var mx := backpack_max_weight(back)
+	return mx <= 0.0 or pack_weight(inv) <= mx + 0.001
+
+
+## Passt der Gegenstand (Anzahl) ins Inventar? Gewicht ≤ Kraft, Taschen + Rucksack (Raum, Rucksackgewicht)
 static func can_add(inv: Dictionary, strength: float, id: int, count: int = 1) -> bool:
 	if inv_weight(inv) + weight(id) * count > strength + 0.001:
 		return false
-	return inv_space(inv) + space(id) * count <= inv_capacity(inv) + 0.001
+	if inv_space(inv) + space(id) * count > inv_capacity(inv) + 0.001:
+		return false
+	var trial := {"back": inv.get("back", -1), "items": (inv.get("items", []) as Array).duplicate(true)}
+	add_item(trial, id, count)
+	return fits(trial)
 
 
 static func count_of(inv: Dictionary, id: int) -> int:

@@ -2,8 +2,8 @@ class_name OrigHud
 extends Control
 ## In-Game-HUD nach dem Original (MODELS\gameinterface.4ds; Rekonstruktion orig_cache/ui/hud/hud_spec.json,
 ## docs/re_notes_hud.md). Elemente sind im Original für 4:3 angelegt (x 0..1, y 0..1); hier in einem
-## 4:3-Rahmen auf voller Fensterhöhe platziert. Bei Breitbild bleibt die Truppleiste mittig, Kompass
-## hängt am linken, Waffenwahl am rechten Rand. Originalgrafiken nur aus dem lokalen orig_cache
+## 4:3-Rahmen auf voller Fensterhöhe platziert. Bei Breitbild Kompass
+## hängt am linken, Waffenwahl am rechten Rand (B-014: Truppleiste links, Waffenfeld rechts, s. anchor_of). Originalgrafiken nur aus dem lokalen orig_cache
 ## (bevorzugt KI-hochskalierte Fassungen textures_4k/_hd).
 ## Live-Daten: aktiver Soldat, KI-Steuerung, Gesundheit/Ausdauer/Tarnung (Leisten), Entdeckung,
 ## Haltung, Gangart, Kompass, Waffe in der Hand/auf der Schulter (+ Munition), Waffenwahl beim Wechsel.
@@ -193,12 +193,27 @@ func _orig_size(file: String, fallback: Texture2D) -> Vector2:
 	return s
 
 
-## Bildschirmrechteck eines Elements (4:3-Rahmen auf voller Höhe, Gruppenanker).
+## B-014 (Vorgabe Auftraggeber): bei Breitbild hängen die Spielanzeigen an den echten Bildschirmrändern statt im
+## 4:3-Bereich der Mitte. Truppleiste: Haltungsfeld tabl01 + Soldatenfelder ab dem linken Rand (Abstände wie im
+## Original), Waffenfeld tabl02 mit Hand/Schulter/Munition am rechten Rand. Bei 4:3 (und schmaler) unverändert,
+## da der 4:3-Rahmen dann die ganze Breite ist.
+const RIGHT_ELEMENTS := ["tabl02", "i_hands", "i_shoulder", "signals"]
+
+
+## Anker eines Elements: Gruppenanker, in der Truppleiste je Element (links bzw. Waffenfeld rechts)
+static func anchor_of(element: String, group: String) -> String:
+	if group == "squad_bar":
+		return "right" if RIGHT_ELEMENTS.has(element) else "left"
+	return String(GROUP_ANCHOR.get(group, "center"))
+
+
+## Bildschirmrechteck eines Elements (4:3-Rahmen auf voller Höhe, Anker „left“/„right“/„center“ bzw. Gruppenname).
 func screen_rect(r: Array, group: String) -> Rect2:
 	var h := size.y
 	var fw := h * 4.0 / 3.0
 	var x0 := (size.x - fw) * 0.5
-	match GROUP_ANCHOR.get(group, "center"):
+	var anchor: String = group if group in ["left", "right", "center"] else String(GROUP_ANCHOR.get(group, "center"))
+	match anchor:
 		"left":
 			x0 = 0.0
 		"right":
@@ -209,7 +224,7 @@ func screen_rect(r: Array, group: String) -> Rect2:
 func _layout() -> void:
 	for nm in elements:
 		var e: Dictionary = elements[nm]
-		var rr := screen_rect(e["rect"], e["group"])
+		var rr := screen_rect(e["rect"], anchor_of(String(nm), String(e["group"])))
 		var n: Control = e["node"]
 		n.position = rr.position
 		n.size = rr.size
@@ -263,7 +278,8 @@ func _process(delta: float) -> void:
 		_show_el("soldier" + sfx, used)
 		_show_el("photo" + sfx, used)
 		_show_el("player" + sfx if i > 0 else "player00", used and m == active)
-		_show_el("select" + sfx if i > 0 else "select", false)
+		# grau hinterlegtes Feld = markierter Kamerad (Einzelauswahl 1–4, B-012; Frame select* aus gameinterface.4ds)
+		_show_el("select" + sfx if i > 0 else "select", used and m.alive and m != active and sq.is_selected(m))
 		_show_el("AImode" + sfx, used and m.alive and m != active)
 		for nm in ["mind", "command", "ear", "silence", "medic", "healthcr"]:
 			_show_el(nm + sfx, false)
@@ -484,7 +500,12 @@ func _update_timers() -> void:
 			tl.position = r.position + Vector2(4, 0)
 			tl.size = r.size - Vector2(8, 0)
 			var t := float(timers_shown[i][1])
-			tl.text = "%s  %d:%02d" % [String(timers_shown[i][0]).substr(0, 18), int(t) / 60, int(ceil(t)) % 60]
+			# fix_a2_marker: Restzeit zuerst – das Feld ist nur ~0,116 des 4:3-Rahmens breit, „Bezeichnung  m:ss“ schnitt
+			# die Zeit ab (ARCTIC2 „Platz für Sprengstoff“); Bezeichnung danach, abgeschnitten (clip_text)
+			var secs := int(ceil(t))
+			tl.text = "%d:%02d  %s" % [secs / 60, secs % 60, String(timers_shown[i][0])]
+			tl.clip_text = true
+			tl.add_theme_font_size_override("font_size", maxi(10, int(r.size.y * 0.55)))
 
 
 ## Tacho im Fahrzeug (Original speed/speedNN): Ziffernblatt mit Nadel, 0–120 km/h über 240° [P]

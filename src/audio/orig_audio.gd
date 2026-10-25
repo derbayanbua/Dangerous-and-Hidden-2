@@ -504,6 +504,16 @@ static func german_file(id: int) -> String:
 	return "%08d.wav" % (90000000 + id % 10000)
 
 
+## B-007: Aufnahme in der gewählten Sprache. Nicht-deutsche Fassungen spielen die Satz-ID selbst ([A]: Gegenstück
+## zu 0x5B0440), falls die Installation sie enthält; sonst (z. B. deutsche Installation: nur 9000xxxx) die deutsche.
+func speech_file(id: int) -> String:
+	if Settings.language != "german":
+		var own := "%08d.wav" % id
+		if FileAccess.file_exists(OrigLevel.cache_root() + "/sounds/" + own):
+			return own
+	return german_file(id)
+
+
 ## Sprach-Ereignis einer Figur (zufällige Aufnahme des Satzes). cooldown: Mindestabstand je Sprecher in s.
 ## Rückgabe: Dauer in s (0 = nichts gespielt).
 func speak_event(s: Node3D, event: int, cooldown := 0.0, set_idx := -1) -> float:
@@ -518,7 +528,7 @@ func speak_event(s: Node3D, event: int, cooldown := 0.0, set_idx := -1) -> float
 	if ids.is_empty():
 		return 0.0
 	var id := int(ids[randi() % ids.size()])
-	var file := german_file(id)
+	var file := speech_file(id)
 	var p := play_file(file, s.global_position, SPEECH_MIN, SPEECH_MAX, 1.0, s, false, &"Voice", false)
 	if p == null:
 		return 0.0
