@@ -61,6 +61,9 @@ var ACTIONS := {
 	"order_roe": ["Befehl: Feuer frei / Feuer halten", KEY_K],
 	"order_formation": ["Befehl: Formation wechseln", KEY_L],
 	"order_stance": ["Befehl: Haltung wie Anführer", KEY_N],
+	# T teilt sich order_grenade (nur Einzelspieler, eigene Direkttaste, kein Original) mit chat_all (Original
+	# ALLE INFORMIEREN = T, nur Mehrspieler). Kontextexklusiv (F-016): MpHud._input verarbeitet chat_all nur
+	# online und markiert das Ereignis als verbraucht, PlayerController._unhandled_input sieht es dann nicht.
 	"order_grenade": ["Befehl: Granate dorthin werfen", KEY_T],
 	# Original-Befehlsmenü (Kategorie BEFEHLE, Texte 2866–2872, Standardbelegung Ziffernblock 0–6)
 	"command_all": ["Befehl an alle", KEY_KP_0],
@@ -83,7 +86,52 @@ var ACTIONS := {
 	"chat_all": ["Alle informieren (Chat)", KEY_T],
 	"chat_team": ["Team informieren (Chat)", KEY_Y],
 	"voice_talk": ["Voice-Chat sprechen (halten)", KEY_CAPSLOCK],
+	# --- B-015 (30.10.2026): übrige Original-Aktionen (Options.bin „profile“, Texte 2801–2872/7420–7449).
+	# Original-Taste in Klammern; belegt diese schon eine Verbesserung (Vorgabe Auftraggeber), bleibt die Aktion
+	# unbelegt (null) bzw. bekommt eine freie Taste. Liste und Belege: docs/status/backlog_b015.md
+	"speed_up": ["Gangart schneller (Schleichen → Gehen → Laufschritt)", null],    # GESCHW. ERHÖHEN (Rad hoch)
+	"speed_down": ["Gangart langsamer (Laufschritt → Gehen → Schleichen)", null],  # GESCHW. VERRING. (Rad runter)
+	"jump": ["Springen (ohne Klettern)", null],                                      # SPRINGEN (MMT)
+	"climb": ["Klettern (ohne Springen)", null],                                     # KLETTERN (X)
+	"action_menu": ["Aktionsmenü (Befehl an alle: Aktion)", KEY_APOSTROPHE],         # AKTIONSMENÜ (')
+	"game_info": ["Spiel-Info (Missionsziele)", KEY_COMMA],                          # SPIEL-INFO (,)
+	"interface_mode": ["Interface-Modus (Anzeige ein/aus)", null],                  # INTERFACE-MODUS (V)
+	"map": ["Karte", null],                                                          # KARTE (M)
+	"pause_game": ["Pause", KEY_P],                                                  # PAUSE (P)
+	"show_players": ["Spieler-Bildschirm anzeigen (halten)", null],                  # SPIELER-BILDS. ANZ. (P)
+	"handbrake": ["Handbremse", KEY_ALT],                                            # HANDBREMSE (AltGr/rechte Alt)
+	# Taktik-Modus (nur bei offener taktischer Karte, Kontext 3). W/A/S/D verschieben dort die Karte → unbelegt.
+	"tac_regroup": ["Taktik: Neu sammeln", KEY_G],
+	"tac_signal_1": ["Taktik: Signal 1", KEY_V],
+	"tac_signal_2": ["Taktik: Signal 2", KEY_B],
+	"tac_stand": ["Taktik: Stehen", KEY_Q],
+	"tac_crouch": ["Taktik: Ducken", null],                                          # Original W
+	"tac_prone": ["Taktik: Liegen", KEY_E],
+	"tac_sprint": ["Taktik: Sprinten", null],                                        # Original A
+	"tac_run": ["Taktik: Laufen", null],                                             # Original S
+	"tac_walk": ["Taktik: Gehen", null],                                             # Original D
+	"tac_slow": ["Taktik: Langsam", KEY_F],
+	"tac_passive": ["Taktik: Passiv", KEY_C],
+	"tac_defensive": ["Taktik: Defensiv", KEY_X],
+	"tac_aggressive": ["Taktik: Aggressiv", KEY_Z],
+	"tac_delete": ["Taktik: Löschen", KEY_BACKSPACE],
+	"tac_delete_all": ["Taktik: Alle löschen", KEY_DELETE],
+	"tac_options": ["Taktik: Optionen", KEY_KP_DIVIDE],
+	"tac_camera_move": ["Taktik: Kamera-Bewegung (Zoomstufe)", KEY_KP_MULTIPLY],
+	"tac_cam_forward": ["Taktik: Karte nach vorn", KEY_UP],
+	"tac_cam_backward": ["Taktik: Karte zurück", KEY_DOWN],
+	"tac_cam_left": ["Taktik: Karte nach links", KEY_LEFT],
+	"tac_cam_right": ["Taktik: Karte nach rechts", KEY_RIGHT],
+	"tac_cam_up": ["Taktik: Kamera nach oben (weiter weg)", KEY_PAGEUP],
+	"tac_cam_down": ["Taktik: Kamera nach unten (näher)", KEY_PAGEDOWN],
+	"tac_zoom_in": ["Taktik: Heranzoomen", KEY_KP_ADD],
+	"tac_zoom_out": ["Taktik: Wegzoomen", KEY_KP_SUBTRACT],
 }
+
+## Aktionen, die nur bei offener taktischer Karte gelten (eigener Kontext wie Original-Kontext 3): Tasten dürfen sich
+## mit Spielaktionen decken, weil die Spielsteuerung bei offener Karte gesperrt ist (PlayerController.ui_blocking).
+func is_tactical(action: String) -> bool:
+	return action.begins_with("tac_")
 
 
 func _ready() -> void:
@@ -186,22 +234,41 @@ func save_bindings() -> void:
 	if "--autoplay" in " ".join(OS.get_cmdline_user_args()):
 		return   # Tests verändern die Tastenbelegung nicht
 	var cfg := ConfigFile.new()
-	cfg.load(bindings_path())
+	cfg.load(bindings_path())   # übrige Sektionen (Optionen des Profils) erhalten
+	write_keys(cfg)
+	cfg.save(bindings_path())
+
+
+## F-015: Sektion "keys" vollständig neu aufbauen (keine Altlasten entfernter/zurückgesetzter Belegungen).
+## Unbelegte Aktionen werden als UNBOUND geschrieben, damit eine alte Taste nach dem Neustart nicht
+## wieder auftaucht.
+const UNBOUND := "none"
+
+func write_keys(cfg: ConfigFile) -> void:
+	if cfg.has_section("keys"):
+		cfg.erase_section("keys")
 	for action: String in ACTIONS:
 		var evs := InputMap.action_get_events(action)
-		if evs.size() > 0:
-			cfg.set_value("keys", action, spec_from_event(evs[0]))
+		var spec = spec_from_event(evs[0]) if evs.size() > 0 else null
+		cfg.set_value("keys", action, spec if spec != null else UNBOUND)
 	cfg.set_value("meta", "keys_version", KEYS_VERSION)
-	cfg.save(bindings_path())
 
 
 func load_bindings() -> void:
 	# erst Standard, dann die gespeicherte Belegung (Profilwechsel übernimmt nichts vom vorherigen Profil)
+	var cfg := ConfigFile.new()
+	if cfg.load(bindings_path()) != OK:
+		read_keys(null)
+		return
+	read_keys(cfg)
+
+
+## Standardbelegung herstellen und die Sektion "keys" aus cfg (falls vorhanden) darüberlegen.
+func read_keys(cfg: ConfigFile) -> void:
 	for action: String in ACTIONS:
 		InputMap.action_erase_events(action)
 		_add_event(action, ACTIONS[action][1])
-	var cfg := ConfigFile.new()
-	if cfg.load(bindings_path()) != OK or not cfg.has_section("keys"):
+	if cfg == null or not cfg.has_section("keys"):
 		return
 	# Belegungsstand 2 (14.10.2026): Erste Hilfe 5 -> H, Folgen H -> U; gespeicherte alte Standards umstellen
 	var migrate := int(cfg.get_value("meta", "keys_version", 1)) < KEYS_VERSION
@@ -211,6 +278,9 @@ func load_bindings() -> void:
 		var spec = cfg.get_value("keys", action)
 		if migrate and OLD_DEFAULTS.has(action) and spec is int and int(spec) == int(OLD_DEFAULTS[action]):
 			continue
+		if spec is String and spec == UNBOUND:
+			InputMap.action_erase_events(action)   # ausdrücklich unbelegt
+			continue
 		var ev := _event_from_spec(spec)
 		if ev:
 			InputMap.action_erase_events(action)
@@ -218,6 +288,8 @@ func load_bindings() -> void:
 
 
 ## Stand 3 (24.10.2026, B-012): Fernglas 4 -> B, Feuermodus B -> mittlere Maustaste; gespeicherte alte Standards umstellen
-const KEYS_VERSION := 3
+## Stand 4 (30.10.2026, B-015): übrige Original-Aktionen ergänzt; keine bisherige Vorgabe geändert. Fehlen die neuen
+## Schlüssel in einer älteren Datei, gilt ihr Standard (read_keys legt erst die Vorgaben an); write_keys schreibt sie mit.
+const KEYS_VERSION := 4
 const OLD_DEFAULTS := {"medkit": KEY_5, "order_follow": KEY_H, "binoculars": KEY_4, "fire_mode": KEY_B,
 	"soldier_1": KEY_F1, "soldier_2": KEY_F2, "soldier_3": KEY_F3, "soldier_4": KEY_F4}

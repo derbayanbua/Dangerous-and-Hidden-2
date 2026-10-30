@@ -226,6 +226,8 @@ func _bake_navigation() -> void:
 	nm.agent_height = 1.6    # Treppen unter Deckenkanten (AFRICA1-Dach) bleiben im Netz
 	nm.agent_max_climb = 0.4
 	nm.agent_max_slope = 50.0     # = Soldier.floor_max_angle (steile Original-Ersatzrampen, z. B. ARCTIC1 x_schody05 ≈ 37–45°)
+	if Game.cli.has("nav_slope"):   # B-010 Messung (NORWAY-Treppen ≈ 51°)
+		nm.agent_max_slope = float(Game.cli["nav_slope"])
 	nm.cell_size = 0.2
 	nm.cell_height = 0.2
 	nm.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS

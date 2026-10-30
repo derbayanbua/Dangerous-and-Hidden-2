@@ -292,6 +292,10 @@ func _build_objectives() -> void:
 	_root.add_child(_obj_panel)
 	_obj_label = _label("", 15, C_TEXT)
 	_obj_panel.add_child(_obj_label)
+	var of := OrigFonts.font("SMALL", 1280.0) if OrigHud.available() else null
+	if of:
+		_obj_label.add_theme_font_override("font", of)      # B-003: Originalschrift [E: Stil des Zielbildschirms nicht belegt]
+		_obj_label.add_theme_font_size_override("font_size", 16)
 
 
 func _build_crosshair() -> void:
@@ -370,7 +374,10 @@ func _process(_delta: float) -> void:
 	_alarm_label.visible = mission.alarm_raised
 	var it := mission.controller.interact_target
 	_prompt.text = "[%s] %s" % [InputSetup.binding_text("interact"), it.prompt] if it else ""
-	if s.heal_time_left > 0.0:
+	var orig_bar := orig_hud != null and orig_hud.has_progress_bar()
+	if (s.heal_time_left > 0.0 or (s.work_left > 0.0 and s.work_total > 0.0)) and orig_bar:
+		_prompt.text = ""   # Original-Fortschrittsbalken (B-003) zeigt Arbeit/Verband – keine doppelte Zeile
+	elif s.heal_time_left > 0.0:
 		_prompt.text = "Verband wird angelegt … %.1f s" % s.heal_time_left
 	elif s.work_left > 0.0 and s.work_total > 0.0:
 		# Fortschritt einer Arbeit (Entschärfen): Balken aus 10 Feldern + Restzeit
@@ -448,7 +455,7 @@ func _refresh_objectives() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("objectives"):
+	if event.is_action_pressed("objectives") or event.is_action_pressed("game_info"):   # B-015 SPIEL-INFO
 		_obj_panel.visible = not _obj_panel.visible
 	if event.is_action_pressed("order_formation"):
 		_refresh_objectives.call_deferred()
@@ -457,6 +464,11 @@ func _unhandled_input(event: InputEvent) -> void:
 func _on_message(text: String, seconds: float) -> void:
 	var l := _label(text, 17, C_TEXT)
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	# B-003: Original-Bitmapschrift SMALL (Farbe/Schatten bleiben hell – Stil der Meldungen nicht belegt [E])
+	var of := OrigFonts.font("SMALL", get_viewport().get_visible_rect().size.x) if orig_hud else null
+	if of:
+		l.add_theme_font_override("font", of)
+		l.add_theme_font_size_override("font_size", OrigFonts.style_px(0x2E, get_viewport().get_visible_rect().size.y, 14))
 	_msg_box.add_child(l)
 	while _msg_box.get_child_count() > 5:
 		_msg_box.get_child(0).free()

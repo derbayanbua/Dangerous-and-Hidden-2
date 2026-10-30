@@ -2,7 +2,7 @@ extends "res://tests/test_gameplay.gd"
 ## Bluteffekte (src/combat/blood_fx.gd): Spritzer, Strahl, Wand-/Bodendecals, wachsende Lachen (Leiche, bereits
 ## liegende Leiche), Obergrenzen, Stufen AUS/ORIGINAL/MEHR, echter Projektiltreffer; Kleidungsblut am Knochen,
 ## Messer-/Splittertreffer, Blutspur Verwundeter, Bildschirmrand.
-##   tools\godot.cmd --headless -- --mission=m01_funkfeuer --autoplay=test_blood --profiles_dir=user://blut
+##   tools\godot.cmd --headless -- --mission=m01_funkfeuer --autoplay=test_blood --profiles_dir=user://test_blut
 
 
 func _run() -> void:

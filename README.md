@@ -109,6 +109,13 @@ WASD bewegen · Shift sprinten · C hocken · Z/Y liegen · Leertaste springen/k
 LMT feuern · RMT zielen · R nachladen · Mausrad Ausrüstungswahl (oder 1-9) · G Granate · F benutzen ·
 V 1./3. Person · F1–F4 Soldat wählen · M taktische Karte · F5/F9 Schnellspeichern/-laden · Esc Pause, NUM 0-4 Soldaten befehle [funktionieren nur teilweise]
 
+Weitere Tasten wie im Original: P Pause · I Inventar · Rücktaste Gegenstand fallen lassen · B Fernglas · ' Aktionsmenü ·
+Komma bzw. O Missionsziele · Alt Handbremse · H Erste Hilfe · MMT Feuermodus · X/U/J/K/L/N/T Direktbefehle.
+Auf der taktischen Karte gelten die Original-Taktiktasten (G sammeln, V/B Signal, Q/E stehen/liegen, F/C/X/Z,
+Rücktaste/Entf löschen, Pfeiltasten verschieben, Ziffernblock +/− zoomen). Alle Aktionen des Originals stehen im
+Optionsmenü (Tastenbelegung) und lassen sich umbelegen; einige sind ab Werk frei, z. B. Gangart schneller/langsamer
+(Gehen/Schleichen), Springen und Klettern getrennt sowie Interface-Modus.
+
 ---
 
 *Gemacht von Fans für Fans. Wenn euch das gefällt: Kauft das Original und spielt es – es lohnt sich bis heute.*

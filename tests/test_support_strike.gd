@@ -29,6 +29,7 @@ static func _map() -> String:
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	peer_mode = Game.cli.has("ss_peer")
+	Net.move_check = false        # B-022 F-003: der Test versetzt Figuren direkt (zum Funkgerät/Ziel) – kein Spielzug
 	get_tree().create_timer(900.0 if peer_mode else 1500.0, true, false, true).timeout.connect(func():
 		check(false, "Zeitüberschreitung des Testlaufs")
 		_finish())

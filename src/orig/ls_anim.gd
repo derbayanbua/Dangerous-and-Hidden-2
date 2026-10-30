@@ -170,11 +170,39 @@ func _suspend(target: Node3D) -> void:
 	_suspended[target] = lst
 
 
+## Statische Menschenmodelle der Szene (Objekttyp 9, z. B. AFRICA1 „CUTit1“ = it02) sind als ungeskinnte Meshes in
+## T-Haltung exportiert; ihre Knochen-Frames (a, b, c …) bewegen das Mesh nicht → Darsteller standen in T-Pose.
+## Bei der ersten Skriptanimation wird die geskinnte Originalfigur (orig_cache/characters/<modell>.glb, gleiche
+## Knochennamen) eingesetzt und das statische Mesh ausgeblendet [E: Original zeichnet dieselbe Figur geskinnt].
+func _actor_figure(target: Node3D) -> Node3D:
+	var ex := target.get_node_or_null("ActorFigure") as Node3D
+	if ex:
+		return ex
+	if not target.has_meta("orig_model") or target.find_child("a", true, false) == null:
+		return null
+	var rt = get_parent()
+	var lvl = rt.get("orig") if rt else null
+	if lvl == null or not lvl.has_method("character_instance"):
+		return null
+	var fig: Node3D = lvl.character_instance(String(target.get_meta("orig_model")))
+	if fig == null:
+		return null
+	for v in target.find_children("*", "VisualInstance3D", true, false):
+		(v as VisualInstance3D).visible = false
+	fig.name = "ActorFigure"
+	target.add_child(fig)
+	return fig
+
+
 ## Animationsobjekte den Knochen/Unterframes des Ziels zuordnen (Namen ohne Groß-/Kleinschreibung)
 func _bind(target: Node3D, d: Dictionary) -> Array:
 	var binds: Array = []
 	var sk: Skeleton3D = null
 	var sks := target.find_children("*", "Skeleton3D", true, false)
+	if sks.is_empty():
+		var fig := _actor_figure(target)
+		if fig:
+			sks = fig.find_children("*", "Skeleton3D", true, false)
 	if not sks.is_empty():
 		sk = sks[0] as Skeleton3D
 	var nodes := {}

@@ -263,13 +263,24 @@ func _run() -> void:
 	# --- Soldatenwechsel (F3): abgegebener Soldat und seine Folger bleiben stehen (hd2.exe 0x4593E0) ---
 	await menu(KEY_KP_0, [1, 1])
 	await seconds(2.0)
-	var p3 := {}
-	for s in sq.alive_members():
-		p3[s] = s.global_position
+	# B-003: erst wechseln, wenn die Folger ihren Platz erreicht haben (bis 10 s) – vorher lief z. B. der Kartenläufer
+	# noch zu seinem Platz und die Strecke bis zum Wechsel zählte fälschlich als „Ausweichen“
+	for i in 20:
+		var busy := false
+		for s in sq.alive_members():
+			if s != sq.leader() and Vector2(s.velocity.x, s.velocity.z).length() > 0.3:
+				busy = true
+		if not busy:
+			break
+		await seconds(0.5)
 	# B-012 (Entscheid Auftraggeber): F3 einmal = markieren, zweimal kurz hintereinander = übernehmen
 	await key(KEY_F3)
 	await key(KEY_F3)
 	var nl := sq.leader()
+	# Bezug = Lage im Augenblick des Wechsels (hd2.exe 0x4593E0: die Folger bleiben, wo sie gerade sind)
+	var p3 := {}
+	for s in sq.alive_members():
+		p3[s] = s.global_position
 	check(nl == sq.members[2] and m.controller.active == nl, "Soldatenwechsel F3 (2× drücken)", nl.soldier_name)
 	await walk("move_forward", 6.0)
 	await seconds(14.0)
@@ -278,7 +289,10 @@ func _run() -> void:
 	for s in sq.alive_members():
 		if s == nl:
 			continue
-		info.append("%s %d %.1f m" % [s.soldier_name, sq.brain_of(s).order, moved(p3, s)])
+		# Diagnose: Versatz bis zum Haltepunkt (vor/bei dem Wechsel) und vom Haltepunkt (danach)
+		var hb := sq.brain_of(s)
+		info.append("%s %d %.1f m (Halt %.1f/%.1f)" % [s.soldier_name, hb.order, moved(p3, s),
+			Vector2(hb.hold_pos.x - p3[s].x, hb.hold_pos.z - p3[s].z).length(), hb.distance_to(hb.hold_pos)])
 		stay = stay and sq.brain_of(s).order != SquadBrain.Order.FOLLOW and moved(p3, s) < 1.5
 	check(stay, "Soldatenwechsel: niemand fällt auf Folgen zurück (20 s)", ", ".join(info))
 	await shot("wechsel_20s")

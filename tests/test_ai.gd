@@ -54,6 +54,24 @@ func _run() -> void:
 	w1.health = h0
 	check(not b1._in_leash(b1.home_pos + Vector3(60, 0, 0)) and b1._leash_clamp(b1.home_pos + Vector3(60, 0, 0)).distance_to(b1.home_pos) <= b1.leash_radius() + 0.01,
 		"Defensiv: Ziele außerhalb des Radius werden auf den Radius zurückgeholt")
+	# B-021: Zombie = Modus 0x400 (Opcode 0xCF): min(Sicht/3; 25) m
+	b1.zombie_mode = true
+	check(is_equal_approx(b1.leash_radius(), minf(sight / 3.0, 25.0)), "Zombie (0x400): Aktionsradius min(Sicht/3, 25) m",
+		"%.1f m" % b1.leash_radius())
+	b1.zombie_mode = false
+	# B-021: Wahrnehmungsformel 0x5A59E0 (Sichtbarkeitsweite) und Kegel ±50° (0x570280)
+	var per := w1.get_node("Perception") as Perception
+	var me := (get_tree().get_nodes_in_group("team_0")[0]) as Soldier
+	await get_tree().physics_frame
+	check(per.orig_formula, "Originalformel aktiv (Originalmission offline)")
+	var st0 := me.stance
+	me.stance = Soldier.Stance.PRONE
+	var vp := per.orig_visibility_distance(me)
+	me.stance = Soldier.Stance.STAND
+	var vs := per.orig_visibility_distance(me)
+	me.stance = st0
+	check(vs > vp and vp <= 50.0 + 0.01 and vs <= 100.0 + 0.01 or me.seconds_since_shot() < 8.0,
+		"Sichtbarkeitsweite liegend ≤ 50 m < stehend ≤ 100 m (× Licht)", "liegend %.1f, stehend %.1f" % [vp, vs])
 
 	# 3) Spielernähe hebt HUMAN_Suspend auf, Patrouille (r_arc1a_walker1.scr) läuft
 	var gp := w1.global_position + Vector3(0, 0, 80)

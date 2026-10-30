@@ -644,6 +644,28 @@ func jump_or_climb() -> void:
 		_jump_request = true
 
 
+## B-015: Original SPRINGEN als eigene Aktion (ohne Klettern); liegend/hockend erst aufstehen.
+func jump_only() -> void:
+	if stance != Stance.STAND:
+		stance_request = Stance.STAND
+		return
+	if _climb_t <= 0.0 and is_on_floor() and vehicle == null:
+		_jump_request = true
+
+
+## B-015: Original KLETTERN als eigene Aktion: Leiter in Reichweite oder Hindernis vor dem Soldaten, nie springen.
+func climb_only() -> bool:
+	if stance != Stance.STAND or _climb_t > 0.0 or not is_on_floor() or vehicle != null:
+		return false
+	for l in get_tree().get_nodes_in_group("ladders"):
+		var ln := l as Node3D
+		var dxz := Vector2(ln.global_position.x - global_position.x, ln.global_position.z - global_position.z).length()
+		if dxz < 1.3 and l.can_interact(self):
+			l.climb(self)
+			return true
+	return try_climb()
+
+
 func try_climb() -> bool:
 	var space := get_world_3d().direct_space_state
 	var fwd := forward()

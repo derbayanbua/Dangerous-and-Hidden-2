@@ -175,6 +175,16 @@ func open_for(i: int) -> bool:
 	return true
 
 
+## B-015 AKTIONSMENÜ (Original-Taste ', T2842) [P]: Befehl an alle (bzw. die markierten), direkt im Untermenü
+## „Aktion“ (53) für das Ziel unter dem Fadenkreuz.
+func open_action_menu() -> bool:
+	if not open_for(-1):
+		return false
+	menu_id = 53
+	_rebuild()
+	return true
+
+
 func close() -> void:
 	is_open = false
 	if _panel:
@@ -419,6 +429,10 @@ func _fill_actions() -> void:
 			_put(0, 7051, ACT_USE, pl.state == 0 and _any_rec(func(r): return pl.host.allowed(r, pl.item)))
 		else:
 			_put(0, 7018, ACT_PHOTO, pl.state == 0 and _any_rec(func(r): return pl.host.allowed(r, ITEM_CAMERA)))   # Fall 0xF
+	elif ctx is OrigInteractive.OrigFence:
+		# Fall 0x23 (0x4BF670): „Benutze Drahtschneider“ nur mit Drahtschere 59 (0x5A7ED0); Softlock-Regel wie beim Benutzen
+		var fe := ctx as OrigInteractive.OrigFence
+		_put(0, 7035, ACT_CUTTER, not fe.cut and _any_rec(func(r): return fe.host.allowed(r, OrigInteractive.WIRE_CUTTER)))
 	elif ctx is OrigInteractive.OrigWorldItem or ctx is Pickups.Item:
 		_put(0, 7025, ACT_AMMO, (ctx as Interactable).enabled)     # Fall 0xB: Nehmen
 	elif ctx is OrigInteractive.OrigDestructible:
@@ -467,6 +481,10 @@ func find_context() -> Node3D:
 		if it is Pickups.Loot or it is EnemyBrain.CaptureAction:
 			continue        # gehören zum Menschen (unten)
 		var d := it.global_position.distance_to(p)
+		if it is OrigInteractive.OrigFence:
+			if (it as OrigInteractive.OrigFence).cut:
+				continue
+			d = (it as OrigInteractive.OrigFence).aim_distance(p) + 0.3   # langes Feld: Abstand zum Kasten [E]
 		if d < best_d:
 			best_d = d
 			best = it
@@ -686,6 +704,9 @@ func _start_action(code: int, rec: Array[Soldier], quiet: bool) -> Soldier:
 			continue
 		if (code == ACT_LOCK or code == ACT_UNLOCK) and not OrigInteractive.has_item(s, int(context.get("key_item"))):
 			continue
+		if code == ACT_CUTTER and context is OrigInteractive.OrigFence \
+				and not (context as OrigInteractive.OrigFence).host.allowed(s, OrigInteractive.WIRE_CUTTER):
+			continue
 		var d := s.global_position.distance_to(context.global_position)
 		if d < best:
 			best = d
@@ -813,8 +834,7 @@ func lines() -> PackedStringArray:
 
 ## Original-Frame „rollmenu“ (gameinterface.4ds, hud_spec: Rechteck x 0,000–0,226 / y 0,603–0,887 im 4:3-Bild,
 ## Textur x_mo2, Formate „%d. “/„0. “ – hd2.exe 0x4C0370). Breitbild wie die Truppleiste am linken Rand (B-014).
-## Schrift: Projekt-Schrift (die Original-Bitmapschriften Text\Fonts werden nicht konvertiert); Farben der Stile
-## 0x33 normal / 0x35 markiert / 0x34 ausgegraut sind nicht dekodiert [E].
+## Schrift/Farben (B-003): Original-Bitmapschrift SMALL und Textstile 0x2F–0x35 aus hd2.exe (OrigFonts, s. _orig_style).
 const ROLLMENU_RECT := [0.00001, 0.60292, 0.22584, 0.88692]   ## Fallback, wenn hud_spec fehlt
 var rollmenu_rect: Array = ROLLMENU_RECT
 var rollmenu_tex: Texture2D = null
@@ -873,24 +893,43 @@ func _redraw() -> void:
 	_panel.size = mr.size
 	_panel.custom_minimum_size = mr.size
 	var fs := maxi(9, int(mr.size.y / 17.0))
+	var vs := get_viewport().get_visible_rect().size
 	for c in _box.get_children():
 		c.queue_free()
-	_box.add_child(_mk_label(header(), fs + 1, Color(0.95, 0.9, 0.7)))
+	var hl := _mk_label(header(), fs + 1, Color(0.95, 0.9, 0.7))
+	_orig_style(hl, OrigFonts.ST_MENU_TITLE if menu_id == MAIN else OrigFonts.ST_MENU_TITLE_SUB, vs)
+	_box.add_child(hl)
 	var tl := _mk_label(target_line(), fs, Color(0.85, 0.8, 0.62))
+	_orig_style(tl, OrigFonts.ST_MENU_TARGET, vs)
 	tl.name = "TargetLine"
 	_box.add_child(tl)
 	var ls := lines()
 	for i in 10:
 		var a: int = entries[i][1]
 		var col := Color(0.92, 0.88, 0.76)
+		var st := OrigFonts.ST_MENU_ITEM
 		if a == A_GREY:
 			col = Color(0.55, 0.55, 0.55)
+			st = OrigFonts.ST_MENU_GREY
 		elif i == highlight:
 			col = Color(1.0, 0.85, 0.35)
+			st = OrigFonts.ST_MENU_MARKED
 		var l := _mk_label(ls[i], fs, col)
+		_orig_style(l, st, vs)
 		l.name = "Item%d" % i
 		_box.add_child(l)
 	_panel.visible = is_open
+
+
+## B-003: Original-Bitmapschrift und Stilfarbe (hd2.exe 0x641E30: 0x2F/0x30 Titel schwarz, 0x31 Zielzeile und 0x34 grau =
+## Schwarz mit Alpha 0x60, 0x33 Eintrag schwarz, 0x35 markiert rot; Höhe 0,020–0,022 der Bildhöhe). Ohne Cache: alte Darstellung.
+var orig_font := false             ## Tests: Originalschrift aktiv
+
+
+func _orig_style(l: Label, style_id: int, vs: Vector2) -> void:
+	if OrigFonts.apply(l, style_id, vs.y, vs.x):
+		orig_font = true
+		l.remove_theme_color_override("font_shadow_color")
 
 
 func _mk_label(t: String, size: int, col: Color) -> Label:

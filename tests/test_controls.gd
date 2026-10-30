@@ -41,6 +41,67 @@ func _run() -> void:
 	check(s.using_binoculars, "B: Fernglas")
 	await tap("binoculars")
 	await seconds(0.5)
+	# B-015: übrige Original-Aktionen – alle im Optionsmenü, Verbesserungen unverändert, Funktionen angebunden
+	var listed := {}
+	for cat in load("res://src/ui/main_menu.gd").KEY_CATEGORIES:
+		for a in cat[1]:
+			listed[a] = true
+	var missing := InputSetup.ACTIONS.keys().filter(func(a): return not listed.has(a))
+	check(missing.is_empty(), "B-015: jede Aktion steht auf einer Belegungsseite", str(missing))
+	check(kc.call("run") == KEY_SHIFT and kc.call("stance_stand") == KEY_SPACE and kc.call("grenade") == KEY_G
+		and kc.call("medkit") == KEY_H and kc.call("order_move") == KEY_X and kc.call("order_follow") == KEY_U
+		and kc.call("order_grenade") == KEY_T and kc.call("camera_toggle") == KEY_V and kc.call("stance_crouch") == KEY_C
+		and InputMap.action_get_events("speed_up").is_empty() and InputMap.action_get_events("jump").is_empty()
+		and InputMap.action_get_events("climb").is_empty() and kc.call("action_menu") == KEY_APOSTROPHE
+		and kc.call("game_info") == KEY_COMMA and kc.call("pause_game") == KEY_P and kc.call("handbrake") == KEY_ALT,
+		"B-015: Verbesserungen bleiben, Original-Aktionen frei bzw. unbelegt")
+	# Kollisionsprüfung: keine Spielaktion teilt eine Taste mit einer anderen Spielaktion, außer T (F-016)
+	var seen := {}
+	var clash := []
+	for a: String in InputSetup.ACTIONS:
+		if InputSetup.is_tactical(a) or a in ["chat_all", "chat_team", "console", "voice_talk", "show_players"]:
+			continue
+		var k: int = kc.call(a)
+		if k < 0:
+			continue
+		if seen.has(k):
+			clash.append("%s/%s" % [seen[k], a])
+		seen[k] = a
+	check(clash.is_empty(), "B-015: keine doppelte Taste im Spielkontext", str(clash))
+	check(c.gait == Soldier.MoveMode.JOG, "Standard-Gangart Laufschritt")
+	await tap("speed_down")
+	check(c.gait == Soldier.MoveMode.WALK, "GESCHW. VERRING.: Gehen")
+	await tap("speed_down")
+	await tap("speed_down")
+	check(c.gait == Soldier.MoveMode.SNEAK, "GESCHW. VERRING.: Schleichen (Endstufe)")
+	await tap("speed_up")
+	await tap("speed_up")
+	check(c.gait == Soldier.MoveMode.JOG, "GESCHW. ERHÖHEN: zurück zum Laufschritt")
+	var y0 := s.global_position.y
+	await tap("jump")
+	await seconds(0.25)
+	check(s.global_position.y > y0 + 0.1, "SPRINGEN als eigene Aktion", "%.2f" % (s.global_position.y - y0))
+	await seconds(1.0)
+	await tap("interface_mode")
+	check(not m.hud.visible, "INTERFACE-MODUS blendet die Anzeige aus")
+	await tap("interface_mode")
+	check(m.hud.visible, "INTERFACE-MODUS blendet die Anzeige wieder ein")
+	var tm = m.get("tactical_map")
+	if tm:
+		await tap("map")
+		check(tm.is_open, "KARTE öffnet die Karte")
+		var z0: int = tm._zoom_i
+		await tap("tac_zoom_out")
+		await tap("tac_prone")
+		var g0: int = s.weapons[2].total_ammo() if s.weapons.size() > 2 and s.weapons[2] else -1
+		await tap("tac_regroup")
+		check(tm._zoom_i == maxi(z0 - 1, 0) and tm.cur_stance == Soldier.Stance.PRONE and tm.is_open,
+			"Taktik-Tasten: Wegzoomen, Liegen", "zoom %d→%d Haltung %d" % [z0, tm._zoom_i, tm.cur_stance])
+		check(g0 < 0 or s.weapons[2].total_ammo() == g0, "Taktik-Taste G wirft bei offener Karte keine Granate")
+		await tap("tac_prone")
+		await tap("map")
+		check(not tm.is_open, "KARTE schließt die Karte")
+		await seconds(0.3)
 	# Mausrad öffnet die Auswahl, Linksklick wählt (ohne zu feuern)
 	await tap("weapon_next")
 	check(c.selection_open and m.hud.selection_visible(), "Mausrad öffnet die Auswahlliste")

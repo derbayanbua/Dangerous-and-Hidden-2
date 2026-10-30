@@ -249,6 +249,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		active.stance_request = Soldier.Stance.CROUCH if active.stance_request == Soldier.Stance.PRONE else Soldier.Stance.PRONE
 	elif event.is_action_pressed("stance_stand"):
 		active.jump_or_climb()
+	elif event.is_action_pressed("jump"):
+		active.jump_only()                     # B-015: Original SPRINGEN (getrennt von KLETTERN)
+	elif event.is_action_pressed("climb"):
+		if not active.climb_only():
+			Events.say("Hier kann man nicht klettern.", 1.2)
+	elif event.is_action_pressed("speed_up"):
+		_step_gait(1)
+	elif event.is_action_pressed("speed_down"):
+		_step_gait(-1)
+	elif event.is_action_pressed("interface_mode"):
+		# B-015 INTERFACE-MODUS [P]: Spielanzeige ein/aus (Meldungen und Menüs bleiben)
+		var h = mission.get("hud") if mission else null
+		if h is CanvasItem or h is CanvasLayer:
+			h.visible = not h.visible
+	elif event.is_action_pressed("action_menu"):
+		if command_menu and not Net.is_online:
+			command_menu.open_action_menu()
 	elif event.is_action_pressed("reload"):
 		active.reload()
 	elif event.is_action_pressed("weapon_1"):
@@ -336,26 +353,45 @@ func _unhandled_input(event: InputEvent) -> void:
 		Events.say("Befehl: Haltung %s" % ["Stehen", "Hocken", "Liegen"][st], 2.0)
 
 
+## B-015: Grundgangart des gesteuerten Soldaten (Original GESCHW. ERHÖHEN/VERRING.). Standard Laufschritt (Vorgabe
+## Auftraggeber); langsamer = Gehen, dann Schleichen. Stufen wie Soldier.SPEEDS.
+const GAIT_STEPS := [Soldier.MoveMode.SNEAK, Soldier.MoveMode.WALK, Soldier.MoveMode.JOG]
+const GAIT_NAMES := ["Schleichen", "Gehen", "Laufschritt"]
+var gait: int = Soldier.MoveMode.JOG
+
+
+func _step_gait(dir: int) -> void:
+	var i := clampi(GAIT_STEPS.find(gait) + dir, 0, GAIT_STEPS.size() - 1)
+	gait = GAIT_STEPS[i]
+	Events.say("Gangart: %s" % GAIT_NAMES[i], 1.2)
+
+
 ## „SOLDAT n WÄHLEN“ (F1–F4, Entscheid Auftraggeber 24.10.2026), zusammengeführt mit dem Soldatenwechsel:
 ## einmal = Kamerad markieren/entmarkieren (grau in der Truppleiste), zweimal innerhalb DOUBLE_TAP = übernehmen.
 ## Eigener (gesteuerter) Soldat: Taste wirkt nicht. Mehrspieler (nur ein Soldat): keine Wirkung.
 const DOUBLE_TAP := 0.4
 var _last_select := -1
 var _last_select_t := -10.0
+var _last_select_f := -1000
 
 
 func _on_select_soldier(i: int) -> void:
 	if Net.is_online or i >= squad.members.size():
 		return
 	var now := Time.get_ticks_msec() / 1000.0
+	var frame := Engine.get_process_frames()
 	var s := squad.members[i]
-	if i == _last_select and now - _last_select_t <= DOUBLE_TAP:
+	# Rest 0.9.5 [E]: Abstand in Echtzeit, aber je Bild höchstens 1/30 s gezählt – ruckelt das Spiel (Last, Laden), zählen
+	# langsame Bilder nicht als „lange gewartet“ (test_commands_orig F3 unter Last 15/17)
+	var gap := minf(now - _last_select_t, float(frame - _last_select_f) / 30.0)
+	if i == _last_select and gap <= DOUBLE_TAP:
 		_last_select = -1
 		if squad.set_active(i):              # entfernt auch die Markierung des Übernommenen
 			Events.say("Übernommen: %s" % s.soldier_name, 1.5)
 		return
 	_last_select = i
 	_last_select_t = now
+	_last_select_f = frame
 	if squad.toggle_select(i):
 		Events.say("%s %s" % [s.soldier_name, "markiert" if squad.is_selected(s) else "nicht mehr markiert"], 1.5)
 
@@ -410,7 +446,7 @@ func _physics_process(_delta: float) -> void:
 		if active.seat_index == 0:
 			v.throttle = -iv.y
 			v.steer_input = -iv.x
-			v.handbrake = Input.is_action_pressed("stance_stand")
+			v.handbrake = Input.is_action_pressed("stance_stand") or Input.is_action_pressed("handbrake")   # B-015 HANDBREMSE
 			# Kleinst-U-Boot (OrigSubmarine): Leertaste auftauchen, Hocken-Taste tauchen
 			v.vertical_input = (1.0 if Input.is_action_pressed("stance_stand") else 0.0) - (1.0 if Input.is_action_pressed("stance_crouch") else 0.0)
 			# Verfolgerkamera richtet sich ohne Mausbewegung hinter dem fahrenden Fahrzeug aus
@@ -428,7 +464,8 @@ func _physics_process(_delta: float) -> void:
 	var basis := Basis(Vector3.UP, active.look_yaw)
 	active.move_input = basis * Vector3(iv.x, 0, iv.y)
 	# Moderne Steuerung: immer Laufschritt, Shift = Sprint; leise = geduckt/liegend
-	active.move_mode = Soldier.MoveMode.RUN if Input.is_action_pressed("run") else Soldier.MoveMode.JOG
+	# B-015: GESCHW. ERHÖHEN/VERRING. stellt die Grundgangart um (Standard Laufschritt bleibt, Shift sprintet immer)
+	active.move_mode = Soldier.MoveMode.RUN if Input.is_action_pressed("run") else gait
 	# Automatisierte Tests simulieren Eingaben ohne Mausfang
 	var captured := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED or Game.cli.has("autoplay")
 	active.trigger = captured and Input.is_action_pressed("fire") and fire_ok
@@ -450,9 +487,15 @@ func _physics_process(_delta: float) -> void:
 
 
 func _update_interact_target() -> void:
+	# Rest 0.9.5 [E]: Blickrichtung gewichten statt nur „nächstes Objekt“. Vorher gewann alles unter 0,9 m unabhängig von der
+	# Richtung (africa1: vor HL_DV14 nahm die Benutzen-Taste die 1 m entfernte, seitliche Außentür HL_DV11). Wertung =
+	# Abstand + 1 m je rad Abweichung im Blickkegel (±25°), außerhalb 2 m je rad. Hinter dem
+	# Spieler (> 90°) nur noch in Berührungsnähe (< 0,6 m).
 	var best: Interactable = null
-	var best_d := 2.4
+	var best_s := INF
 	var fwd := active.forward()
+	fwd.y = 0.0
+	fwd = fwd.normalized() if fwd.length() > 0.01 else Vector3.FORWARD
 	for n in get_tree().get_nodes_in_group("interactables"):
 		var it := n as Interactable
 		if it == null or not it.can_interact(active):
@@ -460,7 +503,21 @@ func _update_interact_target() -> void:
 		var to := it.global_position - active.global_position
 		to.y = 0
 		var d := to.length()
-		if d < best_d and (d < 0.9 or fwd.angle_to(to) < 1.0):
-			best_d = d
+		if d >= INTERACT_RANGE:
+			continue
+		var a := fwd.angle_to(to) if d > 0.05 else 0.0
+		if a >= 1.0 and not (d < 0.9 and a < PI * 0.5) and d >= 0.6:
+			continue
+		var s := interact_score(d, a)
+		if s < best_s:
+			best_s = s
 			best = it
 	interact_target = best
+
+
+const INTERACT_RANGE := 2.4
+const INTERACT_CONE := 0.44     ## ±25°: Blickkegel
+
+## Zielwertung Benutzen-Taste (kleiner = besser): Abstand [m] + Winkelstrafe 2 m/rad (im Blickkegel halbiert).
+static func interact_score(d: float, a: float) -> float:
+	return d + a + maxf(a - INTERACT_CONE, 0.0)     # stetig: 1 m/rad im Kegel, außerhalb 2 m/rad

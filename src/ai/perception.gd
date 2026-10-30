@@ -25,6 +25,18 @@ var known_corpses := {}           ## Soldier -> true
 var _tick := 0.0
 const TICK := 0.15
 
+## B-021: Formel des Originals (nur Originalmissionen offline; setzt EnemyBrain, MP-Bots/Übungseinsätze unverändert).
+## hd2.exe 0x5A59E0 „Sichtbarkeitsweite des Ziels“ (HUD zeigt sie als „%.0fm“, 0x4B4258) [B Werte]:
+##   Grundwert je Haltung 50/70/100 m (Bits 1/2/4 der Steuerung +0x50; Fahrzeug 100) [B Werte, P Zuordnung liegend/hockend/stehend],
+##   in Bewegung (Bits 0xF8) × 1,05/1,2/1,3/1,6/1,8 je Gangart [B Werte, P Zuordnung], nach eigenem Schuss (Zähler < 8000 ms)
+##   mindestens 450/380/300 m [B Werte, P Deutung], × Licht des Sektors (+0xDA4, 0x5AC350) [B]. Sicht 0x570280: Reichweite
+##   = min(Sichtbarkeitsweite, Sichtweite +0x110), Kegel ±50° (Spielerseite ±60° und ×1,3) [B].
+var orig_formula := false
+const ORIG_HALF_FOV := 50.0                       ## Grad, 0x570280 (local_70 = 50) [B]
+const ORIG_BASE := [100.0, 70.0, 50.0]            ## je Soldier.Stance STAND/CROUCH/PRONE [B Werte, P Zuordnung]
+const ORIG_SHOT_FLOOR := [450.0, 380.0, 300.0]    ## nach Schuss (< 8 s) [B Werte, P Zuordnung]
+const ORIG_SHOT_MS := 8.0                         ## 0x810BC0 = 8000 (7000 in Sonderfall 0x461A20) [B]
+
 
 func _ready() -> void:
 	soldier = get_parent() as Soldier
@@ -66,7 +78,7 @@ func _update_sight(dt: float) -> void:
 	var eye := soldier.eye_position()
 	var fwd := soldier.aim_direction()
 	var space := soldier.get_world_3d().direct_space_state
-	var half_fov := deg_to_rad(fov_deg * 0.5)
+	var half_fov := deg_to_rad(ORIG_HALF_FOV if orig_formula else fov_deg * 0.5)
 	for node in enemy_candidates():
 		var t := node as Soldier
 		if t == null or not t.alive:
@@ -75,13 +87,14 @@ func _update_sight(dt: float) -> void:
 		var to := tpos - eye
 		var dist := to.length()
 		var seen := false
-		if dist < sight_range:
+		var reach := minf(sight_range, orig_visibility_distance(t)) if orig_formula else sight_range
+		if dist < reach:
 			var ang := fwd.angle_to(to)
 			# Nahbereich: auch knapp hinter dem Sichtfeld wird Bewegung bemerkt
 			if ang < half_fov or (dist < 4.0 and t.is_moving() and t.move_mode == Soldier.MoveMode.RUN):
 				seen = _line_of_sight(space, eye, tpos, t)
 				if seen:
-					var gain := _visibility(t, dist, ang, half_fov) * detection_speed * dt
+					var gain := (_orig_gain(t, dist, reach) if orig_formula else _visibility(t, dist, ang, half_fov)) * detection_speed * dt
 					awareness[t] = minf(awareness.get(t, 0.0) + gain, 1.0)
 					last_known[t] = t.global_position
 		visible_now[t] = seen
@@ -126,6 +139,32 @@ func _visibility(t: Soldier, dist: float, ang: float, half_fov: float) -> float:
 	return stance_k * move_k * dist_k * periph * 1.4 * light * Soldier.skill_k(t.skill_stealth, 1.3, 0.6)
 
 
+## Sichtbarkeitsweite eines Ziels in m nach hd2.exe 0x5A59E0 (siehe orig_formula).
+func orig_visibility_distance(t: Soldier) -> float:
+	var st := clampi(t.stance, 0, 2)
+	var v: float = 100.0 if t.vehicle != null else ORIG_BASE[st]
+	if t.vehicle == null and t.is_moving():
+		match t.move_mode:
+			Soldier.MoveMode.SNEAK: v *= 1.05
+			Soldier.MoveMode.WALK: v *= 1.2
+			Soldier.MoveMode.JOG: v *= 1.3
+			_: v *= 1.8
+	if t.seconds_since_shot() < ORIG_SHOT_MS:
+		v = maxf(v, ORIG_SHOT_FLOOR[st])
+	var light: float = _mission.light_at(t.global_position + Vector3.UP) if _mission else 1.0
+	# Tarnung in Feinduniform: Original über Seitenwechsel (Mission_SetUniformDisguise), hier wie bisher [E]
+	if t.disguised and t.seconds_since_shot() > 6.0 and t.global_position.distance_to(soldier.global_position) > 8.0:
+		return 0.0
+	return v * light
+
+
+## Erkennungszuwachs je s innerhalb der Reichweite. Original 0x570280 meldet sofort 100 (sichtbar); die kurze Rampe
+## (≈ 0,3–1 s je nach Abstand) ersetzt die nicht dekodierte Reaktionszeit [E].
+func _orig_gain(t: Soldier, dist: float, reach: float) -> float:
+	var k := clampf(1.0 - dist / maxf(reach, 0.1), 0.0, 1.0)
+	return (1.0 + 2.5 * k) * Soldier.skill_k(t.skill_stealth, 1.3, 0.6)
+
+
 var _mission: Node
 
 
@@ -158,6 +197,14 @@ func _on_noise(pos: Vector3, radius: float, source: Node, team: int, kind: Strin
 	var d := soldier.global_position.distance_to(pos)
 	if d > eff:
 		return
+	if orig_formula:
+		# hd2.exe 0x5A5430 [B]: Hörweite +0x118 als harte Grenze; Lautstärke des Ereignisses entscheidet zufällig
+		# (unalarmiert: verworfen, wenn rand·0,7 > Lautstärke). Lautstärke = Geräuschradius/60 [P Zuordnung].
+		if d > hear_range:
+			return
+		var loud := clampf(radius / 60.0, 0.0, 1.0)
+		if max_awareness() < 1.0 and randf() * 0.7 > loud:
+			return
 	heard.emit(pos, kind, source)
 	if team != soldier.team and kind != &"alert":
 		if source is Soldier and d < eff * 0.5 and kind == &"gunshot":

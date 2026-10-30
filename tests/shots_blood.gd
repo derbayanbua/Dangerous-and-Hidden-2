@@ -1,6 +1,6 @@
 extends "res://tests/test_gameplay.gd"
 ## Kontrollbilder Bluteffekte (FENSTER, nicht headless):
-##   tools\godot.cmd -- --mission=m01_funkfeuer --autoplay=shots_blood --profiles_dir=user://blut
+##   tools\godot.cmd -- --mission=m01_funkfeuer --autoplay=shots_blood --profiles_dir=user://test_blut
 ## → test_output/blood_spray.png, blood_jet.png, blood_wall.png, blood_pool_start.png, blood_pool_grown.png,
 ##   blood_original.png
 

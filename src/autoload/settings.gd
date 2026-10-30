@@ -22,7 +22,14 @@ const QUALITY_4K := 4
 
 var resolution := Vector2i.ZERO
 var fullscreen := true
-var vsync := true
+## F-017: kanonisch ist allein vsync_mode (Sektion setup). vsync ist nur noch eine abgeleitete Sicht
+## (an/aus) für das Overlay-Optionsmenü; das alte Feld display/vsync wird beim Laden einmalig migriert.
+var vsync: bool:
+	get:
+		return vsync_mode != 0
+	set(v):
+		if v != (vsync_mode != 0):
+			vsync_mode = 1 if v else 0
 var quality := 2:          ## 0..4, siehe QUALITY_NAMES
 	set(v):
 		quality = clampi(v, 0, QUALITY_NAMES.size() - 1)
@@ -153,7 +160,6 @@ func load_settings() -> void:
 		return
 	resolution = _cfg.get_value("display", "resolution", resolution)
 	fullscreen = _cfg.get_value("display", "fullscreen", fullscreen)
-	vsync = _cfg.get_value("display", "vsync", vsync)
 	quality = _cfg.get_value("graphics", "quality", quality)
 	render_scale = _cfg.get_value("graphics", "render_scale", render_scale)
 	fov = _cfg.get_value("graphics", "fov", fov)
@@ -173,9 +179,25 @@ func load_settings() -> void:
 		set(k, _cfg.get_value("graphics", k, get(k)))
 	for k in ["vsync_mode", "max_fps", "aa_mode", "texture_quality", "anisotropy", "pause_unfocused"]:
 		set(k, _cfg.get_value("setup", k, get(k)))
+	vsync_mode = migrate_vsync(_cfg, vsync_mode)
 	for k in PROFILE_KEYS["multiplayer"]:
 		set(k, _cfg.get_value("multiplayer", k, get(k)))
 	language = String(_cfg.get_value("setup", "language", language))
+
+
+## F-017: einmalige Migration. Gibt den gültigen vsync_mode zurück und entfernt das Altfeld display/vsync.
+## Gibt es noch kein setup/vsync_mode, bestimmt das Altfeld den Modus (false → 0 AUS, true → 1 AN);
+## sonst gewinnt vsync_mode (das war schon bisher der wirksame Wert).
+static func migrate_vsync(cfg: ConfigFile, current: int) -> int:
+	var mode := current
+	if cfg.has_section_key("setup", "vsync_mode"):
+		mode = int(cfg.get_value("setup", "vsync_mode"))
+	elif cfg.has_section_key("display", "vsync"):
+		mode = 1 if bool(cfg.get_value("display", "vsync")) else 0
+	if cfg.has_section_key("display", "vsync"):
+		cfg.erase_section_key("display", "vsync")
+	cfg.set_value("setup", "vsync_mode", clampi(mode, 0, 3))
+	return clampi(mode, 0, 3)
 
 
 func save_settings() -> void:
@@ -191,7 +213,8 @@ func save_settings() -> void:
 	_cfg.load(PATH)  # vorhandene Sektionen (z. B. Tastenbelegung) erhalten
 	_cfg.set_value("display", "resolution", resolution)
 	_cfg.set_value("display", "fullscreen", fullscreen)
-	_cfg.set_value("display", "vsync", vsync)
+	if _cfg.has_section_key("display", "vsync"):
+		_cfg.erase_section_key("display", "vsync")   # F-017: Altfeld nicht wieder schreiben
 	_cfg.set_value("graphics", "quality", quality)
 	_cfg.set_value("graphics", "render_scale", render_scale)
 	_cfg.set_value("graphics", "fov", fov)
@@ -302,7 +325,6 @@ func apply() -> void:
 		res = res.min(screen)
 		DisplayServer.window_set_size(res)
 		DisplayServer.window_set_position((screen - res) / 2)
-	vsync = vsync_mode != 0
 	DisplayServer.window_set_vsync_mode([DisplayServer.VSYNC_DISABLED, DisplayServer.VSYNC_ENABLED,
 		DisplayServer.VSYNC_ADAPTIVE, DisplayServer.VSYNC_MAILBOX][clampi(vsync_mode, 0, 3)])
 	Engine.max_fps = max_fps
@@ -408,13 +430,40 @@ static func _gcd(a: int, b: int) -> int:
 	return a
 
 
+var _gamma_lut: ImageTexture
+var _gamma_lut_value := -1.0
+
+## Gammawert der Kurve: Ausgabe = Eingabe^(1/g) (g > 1 hellt Mitteltöne auf, Schwarz/Weiß bleiben).
+static func gamma_curve(x: float, g: float) -> float:
+	return pow(clampf(x, 0.0, 1.0), 1.0 / maxf(g, 0.05))
+
+
+## 256×1-LUT der aktuellen Gammakurve (zwischengespeichert, neu nur bei geändertem Wert).
+func gamma_lut() -> ImageTexture:
+	if _gamma_lut and is_equal_approx(_gamma_lut_value, gamma):
+		return _gamma_lut
+	var img := Image.create(256, 1, false, Image.FORMAT_RGB8)
+	for i in 256:
+		var v := gamma_curve(i / 255.0, gamma)
+		img.set_pixel(i, 0, Color(v, v, v))
+	if _gamma_lut:
+		_gamma_lut.update(img)
+	else:
+		_gamma_lut = ImageTexture.create_from_image(img)
+	_gamma_lut_value = gamma
+	return _gamma_lut
+
+
 ## Wendet die Qualitätsstufe auf ein WorldEnvironment und die Sonne an.
 ## Wird von der Mission beim Laden und bei jeder Änderung aufgerufen.
 func apply_to_world(env: Environment, sun: DirectionalLight3D) -> void:
 	var q := clampi(quality, 0, QUALITY_4K)
 	if env:
 		env.adjustment_enabled = true          # Sättigung/Kontrast der Mission bleiben erhalten
-		env.adjustment_brightness = gamma
+		# F-018: Original „Gamma-Korrektur:“ (T2412) = echte Gammakurve als 1D-LUT (Farbkorrektur nach dem
+		# Tonemapping), aus = y^(1/gamma) je Kanal; Helligkeit bleibt neutral.
+		env.adjustment_brightness = 1.0
+		env.adjustment_color_correction = gamma_lut()
 		env.ssao_enabled = q >= 1
 		env.ssil_enabled = q >= 3
 		env.sdfgi_enabled = q >= 3

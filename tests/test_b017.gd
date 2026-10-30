@@ -291,17 +291,113 @@ func _arctic_fence() -> void:
 		if pc.interact_target != fc:
 			if tried < 6:
 				continue
+		# Fensterlauf (WARP, wenige Bilder/s): erst ruhig stehen lassen, sonst bricht das Schneiden bei > 1 m Drift ab
+		await _wait(func(): return _me.is_on_floor() and _me.velocity.length() < 0.05, 3.0)
+		var p_tap := _me.global_position
 		await tap("interact")
-		var done := await _wait(func(): return fc.cut, 8.0)
+		var started := await _wait(func(): return fc._left > 0.0 or fc.cut, 3.0)
+		if not started:   # Tastendruck im Fenster verschluckt (Fokus/Bildrate) → einmal wiederholen
+			await tap("interact")
+			started = await _wait(func(): return fc._left > 0.0 or fc.cut, 3.0)
+		var done := await _wait(func(): return fc.cut, 15.0)
 		check(pc.interact_target == fc or done, "Zaun %s: Benutzen-Taste wählt das Zaunfeld" % k, "Ziel=%s" % tgt)
 		check(blocked, "Zaun %s: vor dem Schneiden versperrt" % k, "s0=%.2f" % s0)
-		check(done and int(fc.frame.get_meta("actor_state", 0)) == 1, "Zaun %s: mit Drahtschere zerschnitten (Zustand 1)" % k)
+		check(done and int(fc.frame.get_meta("actor_state", 0)) == 1, "Zaun %s: mit Drahtschere zerschnitten (Zustand 1)" % k,
+			"gestartet=%s Drift=%.2f m" % [started, _me.global_position.distance_to(p_tap)])
 		await frames(5)
 		await hold("move_forward", 1.6)
 		var s1 := (_me.global_position - c).dot(nrm)
 		check(s1 > 0.3, "Zaun %s: danach durchlaufbar (Vorwärtstaste)" % k, "Abstand %.2f" % s1)
+		await _arctic_fence_command(fc)
 		return
 	check(false, "arctic1: kein prüfbares Zaunfeld gefunden", str(tried))
+
+
+## Rest 0.9.5: Truppmenü › Aktion auf ein Zaunfeld → „Benutze Drahtschneider“ (T7035), Kamerad mit Drahtschere geht hin und
+## schneidet; danach führt eine Navigationsverbindung durch die Lücke (KI-Weg kurz statt Umweg).
+func _arctic_fence_command(done_fc) -> void:
+	var it: OrigInteractive = _m.get("interactive")
+	var cm: CommandMenu = _m.controller.command_menu
+	var sq: SquadManager = _m.squad
+	var mate: Soldier = null
+	for s in sq.members:
+		if s != _me and s.alive:
+			mate = s
+			break
+	if mate == null:
+		check(false, "Zaun-Befehl: kein Kamerad")
+		return
+	var inv: Array = mate.get_meta("orig_items", [])
+	if not inv.has(OrigInteractive.WIRE_CUTTER):
+		inv.append(OrigInteractive.WIRE_CUTTER)
+		mate.set_meta("orig_items", inv)
+	var map: RID = (_m.get("nav_region") as NavigationRegion3D).get_navigation_map()
+	for k in it.controls:
+		var fc = it.controls[k]
+		if not (fc is OrigInteractive.OrigFence) or fc.cut or fc == done_fc:
+			continue
+		var c: Vector3 = fc.global_position
+		var nrm: Vector3 = fc.normal
+		var a = _floor_at(c.x - nrm.x * 1.3, c.z - nrm.z * 1.3, c.y + 2.0)
+		var b = _floor_at(c.x + nrm.x * 1.3, c.z + nrm.z * 1.3, c.y + 2.0)
+		if a == null or b == null or absf(float(a.y) - fc.floor_y) > 0.4 or absf(float(b.y) - fc.floor_y) > 0.4:
+			continue
+		if not is_nan(_m.get("orig").water_level_at(a)) or not is_nan(_m.get("orig").water_level_at(b)):
+			continue
+		var pa := NavigationServer3D.map_get_closest_point(map, a)
+		var pb := NavigationServer3D.map_get_closest_point(map, b)
+		if pa.distance_to(a) > 0.6 or pb.distance_to(b) > 0.6:
+			continue
+		var before := _path_len(NavigationServer3D.map_get_path(map, pa, pb, true))
+		_me.global_position = a + Vector3.UP * 0.2 - nrm * 1.5
+		mate.global_position = a + Vector3.UP * 0.2 - nrm * 4.0 + nrm.cross(Vector3.UP) * 1.5
+		mate.velocity = Vector3.ZERO
+		sq.brain_of(mate).set_order(SquadBrain.Order.HOLD)
+		await frames(10)
+		cm.context_override = fc
+		var opened := cm.open_for(sq.members.find(mate))
+		cm.menu_id = 53
+		cm._rebuild()
+		var e0: Array = cm.entries[0] if cm.entries.size() > 0 else []
+		check(opened and e0.size() == 2 and int(e0[0]) == 7035 and int(e0[1]) == CommandMenu.ACT_CUTTER,
+			"Zaun-Befehl: Aktion auf Zaunfeld = „Benutze Drahtschneider“ (7035) wählbar", str(cm.entries.slice(0, 3)))
+		cm.activate(0)
+		cm.context_override = null
+		var cut := await _wait(func(): return fc.cut, 30.0)
+		check(cut and int(fc.frame.get_meta("actor_state", 0)) == 1, "Zaun-Befehl: Kamerad geht hin und schneidet (Zustand 1)",
+			"Abstand Kamerad %.2f, KI an=%s Aufgabe=%s Befehl=%d Prozess=%d" % [mate.global_position.distance_to(c), sq.brain_of(mate).enabled,
+			sq.brain_of(mate).action_kind, sq.brain_of(mate).order, mate.process_mode])
+		if not fc.cut:
+			fc.set_cut(true)       # Navigationsprüfung unabhängig vom Befehlsweg
+		await frames(5)
+		# Verbindungen wirken erst nach dem asynchronen Kartenabgleich (Mission: ARCTIC1 bis viele Physikschritte) → bis 20 s warten
+		var path_after := NavigationServer3D.map_get_path(map, pa, pb, true)
+		for i in 80:
+			if _path_len(path_after) < 4.0:
+				break
+			await seconds(0.25)
+			path_after = NavigationServer3D.map_get_path(map, pa, pb, true)
+		print("ZAUNPFAD pa=%s pb=%s Pfad=%s" % [pa, pb, path_after])
+		if is_instance_valid(fc.nav_link):
+			var lr: RID = fc.nav_link.get_rid()
+			print("ZAUNLINK karte_gleich=%s an=%s links_in_karte=%d radius=%.2f ebenen=%d regionen=%d iter=%d" % [NavigationServer3D.link_get_map(lr) == map,
+				fc.nav_link.enabled, NavigationServer3D.map_get_links(map).size(),
+				NavigationServer3D.map_get_link_connection_radius(map), NavigationServer3D.link_get_navigation_layers(lr),
+				NavigationServer3D.map_get_regions(map).size(), NavigationServer3D.map_get_iteration_id(map)])
+		var after := _path_len(path_after)
+		check(is_instance_valid(fc.nav_link) and after < 4.0 and after < before - 0.5,
+			"Zaun-Befehl: Navigationsweg durch die Lücke (NavigationLink3D)", "vorher %.1f m, nachher %.1f m, Link %s" % [before, after, ("%s→%s" % [fc.nav_link.start_position, fc.nav_link.end_position]) if is_instance_valid(fc.nav_link) else "-"])
+		return
+	check(false, "Zaun-Befehl: kein zweites prüfbares Zaunfeld gefunden")
+
+
+static func _path_len(p: PackedVector3Array) -> float:
+	if p.size() < 2:
+		return INF
+	var l := 0.0
+	for i in p.size() - 1:
+		l += p[i].distance_to(p[i + 1])
+	return l
 
 
 static func _v3(s: String) -> Vector3:
@@ -344,6 +440,23 @@ func _doors() -> void:
 			if pc.interact_target == d:
 				d.set_meta("b017_stand", [_me.global_position, n])
 				break
+		# Rest 0.9.5: Doppeltür africa1 – direkt vor HL_DV14 (1,35 m, Blick zur Tür) wählt die Benutzen-Taste HL_DV14, nicht die
+		# 1 m entfernte seitliche Außentür HL_DV11
+		if String(k).contains("HL_DV14"):
+			var n14: Vector3 = st[1]
+			var ok14 := false
+			var seen14 := []
+			for side in [1.0, -1.0]:
+				_me.global_position = Vector3(st[2].x, st[0].y, st[2].z) - n14 * side * 1.35
+				_me.velocity = Vector3.ZERO
+				TestDoors.face(_me, n14 * side)
+				await frames(6)
+				pc._update_interact_target()
+				seen14.append(String(pc.interact_target.name) if pc.interact_target else "-")
+				ok14 = pc.interact_target == d
+				if ok14:
+					break
+			check(ok14, "Tür %s: Blick zur Tür wählt sie vor der nahen Außentür (Blickkegel)" % k, str(seen14))
 		var was_locked: bool = d.locked
 		if d.locked and d.key_item >= 0 and not d.lockpickable:
 			# Schlüsseltür (Original): Schlüssel liegt in der Welt – hier direkt ins Originalinventar

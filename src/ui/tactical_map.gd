@@ -280,7 +280,7 @@ func _targets() -> Array[Soldier]:
 func _unhandled_input(event: InputEvent) -> void:
 	if Net.is_online:
 		return       # Mehrspieler: keine pausierende Taktikkarte
-	if event.is_action_pressed("tactical_map"):
+	if event.is_action_pressed("tactical_map") or event.is_action_pressed("map"):   # B-015: KARTE öffnet dieselbe Karte
 		if is_open:
 			close()
 		elif not get_tree().paused:
@@ -311,6 +311,34 @@ func _unhandled_input(event: InputEvent) -> void:
 		_order(SquadBrain.Order.FOLLOW)
 	elif event.is_action_pressed("order_hold"):
 		_order(SquadBrain.Order.HOLD)
+	elif tac_key(event):
+		get_viewport().set_input_as_handled()
+
+
+## B-015: Original-Tasten des Taktik-Modus (Options.bin „profile“, Texte 7420–7449) → Knöpfe der Leiste bzw. Kamera.
+## Drehen/Neigen (7443–7447) entfällt: die Karte ist eine genordete Draufsicht (docs/status/backlog_b015.md).
+const TAC_BUTTONS := {"tac_regroup": "regroup", "tac_signal_1": "wait01", "tac_signal_2": "wait02", "tac_stand": "stay",
+	"tac_crouch": "kneel", "tac_prone": "lie", "tac_sprint": "sprint", "tac_run": "run", "tac_walk": "walk",
+	"tac_slow": "slow", "tac_passive": "passive", "tac_defensive": "defensive", "tac_aggressive": "aggresive",
+	"tac_delete": "delete", "tac_delete_all": "deleteall", "tac_options": "options", "tac_camera_move": "TMcamera"}
+const TAC_PAN := {"tac_cam_forward": Vector3(0, 0, -1), "tac_cam_backward": Vector3(0, 0, 1),
+	"tac_cam_left": Vector3(-1, 0, 0), "tac_cam_right": Vector3(1, 0, 0)}
+
+
+func tac_key(event: InputEvent) -> bool:
+	for a: String in TAC_BUTTONS:
+		if event.is_action_pressed(a):
+			press_button(TAC_BUTTONS[a])
+			return true
+	if event.is_action_pressed("tac_zoom_in") or event.is_action_pressed("tac_cam_down"):
+		_zoom_i = mini(_zoom_i + 1, ZOOMS.size() - 1)
+	elif event.is_action_pressed("tac_zoom_out") or event.is_action_pressed("tac_cam_up"):
+		_zoom_i = maxi(_zoom_i - 1, 0)
+	else:
+		return false
+	_update_camera()
+	_sync_buttons()
+	return true
 
 
 func open() -> void:
@@ -362,6 +390,9 @@ func _process(delta: float) -> void:
 	if Input.is_physical_key_pressed(KEY_S): pan.z += 1
 	if Input.is_physical_key_pressed(KEY_A): pan.x -= 1
 	if Input.is_physical_key_pressed(KEY_D): pan.x += 1
+	for a: String in TAC_PAN:
+		if Input.is_action_pressed(a):
+			pan += TAC_PAN[a]
 	if pan != Vector3.ZERO:
 		_center += pan.normalized() * ZOOMS[_zoom_i] * delta
 		_update_camera()

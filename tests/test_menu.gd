@@ -164,6 +164,30 @@ func _run() -> void:
 		"Taste neu belegt (Nachladen -> P)", InputSetup.binding_text("reload"))
 	check(menu.KEY_CATEGORIES.size() == 5 and menu.text(menu.KEY_CATEGORIES[4][0]) == menu.text(2456),
 		"Tastenbelegung: 5 Original-Kategorien (inkl. %s)" % menu.text(2456))
+	# B-015: alle Aktionen über die Unterseiten erreichbar, höchstens KEYS_PER_PAGE Zeilen je Seite
+	menu._keys_category = 0
+	menu._keys_part = 0
+	var shown := {}
+	var max_rows := 0
+	for _p in 30:
+		menu.show_menu("options")
+		await frames(2)
+		var rows := 0
+		for a: String in InputSetup.ACTIONS:
+			var kb = get_tree().root.find_child(("key_" + a).validate_node_name(), true, false)
+			if kb is Button and not kb.is_queued_for_deletion() and kb.is_inside_tree():
+				shown[a] = true
+				rows += 1
+		max_rows = maxi(max_rows, rows)
+		menu._keys_next_page()
+		if menu._keys_category == 0 and menu._keys_part == 0:
+			break
+	check(shown.size() == InputSetup.ACTIONS.size() and max_rows <= menu.KEYS_PER_PAGE,
+		"B-015: alle %d Aktionen auf den Belegungsseiten" % InputSetup.ACTIONS.size(), "%d gezeigt, max %d Zeilen" % [shown.size(), max_rows])
+	menu._keys_category = 0
+	menu._keys_part = 0
+	menu.show_menu("options")
+	await frames(2)
 	btn("bdefault2").pressed.emit()
 	await frames(2)
 	check(InputSetup.binding_text("move_forward").contains("Up") or InputSetup.binding_text("move_forward").contains("Oben")

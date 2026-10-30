@@ -2,6 +2,37 @@
 
 Versionierung: vorerst immer 0.9.x – jeder Commit nach GitHub zählt die letzte Stelle hoch und bekommt einen Tag.
 
+## 0.9.6 (30.10.2026)
+
+**Mehrspieler-Sicherheit und Stabilität (Code-Review)**
+- Server prüft alle Client-Meldungen selbst: Fahrzeuge nur vom Fahrer, Schüsse mit Waffenbesitz/Munition/Feuerrate/
+  Position, Bewegung plausibel (kein Teleport/Speedhack), Benutzen und Sitze mit Abstand/Belegung, ungültige
+  Waffen-IDs und doppelte Anmeldungen werden verworfen. Neue Protokollversion (ältere Versionen können nicht beitreten).
+- Profile: Testläufe löschen nur noch Testordner, Profilordner sind eindeutig.
+- Spielstände werden geprüft geladen und sicher gespeichert (Zwischendatei + Sicherung).
+- Zurückgesetzte Tastenbelegungen bleiben zurückgesetzt; VSync vereinheitlicht; „Gamma-Korrektur“ ist eine echte Gammakurve.
+
+**Spiel**
+- Drahtschere im Truppmenü: Kamerad schneidet den Zaun, KI nutzt danach die Lücke.
+- Haltende Kameraden laufen nach einer Aktion nicht mehr zurück; kein Ausweichen beim Soldatenwechsel.
+- Benutzen wählt das Objekt in Blickrichtung (Doppeltür africa1).
+- Ragdoll-Leichen liegen natürlicher (straffere Gelenke).
+- F3-Doppeldruck auch unter Last zuverlässig.
+- Original-Steuerung vervollständigt (36 Aktionen ergänzt, u. a. Aktionsmenü ', Ziele Komma, Pause P, Handbremse Alt,
+  Taktik-Tasten der Karte); eigene Verbesserungen bleiben. Belegungsseiten mit Unterseiten.
+- Gegner-KI in Originalmissionen: Sicht- und Hörformel, Granatregel und dritter KI-Modus („Zombie“) wie im Original.
+- Navigation: al1 stabil, NORWAY-Treppen teilweise verbessert.
+
+**Grafik und HUD**
+- Original-Schriften für Befehlsmenü, Waffenfeld, Meldungen und Ziele.
+- HUD: Befehls-/Feuerregel-Symbole je Kamerad, Kompass-Treffer/-Geräusch, Fortschrittsbalken (Arbeit, Verband, Atemluft),
+  Aktionssymbol, Kameradenname unter dem Fadenkreuz; lange Waffennamen werden gestaucht.
+- Burma: Regen statt Schnee (Original-Wetter); africa1-Intro: Soldaten sitzen auf der Bank.
+
+**Bekannt offen**
+- NORWAY: Stahltreppen fehlen im Navigationsnetz; weitere Karten mit Erreichbarkeitslücken (B-010b).
+- Kampftaktik (Deckung/Flanke/Rückzug) noch eigene Lösung.
+
 ## 0.9.5 (25.10.2026)
 
 **Level**

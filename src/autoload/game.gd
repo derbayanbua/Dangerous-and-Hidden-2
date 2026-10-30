@@ -208,8 +208,27 @@ func difficulty() -> int:
 	return int(profile.get("difficulty", 2))
 
 
+## F-012: Ordner je Profilname. Maßgeblich ist der Name in profile.json, nicht der bereinigte
+## Ordnername ("A?" und "A*" ergeben beide "A_"): neue Profile bekommen bei Kollision ein Suffix
+## (_2, _3 …), vorhandene Ordner werden unverändert weitergeladen (keine Migration).
+var _profile_folders := {}   ## Anzeigename -> Unterordner (Cache, von list_profiles aufgebaut)
+
+
 func profile_dir(n: String = profile_name) -> String:
-	return profiles_dir + "/" + _safe_name(n)
+	if not _memory_profile and not _profile_folders.has(n):
+		list_profiles()
+	return profiles_dir + "/" + String(_profile_folders.get(n, _safe_name(n)))
+
+
+## Freier Unterordner für einen neuen Profilnamen (ohne vorhandene Ordner anzutasten).
+func _new_profile_folder(n: String) -> String:
+	var base := _safe_name(n)
+	var cand := base
+	var i := 2
+	while DirAccess.dir_exists_absolute(profiles_dir + "/" + cand) or _profile_folders.values().has(cand):
+		cand = "%s_%d" % [base.substr(0, 36), i]
+		i += 1
+	return cand
 
 
 func save_dir() -> String:
@@ -229,15 +248,22 @@ func list_profiles() -> Array[String]:
 		if profile_name != "":
 			out.append(profile_name)
 		return out
+	_profile_folders = {}
 	var d := DirAccess.open(profiles_dir)
 	if d == null:
 		return out
-	for sub in d.get_directories():
+	var subs := Array(d.get_directories())
+	subs.sort()
+	for sub in subs:
 		var f := FileAccess.open(profiles_dir + "/" + sub + "/profile.json", FileAccess.READ)
 		if f:
 			var p = JSON.parse_string(f.get_as_text())
 			if typeof(p) == TYPE_DICTIONARY:
-				out.append(String(p.get("name", sub)))
+				var n := String(p.get("name", sub))
+				if _profile_folders.has(n):
+					continue   # gleicher Name zweimal (Altbestand): erster Ordner gilt
+				_profile_folders[n] = sub
+				out.append(n)
 	out.sort()
 	return out
 
@@ -253,6 +279,7 @@ func create_profile(n: String, diff: int = 2) -> bool:
 	game_mode = MODE_CAMPAIGN
 	_campaigns = {}
 	if not _memory_profile:
+		_profile_folders[n] = _new_profile_folder(n)   # F-012: eindeutiger Ordner
 		DirAccess.make_dir_recursive_absolute(profile_dir() + "/saves")
 		save_profile()
 	new_campaign()
@@ -287,8 +314,12 @@ func rename_profile(old: String, n: String) -> bool:
 	if n == "" or list_profiles().has(n) or not list_profiles().has(old):
 		return false
 	if not _memory_profile:
-		if DirAccess.rename_absolute(profile_dir(old), profile_dir(n)) != OK:
+		var src := profile_dir(old)
+		var folder := _new_profile_folder(n)
+		if DirAccess.rename_absolute(src, profiles_dir + "/" + folder) != OK:
 			return false
+		_profile_folders.erase(old)
+		_profile_folders[n] = folder
 	if old == profile_name:
 		profile_name = n
 		profile["name"] = n
@@ -310,6 +341,7 @@ func delete_profile(n: String) -> bool:
 		return false
 	if not _memory_profile:
 		_remove_dir(profile_dir(n))
+		_profile_folders.erase(n)
 	if n == profile_name:
 		profile_name = ""
 		profile = {}
@@ -359,14 +391,18 @@ func _remember_current() -> void:
 func _load_current_profile() -> void:
 	if cli.has("autoplay") and cli.has("profiles_dir"):
 		# Test mit echten Profildateien in einem eigenen, frisch geleerten Ordner (Start ohne Profil)
-		profiles_dir = String(cli["profiles_dir"])
-		_remove_dir(profiles_dir)   # danach normal weiter (Import, sofern nicht --noimport)
+		var want := String(cli["profiles_dir"])
+		if is_test_profiles_dir(want):
+			profiles_dir = want.trim_suffix("/")
+			_remove_dir(profiles_dir)   # danach normal weiter (Import, sofern nicht --noimport)
+		else:
+			# F-011: nur Testordner unterhalb user://test… werden geleert; alles andere abgelehnt →
+			# Profil nur im Speicher (es wird nichts gelöscht und nichts geschrieben)
+			push_error("--profiles_dir=%s abgelehnt: nur user://test… ist erlaubt (wird geleert)" % want)
+			_load_memory_profile()
+			return
 	elif cli.has("autoplay"):
-		_memory_profile = true
-		profile_name = "Test"
-		profile = {"name": "Test", "difficulty": int(cli.get("difficulty", "3")), "playtime": 0.0,
-			"kills": 0, "enemies_killed": 0, "shots": 0, "missions": 0}
-		campaign = {"unlocked": [CAMPAIGN_ORDER[0]], "completed": [], "fallen": []}
+		_load_memory_profile()
 		return
 	_import_orig_profiles()
 	var cur := ""
@@ -376,6 +412,30 @@ func _load_current_profile() -> void:
 		var all := list_profiles()
 		if not all.is_empty():
 			select_profile(all[0])
+
+
+## F-011: Testbasis für --autoplay + --profiles_dir. Erlaubt ist nur ein Ordner direkt oder tiefer unter
+## user:// dessen erste Pfadkomponente mit "test" beginnt; kein "..", kein absoluter Pfad, nicht die
+## echten Profile (user://profiles).
+const TEST_PROFILES_BASE := "user://"
+const TEST_PROFILES_PREFIX := "test"
+
+static func is_test_profiles_dir(path: String) -> bool:
+	if not path.begins_with(TEST_PROFILES_BASE) or path.contains("\\") or path.contains(".."):
+		return false
+	var rest := path.substr(TEST_PROFILES_BASE.length())
+	if rest == "" or rest.begins_with("/") or rest.contains(":") or rest.contains("//"):
+		return false
+	var first := rest.split("/")[0]
+	return first.length() > TEST_PROFILES_PREFIX.length() and first.to_lower().begins_with(TEST_PROFILES_PREFIX)
+
+
+func _load_memory_profile() -> void:
+	_memory_profile = true
+	profile_name = "Test"
+	profile = {"name": "Test", "difficulty": int(cli.get("difficulty", "3")), "playtime": 0.0,
+		"kills": 0, "enemies_killed": 0, "shots": 0, "missions": 0}
+	campaign = {"unlocked": [CAMPAIGN_ORDER[0]], "completed": [], "fallen": []}
 
 
 func _use_profile_options() -> void:
@@ -1379,12 +1439,11 @@ func save_game(slot: String = "quick") -> bool:
 		"state": state,
 	}
 	DirAccess.make_dir_recursive_absolute(save_dir())
-	var f := FileAccess.open(save_path(slot), FileAccess.WRITE)
-	if f == null:
+	var err := write_file_atomic(save_path(slot), JSON.stringify(data, "\t"))
+	if err != OK:
 		saves_used -= 1
-		push_error("Speichern fehlgeschlagen: %s" % error_string(FileAccess.get_open_error()))
+		push_error("Speichern fehlgeschlagen: %s" % error_string(err))
 		return false
-	f.store_string(JSON.stringify(data, "\t"))
 	if has_profile():
 		profile["last_save"] = slot
 		profile["last_save_text"] = "%s$%s$%s" % [mode_title(), data["title"], data["timestamp"]]
@@ -1403,6 +1462,8 @@ func has_save(slot: String = "quick") -> bool:
 func delete_save(slot: String) -> void:
 	if has_save(slot):
 		DirAccess.remove_absolute(save_path(slot))
+		if FileAccess.file_exists(save_path(slot) + ".bak"):
+			DirAccess.remove_absolute(save_path(slot) + ".bak")
 
 
 ## Spielstandliste des Profils (neueste zuerst): [{slot, title, mode_title, timestamp, mission}]
@@ -1440,9 +1501,14 @@ func load_game(slot: String = "quick") -> bool:
 		Events.say("Kein Spielstand vorhanden.")
 		return false
 	var data = JSON.parse_string(FileAccess.get_file_as_string(save_path(slot)))
-	if typeof(data) != TYPE_DICTIONARY or not MISSIONS.has(data.get("mission", "")):
-		push_error("Spielstand beschädigt: %s" % slot)
+	var why := validate_save_data(data)
+	if why != "":
+		# F-013: kontrollierter Ladefehler, Spielstand und laufendes Spiel bleiben unangetastet
+		push_warning("Spielstand %s beschädigt: %s" % [slot, why])
+		last_load_error = why
+		Events.say("Spielstand beschädigt (%s)." % why, 3.0)
 		return false
+	last_load_error = ""
 	# Spielmodus des Spielstands herstellen (Modus-Slot)
 	var m := int(data.get("mode", game_mode))
 	var single := bool(data.get("single", false))
@@ -1459,6 +1525,70 @@ func consume_pending_load() -> Dictionary:
 	var d := pending_load
 	pending_load = {}
 	return d
+
+
+var last_load_error := ""   ## Text des letzten Ladefehlers (F-013, für Tests/Anzeige)
+
+## F-013: Wurzel, Pflichtfelder und Typen eines Spielstands prüfen. "" = in Ordnung, sonst Fehlertext.
+func validate_save_data(data) -> String:
+	if typeof(data) != TYPE_DICTIONARY:
+		return "keine JSON-Wurzel (Objekt erwartet)"
+	if not data.has("mission") or typeof(data["mission"]) != TYPE_STRING:
+		return "Feld 'mission' fehlt oder ist kein Text"
+	if not MISSIONS.has(String(data["mission"])):
+		return "unbekannte Mission '%s'" % data["mission"]
+	if not data.has("state") or typeof(data["state"]) != TYPE_DICTIONARY:
+		return "Feld 'state' fehlt oder ist kein Objekt"
+	if data.has("mode") and not (typeof(data["mode"]) in [TYPE_INT, TYPE_FLOAT]):
+		return "Feld 'mode' ist keine Zahl"
+	if data.has("single") and typeof(data["single"]) != TYPE_BOOL:
+		return "Feld 'single' ist kein Wahrheitswert"
+	if data.has("version") and not (typeof(data["version"]) in [TYPE_INT, TYPE_FLOAT]):
+		return "Feld 'version' ist keine Zahl"
+	var st: Dictionary = data["state"]
+	for k in ["_saves_used"]:
+		if st.has(k) and not (typeof(st[k]) in [TYPE_INT, TYPE_FLOAT]):
+			return "Feld 'state.%s' ist keine Zahl" % k
+	if st.has("_diary") and typeof(st["_diary"]) != TYPE_ARRAY:
+		return "Feld 'state._diary' ist keine Liste"
+	return ""
+
+
+## F-014: Text atomar schreiben. Erst <path>.tmp schreiben und zurücklesen, dann den alten Stand als
+## <path>.bak sichern und die Zieldatei ersetzen. DirAccess.rename überschreibt unter Windows keine
+## vorhandene Datei → Ziel erst nach erfolgreicher Sicherung entfernen; schlägt das Umbenennen fehl,
+## wird die Sicherung zurückkopiert.
+static func write_file_atomic(path: String, text: String) -> Error:
+	var tmp := path + ".tmp"
+	var bak := path + ".bak"
+	var f := FileAccess.open(tmp, FileAccess.WRITE)
+	if f == null:
+		return FileAccess.get_open_error()
+	f.store_string(text)
+	var werr := f.get_error()
+	f.close()
+	if werr != OK or FileAccess.get_file_as_string(tmp) != text:
+		DirAccess.remove_absolute(tmp)
+		return werr if werr != OK else ERR_FILE_CORRUPT
+	var had_old := FileAccess.file_exists(path)
+	if had_old:
+		if FileAccess.file_exists(bak):
+			DirAccess.remove_absolute(bak)
+		var cerr := DirAccess.copy_absolute(path, bak)
+		if cerr != OK:
+			DirAccess.remove_absolute(tmp)
+			return cerr
+		var rerr := DirAccess.remove_absolute(path)
+		if rerr != OK:
+			DirAccess.remove_absolute(tmp)
+			return rerr
+	var mv := DirAccess.rename_absolute(tmp, path)
+	if mv != OK:
+		if had_old:
+			DirAccess.copy_absolute(bak, path)
+		DirAccess.remove_absolute(tmp)
+		return mv
+	return OK
 
 
 # --- Testunterstützung ----------------------------------------------------

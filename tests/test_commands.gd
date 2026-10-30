@@ -514,6 +514,12 @@ func _b019(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadManager, l
 	check(cm.target_line() == e.soldier_name, "Aktion: Zeile 2 = Name des Gegners")
 	await key(KEY_0)
 	await key(KEY_0)
+	# B-015: Original AKTIONSMENÜ (Taste ') öffnet „Befehl an alle“ direkt im Untermenü Aktion
+	await tap("action_menu")
+	check(cm.is_open and cm.menu_id == 53 and cm.entries[0][0] == 7045, "B-015 AKTIONSMENÜ: direkt im Untermenü Aktion",
+		"offen %s Menü %d" % [cm.is_open, cm.menu_id])
+	await key(KEY_0)
+	await key(KEY_0)
 	eb.surrendered = true
 	var mate := sq.members[1]
 	place(mate, 4, 26, 0.0)
@@ -549,6 +555,14 @@ func _b019(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadManager, l
 		and absf(r.size.y / vs.y - 0.284) < 0.01, "Menü im Original-Frame „rollmenu“ (x 0–0,226, y 0,603–0,887)", str(r))
 	if FileAccess.file_exists(OrigLevel.cache_root() + "/ui/hud/textures/x_mo2.png"):
 		check(cm.rollmenu_tex != null, "Hintergrund = Originaltextur x_mo2 (gameinterface.4ds)")
+	if OrigFonts.available():
+		# B-003: Originalschrift und Stilfarben (hd2.exe 0x641E30: 0x33 schwarz, 0x34 schwarz Alpha 0x60, 0x35 rot)
+		var live := cm._box.get_children().filter(func(c): return not c.is_queued_for_deletion())
+		var it0: Label = live[2] if live.size() > 2 else null      # Titel, Zielzeile, dann Eintrag 1
+		var col := it0.get_theme_color("font_color") if it0 else Color.WHITE
+		check(cm.orig_font and it0 != null and it0.get_theme_font("font") is FontFile
+			and (col.is_equal_approx(Color.BLACK) or col.is_equal_approx(Color(1, 0, 0)) or absf(col.a - 0x60 / 255.0) < 0.01),
+			"Befehlsmenü in Originalschrift/-farbe (Stile 0x2F–0x35)", str(col))
 	await key(KEY_0)
 	# Taktik-Plan: Befehl „an alle“ erreicht nur Soldaten ohne Plan (0x456020)
 	var two := sq.members[1]
