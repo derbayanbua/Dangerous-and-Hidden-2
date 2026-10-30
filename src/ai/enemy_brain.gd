@@ -46,6 +46,7 @@ var move_fire_range := 35.0
 # --- Steuerung durch Original-Skripte (LsRuntime) ---
 var runtime: Node                 ## LsRuntime, falls die Mission Originalskripte nutzt
 var script_control := false       ## HUMAN_SETAIMODE_Zombie: nur Skript, keine eigene Taktik
+var zombie_mode := false          ## B-021: Original-Modus 0x400 (Zombie): Leine min(Sicht/3; 25) m, Suche 7–12 s
 var suspended := false            ## HUMAN_Suspend(true)
 var script_alarm_enabled := true  ## SetAlarmType(…, true/false)
 var script_stance := -1
@@ -187,12 +188,23 @@ func leave_script_control() -> void:
 ## Aktionsradius um den Posten (hd2.exe 0x5478C0 speichert die Startlage in KI +0x180; Radius KI +0x1A4) [B Werte]:
 ## Aggressiv (Flag 0x100, 0x547AD0) 100000 = unbegrenzt; Defensiv (0x200, Standard ohne Modus, 0x547AF0)
 ## min(Sichtweite/2, 50) m; dritter Modus (0x400, 0x547BF0) min(Sichtweite/3, 25) m. Deutung „Leine um den Posten“ [P].
+## B-021: der dritte Modus 0x400 ist HUMAN_SETAIMODE_Zombie – Skriptdispatcher 0x421C00, Opcode 0xCF (Namenstabelle
+## 0x835F40) → 0x4225D3 push 0x400 → 0x5AF3F0 → 0x558400 → 0x547BF0 [B]. Opcode 0xCD Aggressive = 0x100, 0xCE Defensive = 0x200.
 func leash_radius() -> float:
 	# nur Originalmissionen (LsRuntime); eigene Übungseinsätze und MP-Bots behalten ihr bisheriges Verhalten
-	if ai_mode == Mode.AGGRESSIVE or runtime == null or Net.is_online:
+	if not _orig_rules():
 		return INF
 	var sight := float(soldier.get_meta("orig_params", {}).get("sight_range", _base_sight))
+	if zombie_mode:
+		return minf(sight / 3.0, 25.0)
+	if ai_mode == Mode.AGGRESSIVE:
+		return INF
 	return minf(sight * 0.5, 50.0)
+
+
+## Original-KI-Regeln (Leine, Suchzeit, Wahrnehmungsformel, Granatbedingung) nur für Originalmissionen offline.
+func _orig_rules() -> bool:
+	return runtime != null and not Net.is_online
 
 
 func _in_leash(p: Vector3) -> bool:
@@ -273,6 +285,8 @@ func setup(s: Soldier) -> void:
 func _physics_process(delta: float) -> void:
 	if not enabled or soldier == null or not soldier.alive:
 		return
+	if perception:
+		perception.orig_formula = _orig_rules()   # B-021: Wahrnehmungsformel des Originals nur in Originalmissionen offline
 	if surrendered or captured:
 		_surrender_tick(delta)
 		return
@@ -454,7 +468,11 @@ func _combat(delta: float) -> void:
 	# Vor der Deckungslogik, damit auch auf dem Weg in Deckung geworfen wird.
 	_grenade_cd = maxf(_grenade_cd - delta, 0.0)
 	var tdist := distance_to(tpos)
-	if _no_los_time > 2.0 and _grenade_cd <= 0.0 and tdist > 8.0 and tdist < 32.0 and not stationary:
+	# B-021 Originalmissionen: hd2.exe 0x552200 erlaubt den Wurf erst ab 20 m und nur bei fast gleicher Höhe
+	# (|Δy|/Abstand < sin 10° = 0,1736) [B]; Obergrenze 32 m und Abklingzeit bleiben [E].
+	var min_gren := 20.0 if _orig_rules() else 8.0
+	var level_ok := not _orig_rules() or absf(tpos.y - soldier.global_position.y) < 0.1736 * maxf(tdist, 0.1)
+	if _no_los_time > 2.0 and _grenade_cd <= 0.0 and tdist > min_gren and tdist < 32.0 and level_ok and not stationary:
 		_grenade_cd = randf_range(12.0, 20.0)
 		if throw_grenade_at(tpos):
 			stop_moving()
@@ -546,9 +564,13 @@ func _search(delta: float) -> void:
 			# zufälliger Punkt um die letzte bekannte Position (HUMAN_MoveRandomRadius)
 			var p := investigate_pos + Vector3(randf_range(-10, 10), 0, randf_range(-10, 10))
 			move_to(_leash_clamp(p), Soldier.MoveMode.WALK)
-	# Suchdauer: Originalmissionen defensiv 20–30 s (KI +0x194 = rand·10 + 20, 0x547AF0) [B Wert, P Deutung], sonst 40 s
+	# Suchdauer: Originalmissionen defensiv 20–30 s (KI +0x194 = rand·10 + 20, 0x547AF0), Zombie 7–12 s
+	# (rand·5 + 7, 0x547BF0) [B Wert, P Deutung], sonst 40 s
 	if _search_limit < 0.0:
-		_search_limit = randf_range(20.0, 30.0) if leash_radius() != INF else 40.0
+		if _orig_rules() and zombie_mode:
+			_search_limit = randf_range(7.0, 12.0)
+		else:
+			_search_limit = randf_range(20.0, 30.0) if leash_radius() != INF else 40.0
 	if _state_time > _search_limit:
 		_search_limit = -1.0
 		search_time = 0.0

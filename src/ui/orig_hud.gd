@@ -138,6 +138,9 @@ func setup(m: Mission) -> void:
 		add_child(al)
 		ammo_labels[key] = al
 	_ammo = ammo_labels["hands"]
+	_build_extras(spec)
+	Events.soldier_damaged.connect(_on_soldier_damaged)
+	Events.noise_emitted.connect(_on_noise)
 	resized.connect(_layout)
 	_layout()
 
@@ -230,7 +233,10 @@ func _layout() -> void:
 		n.size = rr.size
 		n.pivot_offset = rr.size * 0.5
 		e["screen"] = rr
-	if elements.has("tabl02"):
+	_layout_extras()
+	if elements.has("tabl02") and OrigFonts.available():
+		_layout_ammo_orig(elements["tabl02"]["screen"])
+	elif elements.has("tabl02"):
 		var tr: Rect2 = elements["tabl02"]["screen"]
 		for key in AMMO_LINES:
 			var a: Array = AMMO_LINES[key]
@@ -238,6 +244,37 @@ func _layout() -> void:
 			al.position = tr.position + Vector2(a[0] * tr.size.x, a[1] * tr.size.y)
 			al.size = Vector2((a[2] - a[0]) * tr.size.x, (a[3] - a[1]) * tr.size.y)
 			al.add_theme_font_size_override("font_size", maxi(8, int(round(tr.size.y * float(a[5])))))
+
+
+## B-003: Textblock tabl02 mit Original-Textstilen 0x36–0x39 (hd2.exe 0x641E30, Zuordnung 0x4A91BA ff. [B]): Schrift
+## SMALL, schwarz, Höhe 0,015/0,025/0,018/0,018 der Bildhöhe, Ankerpunkt x/y als Anteil des Feldrechtecks
+## (Name 0,05/0,59 links, Hand 0,2/0,45 links, Schulter 0,95/0,44 rechts, Granaten 0,95/0,165 rechts).
+## y = Unterkante der Zeile [P] (passt zu Patronen-/Granatensymbol und Trennlinie der Feldgrafik).
+const AMMO_STYLES := {"name": OrigFonts.ST_HUD_NAME, "hands": OrigFonts.ST_HUD_HANDS,
+	"shoulder": OrigFonts.ST_HUD_SHOULDER, "grenades": OrigFonts.ST_HUD_GRENADES}
+var orig_font := false             ## Tests: Originalschrift aktiv
+
+
+func _layout_ammo_orig(tr: Rect2) -> void:
+	var vs := size
+	for key in AMMO_STYLES:
+		var sid: int = AMMO_STYLES[key]
+		var al: Label = ammo_labels[key]
+		if not OrigFonts.apply(al, sid, vs.y, vs.x):
+			continue
+		orig_font = true
+		var st := OrigFonts.style(sid)
+		var px := float(OrigFonts.style_px(sid, vs.y)) * 1.15
+		var ax := tr.position.x + float(st.get("x", 0.0)) * tr.size.x
+		var ay := tr.position.y + float(st.get("y", 0.0)) * tr.size.y
+		var right := int(st.get("halign", 1)) == 3
+		al.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT if right else HORIZONTAL_ALIGNMENT_LEFT
+		al.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+		var w := (ax - tr.position.x) if right else (tr.end.x - ax)
+		if key == "name":
+			w = tr.size.x * 0.55        # Name endet vor der Schulter-Munition derselben Zeile (abgeschnitten)
+		al.position = Vector2(ax - w if right else ax, ay - px)
+		al.size = Vector2(w, px)
 
 
 func _show_el(nm: String, visible_: bool) -> void:
@@ -281,8 +318,9 @@ func _process(delta: float) -> void:
 		# grau hinterlegtes Feld = markierter Kamerad (Einzelauswahl 1–4, B-012; Frame select* aus gameinterface.4ds)
 		_show_el("select" + sfx if i > 0 else "select", used and m.alive and m != active and sq.is_selected(m))
 		_show_el("AImode" + sfx, used and m.alive and m != active)
-		for nm in ["mind", "command", "ear", "silence", "medic", "healthcr"]:
+		for nm in ["ear", "healthcr"]:
 			_show_el(nm + sfx, false)
+		_update_state_icons(i, m, m == active)
 		_show_el("healthbar" + (sfx if i > 0 else ""), false)
 		_show_el("staminabar" + sfx if i > 0 else "staminabar", false)
 		_show_el("disguisebar" + sfx if i > 0 else "disguisebar", false)
@@ -306,6 +344,10 @@ func _process(delta: float) -> void:
 				photo["face"] = want
 				(photo["node"] as TextureRect).texture = _load(want)
 	_update_injury(active, delta)
+	_update_sectors(delta)
+	_update_progress(active)
+	_update_action_icon(active)
+	_update_cross_name(active)
 	_timer_acc -= delta
 	if _timer_acc <= 0.0:
 		_timer_acc = 0.25           # Zeitzünder-Liste viermal je Sekunde (Baumsuche)
@@ -341,9 +383,6 @@ func _process(delta: float) -> void:
 	# --- Kompass: Ziffernblatt dreht gegen die Blickrichtung, Nadel zeigt nach oben ---
 	if elements.has("kmpscvr"):
 		(elements["kmpscvr"]["node"] as Control).rotation = active.look_yaw
-	for i in 8:
-		_show_el("kmps_rd%02d" % i, false)
-		_show_el("kmps_bl%02d" % i, false)
 	_update_compass_dots(active, delta)
 	# --- rechtes Feld: Gegenstand in der Hand / auf der Schulter mit Munition (0x4A9530) ---
 	_update_weapon_panel(active)
@@ -591,11 +630,31 @@ func _update_weapon_panel(s: Soldier) -> void:
 	shoulder_item = weapon_item(sw, s.team)
 	_item_icon("i_hands", hands_item)
 	_item_icon("i_shoulder", shoulder_item)
-	(ammo_labels["name"] as Label).text = name_txt
+	_fit_label(ammo_labels["name"] as Label, name_txt)
 	(ammo_labels["hands"] as Label).text = hand_txt
 	(ammo_labels["shoulder"] as Label).text = ammo_text(sw)
 	var g: Weapon = s.weapons[WeaponData.Slot.GRENADE] if s.weapons.size() > WeaponData.Slot.GRENADE else null
 	(ammo_labels["grenades"] as Label).text = "%d" % (g.total_ammo() if g else 0)
+
+
+## Text setzen und waagerecht stauchen, wenn er breiter als das Feld ist (Original-Bitmapschrift ist breiter als die alte
+## Schrift → „M1 Thc…“ statt „M1 Thompson“). Stauchen statt Abschneiden [D]; ab 60 % Breite wird zusätzlich abgeschnitten.
+func _fit_label(al: Label, txt: String) -> void:
+	al.text = txt
+	if al.scale != Vector2.ONE and al.has_meta("fit_base_w"):
+		al.size.x = float(al.get_meta("fit_base_w"))   # vorheriges Stauchen zurücknehmen
+	al.scale = Vector2.ONE
+	var f := al.get_theme_font("font")
+	if f == null or al.size.x <= 1.0:
+		return
+	var w := f.get_string_size(txt, HORIZONTAL_ALIGNMENT_LEFT, -1, al.get_theme_font_size("font_size")).x
+	if w <= al.size.x:
+		return
+	var k := maxf(0.6, al.size.x / w)
+	var base := al.size.x
+	al.size.x = base / k            # Feld rechnerisch verbreitern, dann auf die Originalbreite stauchen
+	al.scale = Vector2(k, 1.0)
+	al.set_meta("fit_base_w", base)
 
 
 ## Symbol eines Originalgegenstands (items.sav „icon“: Waffen wi_*, Hilfsmittel ii_*; Inventarbilder aus
@@ -638,3 +697,297 @@ func _icon(nm: String, w: Weapon) -> void:
 ## Symboldatei eines Feldes (Tests): "" = leere Blase.
 func icon_of(nm: String) -> String:
 	return String((elements.get(nm, {}) as Dictionary).get("icon", ""))
+
+
+# =====================================================================================================================
+# B-003: fehlende Original-Elemente (Belege/Status je Element in docs/status/backlog_b003.md)
+# =====================================================================================================================
+
+## Befehls-/Stimmungssymbole je Soldatenfeld (command*/mind*, Texturen der Vorlagen playerstate1_*/playerstate2_*,
+## FUN_004b30e0 [B]). Zuordnung Befehl/Feuerregel → Symbol [P]: Folgen i_regrp (ps1_19), Halten i_guard (ps1_11),
+## Bewegen i_move (ps1_10), Deckung i_kneel (ps1_17); Feuer frei i_aggres (ps2_11), Feuer halten i_passiv (ps2_09),
+## auf mein Kommando i_defens (ps2_10). silence* = Schalldämpferwaffe [P], medic* = legt Verband an / wird verbunden [P].
+const COMMAND_ICONS := {SquadBrain.Order.FOLLOW: "textures/i_regrp.png", SquadBrain.Order.HOLD: "textures/i_guard.png",
+	SquadBrain.Order.MOVE: "textures/i_move.png", SquadBrain.Order.COVER: "textures/i_kneel.png"}
+const MIND_ICONS := {SquadBrain.ROE.FIRE_AT_WILL: "textures/i_aggres.png", SquadBrain.ROE.HOLD_FIRE: "textures/i_passiv.png",
+	SquadBrain.ROE.ON_MY_LEAD: "textures/i_defens.png"}
+## Kontextaktion am Fadenkreuz (Vorlagen action00–37, 0x49B730 [B] Texturen; Auswahl nach Zieltyp [P], Lage [?]).
+var action_icon: TextureRect
+var action_icon_file := ""                ## Tests: aktuelles Aktionssymbol ("" = keins)
+## Fortschrittsbalken (Gruppe progress: prgbrbk/prgbr01/shadow05/progress_name [B Namen]; Lage im Modell außerhalb des
+## Bildes → waagerecht mittig, Höhe aus dem Modell [P]). Zeigt Arbeit (Entschärfen, Schloss, Zaun …), Verband und – Ergänzung
+## [E] – die Restluft beim Tauchen (Original-Anzeige der Luft nicht gefunden).
+var progress_value := -1.0                ## Tests: 0..1, −1 = aus
+var progress_text := ""
+var _prog_nodes := {}
+
+
+## true, wenn der Original-Fortschrittsbalken (prgbr01) gebaut ist – hud.gd zeigt dann keine eigene Textzeile.
+func has_progress_bar() -> bool:
+	return _prog_nodes.has("prgbr01") and _prog_nodes["prgbr01"].has("node")
+var _prog_label: Label
+## Kompass-Sektoren (FUN_004947e0 [B]: Zähler 500 je Sektor, Abbau, Deckkraft ∝ Zähler). Auslöser [P]: rot = Treffer am
+## aktiven Soldaten aus dieser Richtung, blau = gehörter Schuss/Explosion (nicht vom eigenen Trupp).
+var sector_rd: Array[float] = [0, 0, 0, 0, 0, 0, 0, 0]
+var sector_bl: Array[float] = [0, 0, 0, 0, 0, 0, 0, 0]
+const SECTOR_TIME := 0.5
+## cross_name (Gruppe crosshair [B]): Name des Kameraden unter dem Fadenkreuz [P].
+var _cross_label: Label
+var cross_name_text := ""
+
+
+func _build_extras(spec: Dictionary) -> void:
+	action_icon = TextureRect.new()
+	action_icon.name = "ActionIcon"
+	action_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	action_icon.stretch_mode = TextureRect.STRETCH_SCALE
+	action_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	action_icon.visible = false
+	add_child(action_icon)
+	for e in spec.get("elements", []):
+		var en := String(e.get("name", ""))
+		if en in ["shadow05", "prgbrbk", "prgbr01"] and e.get("rect") is Array:
+			var tex := _atlas(String(e.get("texture", "")), e["uv_px"] if e.get("uv_px") is Array else [])
+			var tr := TextureRect.new()
+			tr.name = "Progress_" + en
+			tr.texture = tex
+			tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			tr.stretch_mode = TextureRect.STRETCH_SCALE
+			tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			tr.visible = false
+			add_child(tr)
+			_prog_nodes[en] = {"node": tr, "rect": e["rect"]}
+		elif en == "progress_name" and e.get("rect") is Array:
+			_prog_nodes[en] = {"rect": e["rect"]}
+	_prog_label = Label.new()
+	_prog_label.name = "ProgressName"
+	_prog_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_prog_label.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM
+	_prog_label.add_theme_color_override("font_color", Color(0.95, 0.92, 0.8))
+	_prog_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_prog_label.visible = false
+	add_child(_prog_label)
+	_cross_label = Label.new()
+	_cross_label.name = "CrossName"
+	_cross_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_cross_label.add_theme_color_override("font_color", Color(0.95, 0.92, 0.8))
+	_cross_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cross_label.visible = false
+	add_child(_cross_label)
+	# Schatten zuerst (hinten), dann Hintergrund, dann Füllung
+	for nm in ["shadow05", "prgbrbk", "prgbr01"]:
+		if _prog_nodes.has(nm):
+			move_child(_prog_nodes[nm]["node"], get_child_count() - 1)
+	move_child(_prog_label, get_child_count() - 1)
+
+
+## Lage der Ergänzungen; Fortschrittsgruppe waagerecht um die Bildmitte verschoben (Modell-x ≈ −0,36…−0,13).
+func _layout_extras() -> void:
+	var shift := 0.0
+	if _prog_nodes.has("prgbrbk"):
+		var r: Array = _prog_nodes["prgbrbk"]["rect"]
+		shift = 0.5 - (float(r[0]) + float(r[2])) * 0.5
+	for nm in _prog_nodes:
+		var r: Array = _prog_nodes[nm]["rect"]
+		var rr := screen_rect([float(r[0]) + shift, r[1], float(r[2]) + shift, r[3]], "center")
+		_prog_nodes[nm]["screen"] = rr
+		if _prog_nodes[nm].has("node"):
+			var n: Control = _prog_nodes[nm]["node"]
+			n.position = rr.position
+			n.size = rr.size
+	if _prog_nodes.has("progress_name"):
+		var pr: Rect2 = _prog_nodes["progress_name"]["screen"]
+		_prog_label.position = pr.position
+		_prog_label.size = pr.size
+		if not OrigFonts.apply(_prog_label, 0x2E, size.y, size.x):
+			_prog_label.add_theme_font_size_override("font_size", maxi(10, int(pr.size.y * 0.8)))
+		_prog_label.add_theme_color_override("font_color", Color(0.95, 0.92, 0.8))   # hell auf dem Spielbild [E]
+	var cn := screen_rect([0.36479, 0.51437, 0.6352, 0.53445], "center")      # cross_name (hud_spec)
+	_cross_label.position = cn.position
+	_cross_label.size = cn.size
+	if not OrigFonts.apply(_cross_label, 0x2E, size.y, size.x):
+		_cross_label.add_theme_font_size_override("font_size", maxi(10, int(cn.size.y * 0.8)))
+	_cross_label.add_theme_color_override("font_color", Color(0.95, 0.92, 0.8))
+	# Aktionssymbol: 32×32-Vorlage links neben dem Hinweistext unter dem Fadenkreuz (Lage [?], Größe wie mind*/command*)
+	var ic := screen_rect([0.0, 0.0, 0.03128, 0.04132], "center").size
+	action_icon.size = ic
+	action_icon.position = Vector2(size.x * 0.5 - ic.x * 0.5, size.y * 0.5 + ic.y * 0.9)
+
+
+func _set_tex(nm: String, file: String) -> void:
+	if not elements.has(nm):
+		return
+	var e: Dictionary = elements[nm]
+	if e.get("state_tex", "") == file:
+		return
+	e["state_tex"] = file
+	(e["node"] as TextureRect).texture = _load(file) if file != "" else null
+
+
+func _update_state_icons(i: int, m: Soldier, is_active: bool) -> void:
+	var sfx := "%02d" % i
+	if m == null:
+		for nm in ["command", "mind", "silence", "medic"]:
+			_show_el(nm + sfx, false)
+		return
+	var b: SquadBrain = mission.squad.brain_of(m) if mission and mission.squad else null
+	var show := m.alive and not is_active and b != null
+	_show_el("command" + sfx, show)
+	_show_el("mind" + sfx, show)
+	if show:
+		_set_tex("command" + sfx, String(COMMAND_ICONS.get(b.order, "textures/i_guard.png")))
+		_set_tex("mind" + sfx, String(MIND_ICONS.get(b.roe, "textures/i_defens.png")))
+	var w := m.current_weapon() if m.alive else null
+	_show_el("silence" + sfx, m.alive and w != null and CommandMenu.has_silenced(m) and w.data.noise_radius < 20.0)
+	_show_el("medic" + sfx, m.alive and m.heal_time_left > 0.0)
+
+
+## Richtungssektor 0–7 relativ zur Blickrichtung: aus der Lage der Sektorgrafiken um die Kompassmitte (Bildwinkel).
+func _sector_of(world_pos: Vector3, ring: String) -> int:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null or not elements.has("kmpscvr"):
+		return -1
+	var rel := world_pos - cam.global_position
+	var fwd := Vector3(-cam.global_basis.z.x, 0.0, -cam.global_basis.z.z).normalized()
+	var right := Vector3(cam.global_basis.x.x, 0.0, cam.global_basis.x.z).normalized()
+	var v := Vector2(rel.dot(right), -rel.dot(fwd))       # Bild: x rechts, y unten (vorn = oben)
+	if v.length() < 0.01:
+		return -1
+	var c: Vector2 = (elements["kmpscvr"]["screen"] as Rect2).get_center()
+	var best := -1
+	var best_d := 10.0
+	for k in 8:
+		var nm := "kmps_%s%02d" % [ring, k]
+		if not elements.has(nm):
+			continue
+		var d := (elements[nm]["screen"] as Rect2).get_center() - c
+		var a := absf(angle_difference(d.angle(), v.angle()))
+		if a < best_d:
+			best_d = a
+			best = k
+	return best
+
+
+func _on_soldier_damaged(s: Node, _amount: float, _zone: StringName, attacker: Node) -> void:
+	var active: Soldier = mission.controller.active if mission and mission.controller else null
+	if s != active or not (attacker is Node3D) or not is_instance_valid(attacker) or attacker == s:
+		return
+	var k := _sector_of((attacker as Node3D).global_position, "rd")
+	if k >= 0:
+		sector_rd[k] = SECTOR_TIME
+
+
+func _on_noise(pos: Vector3, radius: float, source: Node, team: int, kind: StringName) -> void:
+	var active: Soldier = mission.controller.active if mission and mission.controller else null
+	if active == null or not is_instance_valid(active) or source == active:
+		return
+	if team == active.team or not (kind in [&"shot", &"gunshot", &"explosion", &"grenade"]):
+		return
+	if active.global_position.distance_to(pos) > radius:
+		return
+	var k := _sector_of(pos, "bl")
+	if k >= 0:
+		sector_bl[k] = SECTOR_TIME
+
+
+func _update_sectors(delta: float) -> void:
+	for k in 8:
+		sector_rd[k] = maxf(sector_rd[k] - delta, 0.0)
+		sector_bl[k] = maxf(sector_bl[k] - delta, 0.0)
+		for pair in [["kmps_rd%02d" % k, sector_rd[k]], ["kmps_bl%02d" % k, sector_bl[k]]]:
+			if elements.has(pair[0]):
+				var n: Control = elements[pair[0]]["node"]
+				n.visible = float(pair[1]) > 0.0
+				n.modulate.a = clampf(float(pair[1]) / SECTOR_TIME, 0.0, 1.0)
+
+
+func _update_progress(s: Soldier) -> void:
+	progress_value = -1.0
+	progress_text = ""
+	if s != null and s.alive:
+		if s.work_left > 0.0 and s.work_total > 0.0:
+			progress_value = 1.0 - s.work_left / s.work_total
+			progress_text = s.work_label
+		elif s.heal_time_left > 0.0:
+			progress_value = 1.0 - clampf(s.heal_time_left / 4.0, 0.0, 1.0)
+			progress_text = SAS.item_label(54) if SAS.available() else "Verband"
+		elif s.swimming and s.head_under_water() and s.air < Soldier.AIR_MAX - 0.05:
+			progress_value = clampf(s.air / Soldier.AIR_MAX, 0.0, 1.0)
+			progress_text = tr("Luft")
+	var on := progress_value >= 0.0
+	for nm in _prog_nodes:
+		if _prog_nodes[nm].has("node"):
+			(_prog_nodes[nm]["node"] as Control).visible = on
+	_prog_label.visible = on and progress_text != ""
+	_prog_label.text = progress_text
+	if on and _prog_nodes.has("prgbr01") and _prog_nodes["prgbr01"].has("screen"):
+		var full: Rect2 = _prog_nodes["prgbr01"]["screen"]
+		var n: Control = _prog_nodes["prgbr01"]["node"]
+		n.position = full.position
+		n.size = Vector2(full.size.x * clampf(progress_value, 0.0, 1.0), full.size.y)
+
+
+## Aktionssymbol zum Benutzen-Ziel (Texturnamen der Vorlagen [B], Zuordnung [P]).
+static func action_icon_for(t: Object) -> String:
+	if t == null or not is_instance_valid(t):
+		return ""
+	var cn := ""
+	var sc: Script = t.get_script()
+	while sc and cn == "":
+		cn = String(sc.get_global_name())
+		sc = sc.get_base_script()
+	var p := String(t.get("prompt")) if "prompt" in t else ""
+	if t is OrigInteractive.OrigDoor or t is Door:
+		if bool(t.get("locked")) if "locked" in t else false:
+			return "textures/i_lckpck.png"
+		return "textures/i_close.png" if bool(t.get("is_open")) else "textures/i_open.png"
+	if t is OrigInteractive.OrigLadder:
+		return "textures/i_usladr.png"
+	if t is OrigInteractive.OrigFence:
+		return "textures/i_cutter.png"
+	if t is OrigInteractive.OrigExplosive or t is ChargeSite:
+		return "textures/i_plexpl.png"
+	if t is PlacedCharge.DefuseSpot:
+		return "textures/i_disarm.png"
+	if t is OrigInteractive.OrigPlace:
+		return "textures/i_plcdoc.png"
+	if t is Vehicle.VehicleEntry:
+		return "textures/i_driver.png"
+	if t is EnemyBrain.CaptureAction:
+		if p.to_lower().contains("uniform"):
+			return "textures/i_changu.png"
+		return "textures/i_take.png" if bool(t.get("searched")) else "textures/i_captur.png"
+	if t is Pickups.Item or t is Pickups.Loot or t is Pickups.AmmoCrate or t is OrigInteractive.OrigCrate \
+			or t is OrigInteractive.OrigWorldItem:
+		return "textures/i_take.png"
+	return "textures/i_use.png"
+
+
+func _update_action_icon(s: Soldier) -> void:
+	var t: Object = mission.controller.interact_target if mission and mission.controller and s and s.alive else null
+	var f := action_icon_for(t) if t != null and s.vehicle == null else ""
+	if f != action_icon_file:
+		action_icon_file = f
+		action_icon.texture = _load(f) if f != "" else null
+	action_icon.visible = f != "" and action_icon.texture != null
+
+
+## Name des Kameraden unter dem Fadenkreuz (≤ 60 m, ±1,5°) [P].
+func _update_cross_name(s: Soldier) -> void:
+	cross_name_text = ""
+	var cam := get_viewport().get_camera_3d()
+	if s != null and s.alive and cam != null and mission.squad:
+		var fwd := -cam.global_basis.z
+		var best := 0.9997
+		for m in mission.squad.alive_members():
+			if m == s:
+				continue
+			var to: Vector3 = m.global_position + Vector3.UP * 1.0 - cam.global_position
+			if to.length() > 60.0:
+				continue
+			var c := to.normalized().dot(fwd)
+			if c > best:
+				best = c
+				cross_name_text = m.soldier_name
+	_cross_label.text = cross_name_text
+	_cross_label.visible = cross_name_text != ""

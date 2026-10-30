@@ -414,6 +414,8 @@ func _place_objects(collide := true) -> void:
 		n.transform = Transform3D(Basis(Quaternion(r[0], r[1], r[2], r[3]).normalized()).scaled(Vector3(s[0], s[1], s[2])),
 			Vector3(p[0], p[1], p[2]))
 		n.set_meta("orig_type", t)
+		if t == OBJ_MODEL and o.has("model"):
+			n.set_meta("orig_model", String(o["model"]))   # ls_anim: Darsteller-Figur bei Skriptanimation (rest_095)
 		n.set_meta("klz_obj", String(n.name))
 		if String(o.get("parent", "")) == "Backdrop sector":
 			n.set_meta("backdrop", true)      # Himmelskulisse (LS3D-Backdrop-Sektor): nie Kollision

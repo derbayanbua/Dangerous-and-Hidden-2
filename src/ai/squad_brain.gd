@@ -403,11 +403,16 @@ func _free_step(slot: Vector3, second: bool) -> Vector3:
 
 
 ## Abstand zu Kameraden halten (keine Klumpen): näher als SEPARATION → seitlich wegschieben.
+const BLOCK_DIST := 0.75           ## Kapseln (r 0,3 m) berühren sich fast → wirklich blockiert [E]
 func _keep_apart(_delta: float) -> void:
 	var push := Vector3.ZERO
 	var lead := squad.leader()
 	var order_list: Array = squad._followers(lead) if lead else []
 	var my_i := order_list.find(soldier)
+	# B-003/B-019-Nachtrag: wer auf seinem Platz steht (kein Laufziel), weicht nur aus, wenn er wirklich blockiert wird –
+	# ein Kamerad berührt ihn fast (< BLOCK_DIST) und läuft auf ihn zu. Vorher schob die 1,2-m-Trennung stehende Kameraden
+	# vor einem vorbeilaufenden (z. B. dem späteren Anführer) 1,9–2,4 m weg (test_commands_orig, Soldatenwechsel).
+	var standing := not has_move_target()
 	for m in squad.members:
 		if m == soldier or not m.alive or m.vehicle != null:
 			continue
@@ -418,6 +423,10 @@ func _keep_apart(_delta: float) -> void:
 		var dv := soldier.global_position - m.global_position
 		dv.y = 0.0
 		var l := dv.length()
+		if standing:
+			var mv := Vector3(m.velocity.x, 0.0, m.velocity.z)
+			if l >= BLOCK_DIST or mv.length() < 0.5 or mv.dot(dv) <= 0.0:
+				continue
 		if l < SquadManager.SEPARATION and absf(soldier.global_position.y - m.global_position.y) < 1.5:
 			push += (dv / maxf(l, 0.05) if l > 0.01 else Vector3(1, 0, 0).rotated(Vector3.UP, soldier.look_yaw)) \
 				* (SquadManager.SEPARATION - l)
@@ -511,6 +520,8 @@ func _do_action(delta: float) -> bool:
 		action_target = null
 		return false
 	var p := action_target.global_position
+	if action_target.has_method("approach_point"):
+		p = action_target.call("approach_point", soldier.global_position)   # Zaunfeld: Standplatz vor dem Feld
 	if action_kind == "kill":
 		return _do_kill(delta)
 	if action_kind == "grenade_room":
@@ -535,6 +546,11 @@ func _do_action(delta: float) -> bool:
 		return true
 	stop_moving()
 	update_movement(delta, false)
+	# Rest 0.9.5: am Ziel bleiben (Halteposition = Standplatz der Aktion). Vorher lief der Kamerad zur alten
+	# Halteposition zurück und brach z. B. das 3-s-Zaunschneiden (Abbruch bei > 1 m Bewegung) ab.
+	if order == Order.HOLD or order == Order.MOVE:
+		hold_pos = soldier.global_position
+		hold_yaw = soldier.look_yaw
 	var target := action_target
 	var kind := action_kind
 	action_target = null

@@ -40,14 +40,14 @@ const PELVIS_BOX := [Vector3(-0.15, -0.10, -0.11), Vector3(0.15, 0.12, 0.11)]
 ## Modellkonventionen: +X dreht ein hängendes Glied nach vorn, ein aufragendes nach hinten.
 const BONES := {
 	"a": {"mass": 12.0},
-	"c": {"mass": 20.0, "lim": [[-55, 25], [-30, 30], [-25, 25]]},
-	"f": {"mass": 5.0, "lim": [[-45, 40], [-60, 60], [-30, 30]]},
+	"c": {"mass": 20.0, "lim": [[-50, 15], [-20, 20], [-18, 18]]},   # 0.9.5: Streckung 25→15, Drehung 30→20, seitlich 25→18
+	"f": {"mass": 5.0, "lim": [[-40, 25], [-40, 40], [-20, 20]]},    # 0.9.5: Nacken 40→25, Drehung 60→40, seitlich 30→20
 	"h": {"mass": 2.5, "lim": [[-80, 80], [-80, 80], [-85, 60]]},
 	"l": {"mass": 2.5, "lim": [[-80, 80], [-80, 80], [-60, 85]]},
 	"i": {"mass": 1.8, "lim": [[-10, 10], [0, 140], [-10, 10]]},
 	"m": {"mass": 1.8, "lim": [[-10, 10], [-140, 0], [-10, 10]]},
-	"o": {"mass": 8.0, "lim": [[-25, 105], [-30, 30], [-10, 40]]},
-	"s": {"mass": 8.0, "lim": [[-25, 105], [-30, 30], [-40, 10]]},
+	"o": {"mass": 8.0, "lim": [[-20, 105], [-20, 20], [-10, 35]]},
+	"s": {"mass": 8.0, "lim": [[-20, 105], [-20, 20], [-35, 10]]},
 	"p": {"mass": 4.5, "lim": [[-130, 2], [-8, 8], [-5, 5]]},
 	"t": {"mass": 4.5, "lim": [[-130, 2], [-8, 8], [-5, 5]]},
 }
@@ -175,8 +175,9 @@ func _build() -> bool:
 		pb.mass = float(cfg["mass"])
 		pb.friction = 0.9
 		pb.bounce = 0.0
-		pb.linear_damp = 0.1
-		pb.angular_damp = 1.2
+		# 0.9.5 [E]: stärkere Winkeldämpfung (Rumpf/Kopf am stärksten) – weniger Nachschwingen/Verdrehen in die Gelenkanschläge
+		pb.linear_damp = 0.15
+		pb.angular_damp = 3.0 if bn in ["c", "f"] else 2.2
 		pb.can_sleep = true
 		if cfg.has("lim"):
 			pb.joint_type = PhysicalBone3D.JOINT_TYPE_6DOF

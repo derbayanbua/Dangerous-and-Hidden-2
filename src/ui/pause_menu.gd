@@ -219,7 +219,7 @@ func _do_save(slot: String) -> void:
 # --- Öffnen/Schließen ---------------------------------------------------------------------------------
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event.is_action_pressed("pause"):
+	if event.is_action_pressed("pause") or event.is_action_pressed("pause_game"):   # B-015: Original PAUSE (P)
 		if _open and is_instance_valid(player_setup):
 			_close_player_setup()           # Esc schließt zuerst das SPIELER-SETUP (Menü bleibt offen)
 		elif _open and page == "saves":

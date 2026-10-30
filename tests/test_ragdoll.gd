@@ -111,6 +111,7 @@ func _run() -> void:
 	check(_joint_ok(rd0.sk, "p", 140.0) and _joint_ok(rd0.sk, "t", 140.0) and _joint_ok(rd0.sk, "i", 150.0) and _joint_ok(rd0.sk, "m", 150.0),
 		"Knie/Ellbogen innerhalb der Gelenkgrenzen", "%.0f/%.0f/%.0f/%.0f°" % [_joint_deg(rd0.sk, "p"), _joint_deg(rd0.sk, "t"),
 			_joint_deg(rd0.sk, "i"), _joint_deg(rd0.sk, "m")])
+	_check_natural(rd0.sk, "Gewehrtreffer")
 	var hold_pose := rd0.pelvis_position()
 	var zc_pos: Vector3 = zc.global_position if zc else Vector3.ZERO
 	await seconds(1.0)
@@ -157,6 +158,8 @@ func _run() -> void:
 	var d1 := Vector2(rd1.pelvis_position().x - p1.x, rd1.pelvis_position().z - p1.z).length() if rd1 else 0.0
 	check(rd1 != null and rd1.is_frozen() and d1 > 0.8 and d1 < 15.0 and max_y > p1.y + 0.1, "Explosion schleudert den Körper", "%.2f m weit, %.2f m hoch" % [d1, max_y - p1.y])
 	check(d1 > Vector2(p_end.x - p_start.x, p_end.z - p_start.z).length(), "Explosion wirft weiter als ein Gewehrtreffer")
+	if rd1:
+		_check_natural(rd1.sk, "Explosion")
 
 	# --- Explosion weckt eine ruhende Leiche ---
 	var before := rd0.pelvis_position()
@@ -282,3 +285,42 @@ func _pose_diff(a: Skeleton3D, b: Skeleton3D) -> float:
 	for i in a.get_bone_count():
 		worst = maxf(worst, a.get_bone_global_pose(i).origin.distance_to(b.get_bone_global_pose(i).origin))
 	return worst
+
+## Rest 0.9.5: natürliche Endlage – Gelenkwinkel Kind gegenüber Elternknochen relativ zur Ruhelage (Swing-Twist um die
+## Knochenachse Y; Streckung = Drehung um +X, positiv = nach hinten). Grenzen in ragdoll.gd + Toleranz (weiche Limits).
+const NAT_SPINE_EXT := 25.0     ## Rumpf c gegen Becken a nach hinten (Limit 15°)
+const NAT_SPINE_TWIST := 30.0   ## (Limit 20°)
+const NAT_HEAD_EXT := 35.0      ## Kopf f gegen Rumpf c nach hinten (Limit 25°)
+const NAT_HEAD_TWIST := 50.0    ## (Limit 40°)
+const NAT_HEAD_TOTAL := 75.0
+
+func _check_natural(sk: Skeleton3D, what: String) -> void:
+	var sp := _rel_angles(sk, "a", "c")
+	var hd := _rel_angles(sk, "c", "f")
+	print("RAGDOLL-ENDLAGE %s: Rumpf Streckung %.0f° Drehung %.0f° gesamt %.0f°, Kopf Streckung %.0f° Drehung %.0f° gesamt %.0f°" % [
+		what, sp.x, sp.y, sp.z, hd.x, hd.y, hd.z])
+	check(sp.x <= NAT_SPINE_EXT and sp.y <= NAT_SPINE_TWIST, "%s: Wirbelsäule nicht überstreckt/verdreht" % what,
+		"Streckung %.0f° (≤ %.0f), Drehung %.0f° (≤ %.0f)" % [sp.x, NAT_SPINE_EXT, sp.y, NAT_SPINE_TWIST])
+	check(hd.x <= NAT_HEAD_EXT and hd.y <= NAT_HEAD_TWIST and hd.z <= NAT_HEAD_TOTAL, "%s: Kopf nicht verdreht" % what,
+		"Streckung %.0f° (≤ %.0f), Drehung %.0f° (≤ %.0f), gesamt %.0f° (≤ %.0f)" % [hd.x, NAT_HEAD_EXT, hd.y, NAT_HEAD_TWIST,
+		hd.z, NAT_HEAD_TOTAL])
+
+
+## (Streckung nach hinten, |Drehung um die Längsachse|, Gesamtwinkel) in Grad, Kind gegen Eltern relativ zur Ruhelage
+func _rel_angles(sk: Skeleton3D, parent: String, child: String) -> Vector3:
+	var pi_ := sk.find_bone(parent)
+	var ci := sk.find_bone(child)
+	if pi_ < 0 or ci < 0:
+		return Vector3.ZERO
+	var rest_rel := sk.get_bone_global_rest(pi_).basis.orthonormalized().inverse() * sk.get_bone_global_rest(ci).basis.orthonormalized()
+	var pose_rel := sk.get_bone_global_pose(pi_).basis.orthonormalized().inverse() * sk.get_bone_global_pose(ci).basis.orthonormalized()
+	var q := (rest_rel.inverse() * pose_rel).get_rotation_quaternion()
+	var tw := Quaternion(0.0, q.y, 0.0, q.w)
+	var twist := 0.0
+	if tw.length() > 1e-6:
+		twist = rad_to_deg(tw.normalized().get_angle())
+		if twist > 180.0:
+			twist = 360.0 - twist
+	var v := q * Vector3.UP
+	var ext := rad_to_deg(atan2(v.z, v.y))
+	return Vector3(ext, twist, rad_to_deg(q.get_angle()))

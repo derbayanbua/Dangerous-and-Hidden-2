@@ -91,6 +91,28 @@ func _run() -> void:
 		var f3 := FileAccess.open(m.runtime.orig.mission_dir + "/scripts/r_arc1b_objective3.scr", FileAccess.READ)
 		var idx: Array = ObjectiveMarkers.script_objective_targets(f3.get_as_text()) if f3 else []
 		check(idx.has(4) and not idx.has(1), "Skript-Zielort: Rückkehr (Ziel 4) aus Whenever _PlayerInRange", str(idx))
+	# B-003: ergänzte Original-HUD-Elemente
+	var oh3: OrigHud = hud.orig_hud if hud else null
+	if oh3 and OrigFonts.available():
+		check(oh3.orig_font and (oh3.ammo_labels["hands"] as Label).get_theme_font("font") is FontFile,
+			"HUD tabl02 in Originalschrift (Stile 0x36–0x39)")
+		check(OrigHud.action_icon_for(bum) == "textures/i_plexpl.png", "Aktionssymbol Sprengplatz = I_PLEXPL",
+			OrigHud.action_icon_for(bum))
+		s.work_total = 4.0
+		s.work_left = 1.0
+		s.work_label = "Test"
+		oh3._update_progress(s)
+		check(absf(oh3.progress_value - 0.75) < 0.01 and oh3.progress_text == "Test", "Fortschrittsbalken (prgbr01) zeigt Arbeit",
+			"%.2f" % oh3.progress_value)
+		s.work_total = 0.0
+		s.work_left = 0.0
+		oh3._update_progress(s)
+		check(oh3.progress_value < 0.0, "Fortschrittsbalken aus ohne Arbeit")
+		var cam := m.get_viewport().get_camera_3d()
+		if cam:
+			var front := cam.global_position - cam.global_basis.z * 10.0
+			var k := oh3._sector_of(front, "rd")
+			check(k >= 0, "Kompass-Sektor für Richtung vorn gefunden", str(k))
 	var dvm: LsVM = null
 	for vm in m.runtime.vms:
 		if vm.name.to_lower().find("dynamit_1") >= 0:

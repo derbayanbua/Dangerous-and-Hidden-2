@@ -1089,8 +1089,24 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"WEATHER_SETON":
 			_set_snow(LsVM._truthy(vm.value(args[0])))
 			return null
-		"WEATHER_SETMODE", "WEATHER_SETCOUNT", "WEATHER_SETSPEED", "WEATHER_SETDIR", "WEATHER_SETSIZE", \
-				"WEATHER_SETSPACE", "WEATHER_SETCOLORIN", "WEATHER_SETCOLOROUT", "CSC_RUNCLOUDER", \
+		"WEATHER_SETMODE", "WEATHER_SETCOUNT", "WEATHER_SETSPEED", "WEATHER_SETSIZE", "WEATHER_SETCOLORIN":
+			# Wetterparameter (bu1_dazd.scr: Regen = Modus 0 ohne SetMode; r_arc1a_pocasi.scr: Schnee = SetMode(1))
+			var wa: Array = []
+			for a in args:
+				wa.append(float(vm.value(a)))
+			if fname == "WEATHER_SETMODE" and wa.size() > 0:
+				weather.mode = int(wa[0])
+			elif fname == "WEATHER_SETCOUNT" and wa.size() > 0:
+				weather.count = wa[0]
+			elif fname == "WEATHER_SETSPEED" and wa.size() > 0:
+				weather.speed = wa[0]
+			elif fname == "WEATHER_SETSIZE" and wa.size() > 1:
+				weather.size = Vector2(wa[0], wa[1])
+			elif fname == "WEATHER_SETCOLORIN" and wa.size() > 3:
+				weather.color = Color8(int(wa[0]), int(wa[1]), int(wa[2]), int(wa[3]))
+			_apply_weather()
+			return null
+		"WEATHER_SETDIR", "WEATHER_SETSPACE", "WEATHER_SETCOLOROUT", "CSC_RUNCLOUDER", \
 				"__SETUPAUTOLOGGING":
 			return null
 		# --- Sprache: Original-Aufnahme + Untertitel (Lippenbewegung: Platzhalter) ---
@@ -1859,11 +1875,14 @@ func _set_ai_mode(b: EnemyBrain, fname: String) -> void:
 	match fname:
 		"HUMAN_SETAIMODE_ZOMBIE":
 			b.script_control = true
+			b.zombie_mode = true         # B-021: Original-Modus 0x400 (Opcode 0xCF)
 		"HUMAN_SETAIMODE_DEFENSIVE":
 			b.ai_mode = EnemyBrain.Mode.DEFENSIVE
+			b.zombie_mode = false
 			b.leave_script_control()     # B-020: Alarm aus dem Zombie-Modus an die eigene KI übergeben
 		"HUMAN_SETAIMODE_AGGRESSIVE":
 			b.ai_mode = EnemyBrain.Mode.AGGRESSIVE
+			b.zombie_mode = false
 			b.leave_script_control()
 
 
@@ -1991,9 +2010,74 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-## Schneefall (Original: WEATHER_SetOn / WEATHER_SetMode)
+## Niederschlag (Original: WEATHER_SetOn / WEATHER_SetMode). Modus 0 = Regen (Standard, BURMA1 bu1_dazd.scr
+## „dazd“ = déšť, ohne SetMode), 1 = Schnee (ARCTIC1 SetMode(1)). Früher immer Schnee → weiße Punkte im Dschungel.
+## Einheiten [E]: Speed mm/s (Kommentar r_arc1a_pocasi „1200 == 1.2 m/s“), Size 0,1 mm (Länge, Breite), ColorIn RGBA.
+var weather := {"mode": 0, "count": 2000.0, "speed": 20000.0, "size": Vector2(1200, 40),
+	"color": Color8(37, 37, 37, 128), "on": false}
+var _weather_mode_built := -1
+var _rain_count0 := 0.0
+
+
 func _set_snow(on: bool) -> void:
-	if on and _snow == null:
+	weather.on = on
+	_apply_weather()
+
+
+func _apply_weather() -> void:
+	if not weather.on and _snow == null:
+		return
+	if _snow and _weather_mode_built != int(weather.mode):
+		_snow.queue_free()
+		_snow = null
+	if weather.mode == 0:
+		_apply_rain()
+	else:
+		_apply_snow_mode()
+	if _snow:
+		_snow.emitting = weather.on
+
+
+func _apply_rain() -> void:
+	var spd := clampf(float(weather.speed) / 1000.0, 2.0, 40.0)
+	if _snow == null:
+		_snow = GPUParticles3D.new()
+		_snow.name = "Rain"
+		_rain_count0 = clampf(float(weather.count), 100.0, 6000.0)
+		_snow.amount = int(_rain_count0)
+		_snow.visibility_aabb = AABB(Vector3(-40, -40, -40), Vector3(80, 60, 80))
+		var pm := ParticleProcessMaterial.new()
+		pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+		pm.emission_box_extents = Vector3(22, 2, 22)
+		pm.direction = Vector3.DOWN
+		pm.spread = 3.0
+		pm.gravity = Vector3.ZERO
+		pm.particle_flag_align_y = true        # Tropfen als Striche in Fallrichtung
+		_snow.process_material = pm
+		var bm := BoxMesh.new()
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+		bm.material = m
+		_snow.draw_pass_1 = bm
+		add_child(_snow)
+		_weather_mode_built = 0
+	var pm2 := _snow.process_material as ParticleProcessMaterial
+	pm2.initial_velocity_min = spd * 0.9
+	pm2.initial_velocity_max = spd * 1.1
+	_snow.lifetime = clampf(22.0 / spd, 0.5, 4.0)
+	_snow.amount_ratio = clampf(float(weather.count) / maxf(_rain_count0, 1.0), 0.0, 1.0)
+	var bm2 := _snow.draw_pass_1 as BoxMesh
+	var sz: Vector2 = weather.size
+	bm2.size = Vector3(clampf(sz.y * 1e-4, 0.002, 0.02), clampf(sz.x * 1e-4, 0.03, 0.5), clampf(sz.y * 1e-4, 0.002, 0.02))
+	var c: Color = weather.color
+	# Original-Regenfarbe (dunkelgrau, halbtransparent), leicht aufgehellt, damit Striche vor Laub erkennbar bleiben
+	(bm2.material as StandardMaterial3D).albedo_color = Color(minf(c.r * 1.8, 1.0), minf(c.g * 1.8, 1.0), minf(c.b * 1.8, 1.0), clampf(c.a, 0.15, 0.6))
+
+
+func _apply_snow_mode() -> void:
+	if _snow == null:
 		_snow = GPUParticles3D.new()
 		_snow.amount = 3000
 		_snow.lifetime = 4.0
@@ -2017,8 +2101,7 @@ func _set_snow(on: bool) -> void:
 		q.material = m
 		_snow.draw_pass_1 = q
 		add_child(_snow)
-	if _snow:
-		_snow.emitting = on
+		_weather_mode_built = 1
 
 
 ## Engine-Ereignisse an das Skript des Akteurs weiterreichen.

@@ -1,6 +1,6 @@
 extends "res://tests/lan_ui_base.gd"
 ## Kontrollbilder SPIELER-SETUP aus dem LAN-Menü (Fenster): tools\godot.cmd --resolution 1600x900 -- --autoplay=shots_player_setup
-## --profiles_dir=user://shots_ps --noimport → test_output/ps_lan_<breite>_*.png
+## --profiles_dir=user://test_shots_ps --noimport → test_output/ps_lan_<breite>_*.png
 
 
 func _run() -> void:

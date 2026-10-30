@@ -931,27 +931,49 @@ func _page_controls() -> void:
 	_yesno(671, text(2450), false, func(_v): pass, false)
 
 
+## Original-Kategorien der Tastenbelegung (Texte 2452–2456). B-015: alle Aktionen aus InputSetup.ACTIONS stehen hier
+## (Test test_menu); Kategorie TAKTIK-MODUS = Tasten der offenen taktischen Karte wie im Original.
 const KEY_CATEGORIES := [
 	[2452, ["move_forward", "move_back", "move_left", "move_right", "run", "stance_stand", "stance_crouch",
-		"stance_prone", "lean_left", "lean_right"]],
+		"stance_prone", "lean_left", "lean_right", "speed_up", "speed_down", "jump", "climb"]],
 	[2453, ["fire", "aim", "reload", "fire_mode", "weapon_1", "weapon_2", "weapon_3", "equip_4", "equip_5",
 		"equip_6", "equip_7", "equip_8", "grenade", "weapon_next", "weapon_prev", "drop_item"]],
-	[2454, ["interact", "binoculars", "medkit", "camera_toggle", "objectives", "quicksave", "quickload", "pause",
-		"console", "chat_all", "chat_team", "voice_talk"]],
-	[2455, ["command_all", "command_1", "command_2", "command_3", "command_4", "command_5", "command_6",
-		"order_move", "order_follow", "order_hold", "order_roe", "order_formation"]],
-	[2456, ["tactical_map", "inventory", "select_soldier_1", "select_soldier_2", "select_soldier_3", "select_soldier_4",
-		"soldier_1", "soldier_2", "soldier_3", "soldier_4", "soldier_next", "order_stance",
-		"order_grenade"]],
+	[2454, ["interact", "action_menu", "game_info", "tactical_map", "interface_mode", "map", "inventory", "pause_game",
+		"binoculars", "medkit", "camera_toggle", "objectives", "quicksave", "quickload", "pause", "handbrake",
+		"show_players", "console", "chat_all", "chat_team", "voice_talk"]],
+	[2455, ["soldier_next", "select_soldier_1", "select_soldier_2", "select_soldier_3", "select_soldier_4",
+		"command_all", "command_1", "command_2", "command_3", "command_4", "command_5", "command_6",
+		"soldier_1", "soldier_2", "soldier_3", "soldier_4", "order_move", "order_follow", "order_hold", "order_roe",
+		"order_formation", "order_stance", "order_grenade"]],
+	[2456, ["tac_regroup", "tac_signal_1", "tac_signal_2", "tac_stand", "tac_crouch", "tac_prone", "tac_sprint",
+		"tac_run", "tac_walk", "tac_slow", "tac_passive", "tac_defensive", "tac_aggressive", "tac_delete",
+		"tac_delete_all", "tac_options", "tac_camera_move", "tac_cam_forward", "tac_cam_backward", "tac_cam_left",
+		"tac_cam_right", "tac_cam_up", "tac_cam_down", "tac_zoom_in", "tac_zoom_out"]],
 ]
+const KEYS_PER_PAGE := 12      ## Zeilen je Belegungsseite (Platz bis zu den Standard-Knöpfen bei y 626)
+var _keys_part := 0            ## Unterseite innerhalb der Kategorie
+
+
+func _keys_parts(cat: int) -> int:
+	return ceili(float((KEY_CATEGORIES[cat][1] as Array).size()) / KEYS_PER_PAGE)
+
+
+func _keys_next_page() -> void:
+	_keys_part += 1
+	if _keys_part >= _keys_parts(_keys_category):
+		_keys_part = 0
+		_keys_category = (_keys_category + 1) % KEY_CATEGORIES.size()
 
 
 func _page_keys() -> void:
 	_label(Rect2(67, 179, 383, 18), text(2451), 14, TEXT_COLOR)
 	var cat: Array = KEY_CATEGORIES[_keys_category]
-	_cycle(Rect2(105, 201, 336, 33), text(cat[0]), func(): _keys_category = (_keys_category + 1) % KEY_CATEGORIES.size())
+	var parts := _keys_parts(_keys_category)
+	_keys_part = clampi(_keys_part, 0, parts - 1)
+	var title: String = text(cat[0]) + (" %d/%d" % [_keys_part + 1, parts] if parts > 1 else "")
+	_cycle(Rect2(105, 201, 336, 33), title, _keys_next_page)
 	var y := 244.0
-	for action: String in cat[1]:
+	for action: String in (cat[1] as Array).slice(_keys_part * KEYS_PER_PAGE, (_keys_part + 1) * KEYS_PER_PAGE):
 		var b := Button.new()
 		b.name = ("key_" + action).validate_node_name()
 		b.position = Vector2(70, y)

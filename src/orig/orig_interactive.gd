@@ -119,6 +119,15 @@ class OrigFence extends Interactable:
 	var _from := Vector3.ZERO
 	var _snd: AudioStreamPlayer3D
 	var _broken: Node3D
+	var normal := Vector3.FORWARD    ## waagrechte Flächennormale des Zaunfelds (dünnste Achse des größten Meshes)
+	var nav_link: NavigationLink3D   ## nach dem Schnitt: Navigationsverbindung durch die Lücke (Rest 0.9.5, [E])
+	var bounds := AABB()             ## Welt-Kasten des Felds (Zielwahl Aktionsmenü: Abstand zum Feld statt zur Mitte)
+
+	## Abstand eines Punkts (Fadenkreuz) zum Zaunfeld; 0 im Kasten.
+	func aim_distance(p: Vector3) -> float:
+		var q := Vector3(clampf(p.x, bounds.position.x, bounds.end.x), clampf(p.y, bounds.position.y, bounds.end.y),
+			clampf(p.z, bounds.position.z, bounds.end.z))
+		return q.distance_to(p)
 
 	func init(h: OrigInteractive, f: Node3D, nm: String, model: String) -> void:
 		host = h
@@ -126,6 +135,7 @@ class OrigFence extends Interactable:
 		break_model = model
 		persistent_id = "ofence_" + nm
 		var box := OrigInteractive.world_aabb(f)
+		bounds = box
 		global_position = box.get_center()
 		floor_y = box.position.y
 		frame.set_meta("actor_state", 0)
@@ -139,11 +149,27 @@ class OrigFence extends Interactable:
 		var list: Array = frame.find_children("*", "MeshInstance3D", true, false)
 		if frame is MeshInstance3D:
 			list.append(frame)
+		var big := -1.0
 		for mi in list:
 			var me := mi as MeshInstance3D
 			if me.mesh == null:
 				continue
 			var bb := me.get_aabb()
+			# Flächennormale: unter den waagrechten Mesh-Achsen die mit der kleinsten Weltausdehnung (größtes Mesh zählt)
+			if bb.size.length() > big:
+				var gb := me.global_transform.basis
+				var best_len := INF
+				for i in 3:
+					var dir: Vector3 = gb[i]
+					if dir.length() < 0.0001 or absf(dir.normalized().y) > 0.7:
+						continue
+					var ext := dir.length() * bb.size[i]
+					if ext < best_len:
+						best_len = ext
+						var n := Vector3(dir.x, 0.0, dir.z)
+						if n.length() > 0.01:
+							normal = n.normalized()
+							big = bb.size.length()
 			var body := StaticBody3D.new()
 			body.name = "FenceBlock"
 			body.collision_layer = 1 << 4
@@ -210,9 +236,40 @@ class OrigFence extends Interactable:
 			host.mission.dynamic_root.add_child(inst)
 			inst.global_transform = frame.global_transform
 			_broken = inst
+		_add_nav_link()
 		_update_prompt()
 		if Net.is_online and is_inside_tree():
 			Net.object_state(self)
+
+	## Standplatz zum Schneiden auf der Seite von `from` (0,7 m vor der Feldmitte, Bodenhöhe) – der Kastenmittelpunkt
+	## selbst liegt im gesperrten Zaun und ist nicht erreichbar.
+	func approach_point(from: Vector3) -> Vector3:
+		var c := Vector3(global_position.x, floor_y, global_position.z)
+		var side := 1.0 if (from - c).dot(normal) >= 0.0 else -1.0
+		return c + normal * side * 0.7
+
+	## Rest 0.9.5 [E]: Die Zaunkästen (Ebene 5) sind Navmesh-Quelle; ein Neu-Backen der Karte wäre zu teuer (Speicher).
+	## Statt dessen eine beidseitige NavigationLink3D quer durch die Lücke (je 0,9 m vor/hinter der Feldmitte, ans Netz
+	## geheftet). KI-Wege nutzen sie wie eine Laufkante; die Kollision ist beim Schnitt schon aus.
+	func _add_nav_link() -> void:
+		if is_instance_valid(nav_link) or host == null or host.mission == null:
+			return
+		var nr: NavigationRegion3D = host.mission.get("nav_region")
+		if nr == null or not nr.is_inside_tree():
+			return
+		var map := nr.get_navigation_map()
+		var c := Vector3(global_position.x, floor_y + 0.1, global_position.z)
+		var a := NavigationServer3D.map_get_closest_point(map, c + normal * 0.9)
+		var b := NavigationServer3D.map_get_closest_point(map, c - normal * 0.9)
+		if a.distance_to(b) < 0.5 or absf(a.y - b.y) > 0.8:
+			return
+		nav_link = NavigationLink3D.new()
+		nav_link.name = "FenceLink_" + String(frame.name).validate_node_name()
+		nav_link.bidirectional = true
+		nav_link.start_position = a
+		nav_link.end_position = b
+		host.mission.dynamic_root.add_child(nav_link)
+		nav_link.set_navigation_map(map)     # dieselbe Karte wie das Missionsnetz
 
 	func set_actor_state(n: int) -> void:
 		set_cut(n != 0)

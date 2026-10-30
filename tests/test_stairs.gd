@@ -402,6 +402,9 @@ class Walker:
 	var air := 0.0
 	var max_air := 0.0
 	var min_vy := 0.0
+	var nav := false        ## KI-Phase: wie AIBrain (Zwischenpunkt 0,45 m, Festhängen → Klettern bzw. Punkt überspringen)
+	var best := INF
+	var stall := 0
 
 
 func _walk_all(m: Mission, sel: Array) -> Array:
@@ -471,6 +474,8 @@ func _walk_all(m: Mission, sel: Array) -> Array:
 			w.done = true
 		else:
 			_start(w, pts)
+			w.nav = true
+			w.limit += 300   # Klettern/Umwege über Navigationsverbindungen
 	await frames(2)
 	await _drive(walkers)
 	for i in walkers.size():
@@ -537,6 +542,9 @@ func _start(w: Walker, pts: Array) -> void:
 	w.air = 0.0
 	w.max_air = 0.0
 	w.min_vy = 0.0
+	w.nav = false
+	w.best = INF
+	w.stall = 0
 
 
 func _drive(walkers: Array) -> void:
@@ -559,8 +567,10 @@ func _drive(walkers: Array) -> void:
 			var d := target - s.global_position
 			d.y = 0.0
 			var last := w.idx == w.pts.size() - 1
-			if d.length() < (0.2 if last else 0.3):
+			if d.length() < (0.2 if last else (0.45 if w.nav else 0.3)):
 				w.idx += 1
+				w.best = INF
+				w.stall = 0
 				if w.idx >= w.pts.size():
 					w.done = true
 					s.move_input = Vector3.ZERO
@@ -576,6 +586,22 @@ func _drive(walkers: Array) -> void:
 				var c := s.get_last_slide_collision()
 				print("   TRACE %s f%d pos %s floor %s vel %s ziel %d %s Kontakt %s" % [w.st.name, w.frames, _v(s.global_position),
 					s.is_on_floor(), _v(s.velocity), w.idx, _v(target), (_v(c.get_normal()) + " " + str(c.get_collider())) if c else "-"])
+			if w.nav:
+				# wie AIBrain: kein Fortschritt 0,75 s → Kletterstelle (Ziel ≥ 0,4 m höher) bzw. Wegpunkt überspringen
+				if d.length() < w.best - 0.05:
+					w.best = d.length()
+					w.stall = 0
+				else:
+					w.stall += 1
+				if w.stall > 45:
+					w.stall = 0
+					w.best = INF
+					s.look_yaw = atan2(-d.normalized().x, -d.normalized().z)
+					if target.y - s.global_position.y > 0.4 and s.try_climb():
+						pass
+					elif not last:
+						w.idx += 1
+						continue
 			var dir := d.normalized()
 			s.move_input = dir * (clampf(d.length() / 0.6, 0.35, 1.0) if last else 1.0)
 			s.look_yaw = atan2(-dir.x, -dir.z)

@@ -13,7 +13,7 @@ const PORT := 11001
 const PORT_MIN := 1024
 const PORT_MAX := 65530
 const DISCOVERY_PORT := 27101
-const PROTOCOL := "DH2-LAN-3"         ## 3: Respawn per Feuertaste, Ränge, Spiel-Info-Daten (15.10.2026)
+const PROTOCOL := "DH2-LAN-4"         ## 4: B-022 Zustand/Aktionen nur an den Server, Weitergabe geprüft (30.10.2026)
 const QUERY_TAG := "DH2-QUERY"
 const SYNC_INTERVAL := 0.05
 ## Spielstile des Originals (docs/re_notes_multiplayer.md): DEATHMATCH (2891), BESETZUNG (2892),
@@ -438,6 +438,14 @@ func _register(pname: String, password: String, proto: String, cls: int = 2, tea
 	if not multiplayer.is_server():
 		return
 	var id := multiplayer.get_remote_sender_id()
+	# B-022 F-007: zweite Anmeldung desselben Peers verwerfen (überschrieb sonst Team/Punkte/Status)
+	if players.has(id):
+		_reject_log(id, "register", "doppelte Anmeldung")
+		return
+	# Klassen-ID nur aus der Liste der Original-Klassen (0–4), sonst Standard Gewehrschütze
+	if cls < 0 or cls >= CLASS_NAMES.size():
+		_reject_log(id, "register", "Klassen-ID %d unzulässig -> 2" % cls)
+		cls = 2
 	var reason := ""
 	if proto != PROTOCOL:
 		reason = "Andere Spielversion."
@@ -1499,6 +1507,8 @@ func _spawn(id: int, pname: String, team: int, pos: Vector3, yaw: float, gen: in
 	s.set_meta("protect_until", int(s.get_meta("spawn_ms")) + int(float(rule("spawn_protect_s")) * 1000.0))
 	_soldiers[id] = s
 	_hp_sent[id] = s.health
+	if multiplayer.is_server():
+		_mv_reset(s, pos)                  # B-022 F-003: Respawn ist ein erlaubter Sprung
 	if id < 0 and multiplayer.is_server():
 		_make_bot(s, id)
 	elif id < 0:
@@ -1539,13 +1549,20 @@ func _physics_process(delta: float) -> void:
 	_sync_t -= delta
 	if is_instance_valid(me) and me.alive and _sync_t <= 0.0:
 		_sync_t = 1.0 / _state_hz()    # Verbindungsart (Optionen), begrenzt durch maxfreq des Servers
-		_st.rpc(me.global_position, me.velocity, me.look_yaw, me.look_pitch, me.stance, me.current_slot, me.aiming)
+		# B-022: Zustand geht nur an den Server; er prüft und gibt ihn als _bst an die übrigen weiter
+		if multiplayer.is_server():
+			_bst.rpc(my_id(), me.global_position, me.velocity, me.look_yaw, me.look_pitch, me.stance, me.current_slot, me.aiming)
+		else:
+			_st.rpc_id(1, me.global_position, me.velocity, me.look_yaw, me.look_pitch, me.stance, me.current_slot, me.aiming)
 		# Fahrzeug: Sitzwechsel/Ein-/Aussteigen melden, als Fahrer die Fahrzeuglage
 		var vpath := String(me.vehicle.get_path()) if me.vehicle else ""
 		if vpath != _last_vehicle or me.seat_index != _last_seat:
 			_last_vehicle = vpath
 			_last_seat = me.seat_index
-			_seat.rpc(vpath, me.seat_index)
+			if multiplayer.is_server():
+				_bseat.rpc(my_id(), vpath, me.seat_index)
+			else:
+				_seat.rpc_id(1, vpath, me.seat_index)
 		_sync_vehicle(me)
 	if multiplayer.is_server():
 		_server_tick(delta)
@@ -1554,47 +1571,75 @@ func _physics_process(delta: float) -> void:
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func _st(pos: Vector3, vel: Vector3, yaw: float, pitch: float, stance: int, slot: int, aiming: bool) -> void:
+	# B-022: nur der Server nimmt Zustände von Clients an (vorher an alle Peers, ungeprüft)
+	if not multiplayer.is_server():
+		return
 	var sid := multiplayer.get_remote_sender_id()
 	var s: Soldier = _soldiers.get(sid)
 	if not is_instance_valid(s) or not s.alive:
 		return
-	if multiplayer.is_server():
-		var now := Time.get_ticks_msec()
-		var mf := int(rule("max_freq"))
-		if mf > 0 and now - int(_last_st_ms.get(sid, 0)) < int(500.0 / mf):
-			return                  # maxfreq: deutlich zu dichte Zustandspakete verwerfen
-		_last_st_ms[sid] = now
-		if pos.distance_to(s.net_target) > 0.05 or absf(yaw - s.look_yaw) > 0.01 or absf(pitch - s.look_pitch) > 0.01 \
-				or stance != s.stance_request or aiming != s.aiming:
-			_touch(sid)             # Eingabe des Spielers (Inaktivitäts-Rauswurf)
+	var now := Time.get_ticks_msec()
+	var mf := int(rule("max_freq"))
+	# B-022 F-008: Mindestabstand 1000/mf ms; 20 % Spielraum für Paket-Jitter (vorher 500/mf = doppelte Rate)
+	if mf > 0 and now - int(_last_st_ms.get(sid, 0)) < int(1000.0 * ST_RATE_SLACK / mf):
+		return                  # maxfreq: zu dichte Zustandspakete verwerfen
+	_last_st_ms[sid] = now
+	if not (pos.is_finite() and vel.is_finite() and is_finite(yaw) and is_finite(pitch)):
+		_reject_log(sid, "st", "ungültige Zahlen")
+		return
+	if pos.distance_to(s.net_target) > 0.05 or absf(yaw - s.look_yaw) > 0.01 or absf(pitch - s.look_pitch) > 0.01 \
+			or stance != s.stance_request or aiming != s.aiming:
+		_touch(sid)             # Eingabe des Spielers (Inaktivitäts-Rauswurf)
+	# B-022 F-003: Bewegung plausibilisieren, sonst auf die letzte angenommene Lage zurücksetzen
+	if not _move_ok(sid, s, pos, now):
+		pos = s.get_meta("mv_pos", s.net_target)
+		vel = Vector3.ZERO
+	stance = clampi(stance, 0, 2)
+	pitch = clampf(pitch, -PI * 0.5, PI * 0.5)
 	s.net_target = pos
 	s.net_velocity = vel
 	s.look_yaw = yaw
 	s.look_pitch = pitch
 	s.stance_request = stance
 	s.aiming = aiming
-	if slot != s.current_slot and slot < s.weapons.size() and s.weapons[slot] != null:
+	# B-022 F-009: Waffenplatz nur im gültigen Bereich (auch slot >= 0)
+	if slot != s.current_slot and slot >= 0 and slot < s.weapons.size() and s.weapons[slot] != null:
 		s.current_slot = slot
 		s._on_weapon_switched()
+	_relay_except(sid, func(pid: int): _bst.rpc_id(pid, sid, pos, vel, yaw, pitch, stance, s.current_slot, aiming))
 
 
 ## Aktion des eigenen Soldaten (Soldier.net_hook) an alle anderen
 func _local_action(kind: String, a: Vector3, b: Vector3, wid: String) -> void:
-	_act.rpc(kind, a, b, wid)
+	# B-022: Clients melden Aktionen nur dem Server; der Server-Spieler gibt sie direkt als _bact weiter
+	if multiplayer.is_server():
+		_bact.rpc(my_id(), kind, a, b, wid)
+	else:
+		_act.rpc_id(1, kind, a, b, wid)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func _act(kind: String, a: Vector3, b: Vector3, wid: String) -> void:
-	_touch(multiplayer.get_remote_sender_id())
-	var s: Soldier = _soldiers.get(multiplayer.get_remote_sender_id())
+	if not multiplayer.is_server():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	_touch(sid)
+	var s: Soldier = _soldiers.get(sid)
 	if not is_instance_valid(s) or not s.alive:
 		return
+	var why := _act_error(s, kind, a, b, wid)
+	if why != "":
+		_reject_log(sid, kind, why)          # B-022 F-002: unzulässige Aktion protokollieren und verwerfen
+		return
 	_do_act(s, kind, a, b, wid)
+	_relay_except(sid, func(pid: int): _bact.rpc_id(pid, sid, kind, a, b, wid))
 
 
 ## Aktion eines (fremden) Soldaten darstellen; nur der Server wertet Treffer aus
 func _do_act(s: Soldier, kind: String, a: Vector3, b: Vector3, wid: String) -> void:
-	var wd: WeaponData = WeaponDB.get_weapon(StringName(wid)) if wid != "" else null
+	var wd: WeaponData = _net_weapon(wid)
+	if wd == null and kind in ["shot", "rocket", "grenade"]:
+		return              # B-022 F-006: unbekannte Waffen-ID (wd.noise_radius/Grenade.data wären null)
 	match kind:
 		"shot":
 			# B-012: Zweibein-/Dreibein-MG nur aus erlaubter Haltung (Server prüft; Haltung oder angeforderte Haltung)
@@ -1674,23 +1719,57 @@ func used_interactable(it: Node) -> void:
 	var pid := String(it.get("persistent_id")) if it.get("persistent_id") != null else ""
 	if pid == "":
 		pid = String(it.get_path())
-	_use.rpc(pid)
+	if multiplayer.is_server():
+		_buse.rpc(my_id(), pid)
+	else:
+		_use.rpc_id(1, pid)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func _use(pid: String) -> void:
-	var s: Soldier = _soldiers.get(multiplayer.get_remote_sender_id())
+	if not multiplayer.is_server():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	var s: Soldier = _soldiers.get(sid)
 	if not is_instance_valid(s):
 		return
+	var n := _find_interactable(pid)
+	if n == null:
+		return
+	# B-022 F-004: nur in Reichweite benutzen (Lage beim Server bzw. zuletzt gemeldete Lage, großzügig wegen Verzug)
+	if n is Node3D:
+		var d := minf((n as Node3D).global_position.distance_to(s.global_position),
+			(n as Node3D).global_position.distance_to(s.net_target))
+		if d > USE_RANGE:
+			_reject_log(sid, "use", "%s außer Reichweite (%.1f m)" % [pid, d])
+			return
+	_use_apply(s, n)
+	_relay_except(sid, func(p: int): _buse.rpc_id(p, sid, pid))
+
+
+## Server: Benutzen eines anderen Spielers (geprüft) auf diesem Client nachvollziehen
+@rpc("authority", "call_remote", "reliable")
+func _buse(id: int, pid: String) -> void:
+	var s: Soldier = _soldiers.get(id)
+	var n := _find_interactable(pid)
+	if is_instance_valid(s) and n != null and id != my_id():
+		_use_apply(s, n)
+
+
+func _find_interactable(pid: String) -> Node:
 	for n in get_tree().get_nodes_in_group("interactables"):
 		var p = n.get("persistent_id")
 		if (p != null and String(p) == pid) or String(n.get_path()) == pid:
-			if n is OrigInteractive.OrigLadder:
-				return       # Klettern ist Bewegung des Spielers selbst (kommt über den Zustandsabgleich)
-			if n.has_method("net_state") and not multiplayer.is_server():
-				return       # Türen: Server führt aus und meldet den Zustand (object_state), kein Umschalten je Rechner
-			n.interact(s)
-			return
+			return n
+	return null
+
+
+func _use_apply(s: Soldier, n: Node) -> void:
+	if n is OrigInteractive.OrigLadder:
+		return       # Klettern ist Bewegung des Spielers selbst (kommt über den Zustandsabgleich)
+	if n.has_method("net_state") and not multiplayer.is_server():
+		return       # Türen: Server führt aus und meldet den Zustand (object_state), kein Umschalten je Rechner
+	n.interact(s)
 
 
 ## Server: Zustand eines Weltobjekts mit net_state()/net_apply() (Türen/Schranken) an alle – auch nach KI-Öffnen,
@@ -1773,31 +1852,341 @@ func _sync_vehicle(me: Soldier) -> void:
 	var v := me.vehicle as Vehicle
 	if v == null or me.seat_index != 0:
 		return
-	_veh.rpc(String(v.get_path()), v.global_transform, v.linear_velocity)
+	if multiplayer.is_server():
+		_bveh.rpc(String(v.get_path()), v.global_transform, v.linear_velocity)
+	else:
+		_veh.rpc_id(1, String(v.get_path()), v.global_transform, v.linear_velocity)
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func _veh(path: String, xf: Transform3D, vel: Vector3) -> void:
+	if not multiplayer.is_server():
+		return
+	var sid := multiplayer.get_remote_sender_id()
 	var v := get_node_or_null(path) as Vehicle
 	if v == null:
 		return
+	# B-022 F-001: nur der Fahrer (Sitz 0 beim Server) bewegt das Fahrzeug
+	var s: Soldier = _soldiers.get(sid)
+	if not is_instance_valid(s) or not s.alive or v.driver() != s:
+		_reject_log(sid, "veh", "%s: nicht Fahrer" % v.name)
+		return
+	if not (xf.origin.is_finite() and xf.basis.x.is_finite() and xf.basis.y.is_finite() and xf.basis.z.is_finite() \
+			and vel.is_finite()):
+		_reject_log(sid, "veh", "ungültige Zahlen")
+		return
+	# Fahrzeugtempo plausibilisieren (großzügig: Gefälle, Sprünge, Verzug)
+	var now := Time.get_ticks_msec()
+	var last: Vector3 = v.get_meta("nv_pos", v.global_position)
+	var dt := clampf(float(now - int(v.get_meta("nv_ms", now))) / 1000.0, 0.0, 10.0)
+	var budget := minf(float(v.get_meta("nv_budget", VEH_SLACK_M)) + VEH_MAX_SPEED * dt,
+		VEH_MAX_SPEED * maxf(dt, 1.0) + VEH_SLACK_M)
+	var step := xf.origin.distance_to(last)
+	v.set_meta("nv_ms", now)
+	if step > budget:
+		_reject_log(sid, "veh", "%s: %.1f m Sprung (erlaubt %.1f)" % [v.name, step, budget])
+		v.set_meta("nv_budget", budget)
+		return
+	v.set_meta("nv_budget", budget - step)
+	v.set_meta("nv_pos", xf.origin)
 	v.net_apply(xf, vel)       # folgt kinematisch und geglättet, solange Lagen vom Fahrer kommen
+	_relay_except(sid, func(p: int): _bveh.rpc_id(p, path, xf, vel))
+
+
+## Server: geprüfte Fahrzeuglage des Fahrers an die übrigen Clients
+@rpc("authority", "call_remote", "unreliable_ordered")
+func _bveh(path: String, xf: Transform3D, vel: Vector3) -> void:
+	var v := get_node_or_null(path) as Vehicle
+	var me: Soldier = _soldiers.get(my_id())
+	if v != null and not (is_instance_valid(me) and v.driver() == me):
+		v.net_apply(xf, vel)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func _seat(path: String, seat: int) -> void:
-	var s: Soldier = _soldiers.get(multiplayer.get_remote_sender_id())
+	if not multiplayer.is_server():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	var s: Soldier = _soldiers.get(sid)
 	if not is_instance_valid(s):
 		return
-	var v := get_node_or_null(path) as Vehicle
+	var v: Vehicle = (get_node_or_null(path) as Vehicle) if path != "" else null
+	if path != "" and v == null:
+		_reject_log(sid, "seat", "unbekanntes Fahrzeug %s" % path)
+		_seat_fix_send(sid, s)
+		return
+	# B-022 F-005: Sitzindex, Belegung und Abstand prüfen
+	if v != null:
+		var why := ""
+		if seat < 0 or seat >= v.occupants.size() or seat >= v.seats.size():
+			why = "Sitz %d ungültig" % seat
+		elif is_instance_valid(v.occupants[seat]) and v.occupants[seat] != s:
+			why = "Sitz %d belegt" % seat
+		elif s.vehicle != v:
+			var d := minf(v.global_position.distance_to(s.global_position), v.global_position.distance_to(s.net_target))
+			if d > SEAT_RANGE:
+				why = "Fahrzeug außer Reichweite (%.1f m)" % d
+		if why != "":
+			_reject_log(sid, "seat", "%s: %s" % [v.name, why])
+			_seat_fix_send(sid, s)
+			return
+	_seat_apply(s, v, seat)
+	_mv_reset(s)
+	if (v == null and s.vehicle != null) or (v != null and (s.vehicle != v or s.seat_index != seat)):
+		_seat_fix_send(sid, s)              # z. B. Fahrzeuge per Regel aus: Client auf den Serverstand bringen
+		return
+	_relay_except(sid, func(p: int): _bseat.rpc_id(p, sid, path, seat))
+
+
+func _seat_apply(s: Soldier, v: Vehicle, seat: int) -> void:
 	if s.vehicle and s.vehicle != v:
 		(s.vehicle as Vehicle).leave(s)
 	if v == null:
 		return
 	if s.vehicle == null:
-		v.board(s, seat == 0)
-	if s.seat_index != seat:
+		v.board(s, seat == 0, seat)
+	if s.vehicle == v and s.seat_index != seat:
 		v.switch_seat(s, seat)
+
+
+## Server: geprüfter Sitzwechsel eines Spielers an die übrigen Clients
+@rpc("authority", "call_remote", "reliable")
+func _bseat(id: int, path: String, seat: int) -> void:
+	var s: Soldier = _soldiers.get(id)
+	if is_instance_valid(s) and id != my_id():
+		_seat_apply(s, get_node_or_null(path) as Vehicle if path != "" else null, seat)
+
+
+func _seat_fix_send(sid: int, s: Soldier) -> void:
+	var vp := String(s.vehicle.get_path()) if s.vehicle else ""
+	_seat_fix.rpc_id(sid, vp, s.seat_index if s.vehicle else -1)
+
+
+## Client: Server hat den Sitzwunsch abgelehnt – eigenen Soldaten auf den Serverstand bringen
+@rpc("authority", "call_remote", "reliable")
+func _seat_fix(path: String, seat: int) -> void:
+	var me: Soldier = _soldiers.get(my_id())
+	if not is_instance_valid(me):
+		return
+	_seat_apply(me, get_node_or_null(path) as Vehicle if path != "" else null, seat)
+	_last_vehicle = String(me.vehicle.get_path()) if me.vehicle else ""
+	_last_seat = me.seat_index
+	seat_fixes += 1
+
+
+# --- B-022: Serverprüfungen (Bewegung, Aktionen) ---------------------------------------------------
+
+const ST_RATE_SLACK := 0.8         ## maxfreq: Pakete bis 1,25 × Grenzrate werden noch angenommen (Jitter)
+const USE_RANGE := 6.0             ## m: Benutzen (Tür/Schalter/Kiste); Original-Reichweite ~2 m + Verzug
+const SEAT_RANGE := 12.0           ## m: Einsteigen (Fahrzeugmitte; Panzer/Lkw groß) + Verzug
+const VEH_MAX_SPEED := 45.0        ## m/s: Fahrzeuge (schnellstes ~25 m/s) inkl. Gefälle/Sprung
+const VEH_SLACK_M := 6.0
+const MOVE_SPEED_FACTOR := 1.6     ## Höchsttempo je Haltung × Faktor (Sprung, Rückstoß, Jitter)
+const MOVE_SLACK_M := 4.0          ## Grundtoleranz je Paket (Lag, Ruckeln)
+const CLIMB_SPEED := 6.0           ## m/s nach oben (Leiter, Klettern bis 2,3 m, Sprung); Fallen unbegrenzt
+const SHOT_ORIGIN_TOL := 3.5       ## m: Schussursprung ↔ Lage beim Server (Kopfhöhe, Lehnen, Verzug)
+const MOUNT_ORIGIN_TOL := 10.0     ## m: in Stellung/Fahrzeug (Mündung weit vom Schützen)
+const SHOT_DIR_MAX_DEG := 100.0    ## Schussrichtung ↔ gemeldeter Blick (3.-Person-Zielpunkt, Streuung, Verzug)
+const FIRE_RATE_SLACK := 1.5       ## Kadenz × Faktor
+const FIRE_BURST := 4.0            ## gebündelt ankommende Schüsse (Lag)
+const AMMO_SLACK := 3              ## Schüsse über den Serverstand hinaus (Nachladen/Aufnahme im Flug)
+var move_check := true             ## Tests, die Figuren direkt versetzen (test_support_strike): Bewegungsprüfung aus
+var seat_fixes := 0               ## Client: vom Server zurückgesetzte Sitzwünsche (Tests)
+var pos_fixes := 0                 ## Client: vom Server zurückgesetzte Bewegungen (Tests)
+var rejects: Array = []            ## Server: verworfene RPCs [{peer, kind, why}] (Tests, Protokoll)
+
+
+func _reject_log(sid: int, kind: String, why: String) -> void:
+	print("NET-AUTH: Peer %d %s verworfen: %s" % [sid, kind, why])
+	rejects.append({"peer": sid, "kind": kind, "why": why})
+	if rejects.size() > 200:
+		rejects.pop_front()
+
+
+## Server: an alle bereiten Peers außer dem Absender (und außer sich selbst) weitergeben
+func _relay_except(sid: int, send: Callable) -> void:
+	for pid in multiplayer.get_peers():
+		if pid != sid and pid != 1:
+			send.call(pid)
+
+
+## Server: Bewegungsprüfung neu beginnen (Spawn, Ein-/Aussteigen, Skript-Teleport)
+func _mv_reset(s: Soldier, at := Vector3.INF) -> void:
+	s.set_meta("mv_pos", at if at.is_finite() else s.net_target)
+	s.set_meta("mv_ms", Time.get_ticks_msec())
+	s.set_meta("mv_h", MOVE_SLACK_M)
+	s.set_meta("mv_up", MOVE_SLACK_M)
+
+
+## Server/Skripte: Spieler wurde vom Server versetzt – nächster Zustand darf springen
+func allow_teleport(s: Soldier, at: Vector3) -> void:
+	if is_instance_valid(s):
+		s.net_target = at
+		_mv_reset(s, at)
+
+
+func _max_ground_speed(s: Soldier) -> float:
+	var v := 0.0
+	for st in Soldier.SPEEDS:
+		v = maxf(v, (st as Array).max())
+	if s.stance >= 0 and s.stance < Soldier.SPEEDS.size():
+		var st_max: float = (Soldier.SPEEDS[s.stance] as Array).max()
+		# Haltungswechsel kommt mit demselben Paket: höchstes Tempo aus aktueller und angeforderter Haltung
+		var rq := clampi(int(s.stance_request), 0, Soldier.SPEEDS.size() - 1)
+		v = maxf(st_max, (Soldier.SPEEDS[rq] as Array).max())
+	return maxf(v, 2.2)          # Schwimmen 2,2 m/s
+
+
+## Server: gemeldete Lage plausibel? Budget wächst mit der Zeit (Höchsttempo je Haltung), Pakete nach Verzug
+## dürfen gebündelt kommen. Fahrzeug/Stellung: Lage folgt dem Sitz, nur Ausgangspunkt nachführen.
+func _move_ok(sid: int, s: Soldier, pos: Vector3, now: int) -> bool:
+	if not s.has_meta("mv_pos"):
+		_mv_reset(s, s.global_position)
+	if s.vehicle != null or is_instance_valid(s.mounted) or not move_check:
+		_mv_reset(s, pos)
+		return true
+	var last: Vector3 = s.get_meta("mv_pos")
+	var dt := clampf(float(now - int(s.get_meta("mv_ms", now))) / 1000.0, 0.0, 10.0)
+	s.set_meta("mv_ms", now)
+	var rate := _max_ground_speed(s) * MOVE_SPEED_FACTOR
+	var bh := minf(float(s.get_meta("mv_h", 0.0)) + rate * dt, rate * maxf(dt, 1.0) + MOVE_SLACK_M)
+	var bu := minf(float(s.get_meta("mv_up", 0.0)) + CLIMB_SPEED * dt, CLIMB_SPEED * maxf(dt, 1.0) + MOVE_SLACK_M)
+	var d := pos - last
+	var dh := Vector2(d.x, d.z).length()
+	var du := maxf(d.y, 0.0)
+	if dh > bh or du > bu:
+		s.set_meta("mv_h", bh)
+		s.set_meta("mv_up", bu)
+		_reject_log(sid, "move", "%.1f m waagrecht / %.1f m hoch (erlaubt %.1f / %.1f)" % [dh, du, bh, bu])
+		_pos_fix.rpc_id(sid, last)
+		return false
+	s.set_meta("mv_h", bh - dh)
+	s.set_meta("mv_up", bu - du)
+	s.set_meta("mv_pos", pos)
+	return true
+
+
+## Client: Server hat die Bewegung verworfen – eigenen Soldaten auf die Serverlage setzen
+@rpc("authority", "call_remote", "reliable")
+func _pos_fix(pos: Vector3) -> void:
+	var me: Soldier = _soldiers.get(my_id())
+	if not is_instance_valid(me) or not me.alive or me.vehicle != null or is_instance_valid(me.mounted):
+		return
+	me.global_position = pos
+	me.velocity = Vector3.ZERO
+	pos_fixes += 1
+
+
+## Waffendaten zu einer Netz-Waffen-ID ohne Assertion (WeaponDB.get_weapon bricht bei unbekannter ID ab); null = unbekannt
+func _net_weapon(wid: String) -> WeaponData:
+	if wid == "":
+		return null
+	if wid.begins_with("o_"):
+		if not wid.substr(2).is_valid_int() or WeaponDB.from_orig(int(wid.substr(2))) == null:
+			return null
+	elif not WeaponDB.all_ids().has(StringName(wid)):
+		return null
+	return WeaponDB.get_weapon(StringName(wid)) if WeaponDB.all_ids().has(StringName(wid)) else null
+
+
+## Server: Waffe des Soldaten zur Waffen-ID (Hände, Plätze, Rücken); null = besitzt er nicht
+func _owned_weapon(s: Soldier, wid: String) -> Weapon:
+	for w in s.weapons:
+		if w != null and w.data != null and String(w.data.id) == wid:
+			return w
+	var back = s.get_meta("back_weapon") if s.has_meta("back_weapon") else null
+	if back is Weapon and (back as Weapon).data != null and String((back as Weapon).data.id) == wid:
+		return back
+	return null
+
+
+## Server: Feuerrate je Soldat und Waffe (Token-Eimer, gebündelte Pakete erlaubt)
+func _rate_ok(s: Soldier, key: String, per_s: float, now: int) -> bool:
+	var rates: Dictionary = s.get_meta("fire_rates", {})
+	var e: Array = rates.get(key, [FIRE_BURST, now])
+	var tokens := minf(float(e[0]) + per_s * FIRE_RATE_SLACK * float(now - int(e[1])) / 1000.0, FIRE_BURST)
+	var ok := tokens >= 1.0
+	rates[key] = [tokens - 1.0 if ok else tokens, now]
+	s.set_meta("fire_rates", rates)
+	return ok
+
+
+## Server (B-022 F-002): Grund, warum eine Client-Aktion unzulässig ist ("" = zulässig). Verbraucht beim
+## Annehmen Munition/Ladungen im Serverstand.
+func _act_error(s: Soldier, kind: String, a: Vector3, b: Vector3, wid: String) -> String:
+	if not (a.is_finite() and b.is_finite()):
+		return "ungültige Zahlen"
+	var now := Time.get_ticks_msec()
+	var mounted := is_instance_valid(s.mounted) or s.vehicle != null
+	var here := s.global_position
+	var near := minf(a.distance_to(here + Vector3.UP * 1.0), a.distance_to(s.net_target + Vector3.UP * 1.0))
+	match kind:
+		"shot", "rocket", "grenade":
+			var wd: WeaponData = _net_weapon(wid)
+			if wd == null:
+				return "unbekannte Waffe '%s'" % wid
+			if near > (MOUNT_ORIGIN_TOL if mounted else SHOT_ORIGIN_TOL):
+				return "Ursprung %.1f m von der Serverlage" % near
+			if b.length() < 0.01:
+				return "keine Richtung"
+			var w: Weapon = null
+			if not mounted:
+				w = _owned_weapon(s, wid)
+				if w == null:
+					return "Waffe %s nicht im Besitz" % wid
+			if kind == "shot" and not mounted:
+				var look := s.aim_direction()
+				var ang := rad_to_deg(look.angle_to(b.normalized()))
+				if ang > SHOT_DIR_MAX_DEG:
+					return "Richtung %.0f° neben dem Blick" % ang
+			if kind == "rocket" and b.length() > maxf(wd.muzzle_velocity, 1.0) * 1.5 + 5.0:
+				return "Raketentempo %.0f m/s" % b.length()
+			if kind == "grenade" and b.length() > maxf(wd.throw_speed, 1.0) * 2.0 + 5.0:
+				return "Wurftempo %.0f m/s" % b.length()
+			var per_s := 1.0 / maxf(wd.shot_interval(), 0.02)
+			if kind == "grenade":
+				per_s = 1.0
+			if not _rate_ok(s, kind + ":" + wid, per_s, now):
+				return "Feuerrate %s überschritten" % wid
+			if w != null and not _consume_ammo(s, w):
+				return "keine Munition %s" % wid
+		"melee":
+			if s.weapons.size() <= WeaponData.Slot.MELEE or s.weapons[WeaponData.Slot.MELEE] == null:
+				return "kein Messer"
+			if not _rate_ok(s, "melee", 1.0 / Soldier.KNIFE_RECOVER, now):
+				return "Messerrate überschritten"
+		"explosive", "mine":
+			if near > SHOT_ORIGIN_TOL + 1.0:
+				return "Ladung %.1f m von der Serverlage" % near
+			var have := s.explosives if kind == "explosive" else s.mines
+			if have <= 0:
+				return "keine %s im Inventar" % kind
+			if kind == "explosive":
+				s.explosives -= 1
+			else:
+				s.mines -= 1
+		"lean", "tool":
+			pass
+		_:
+			return "unbekannte Aktion"
+	return ""
+
+
+## Serverstand der Munition mitführen (Magazin zuerst, sonst Reserve). Ist sie leer, sind noch AMMO_SLACK Schüsse
+## als Überzug erlaubt (Aufnahme/Kiste beim Client kann dem Serverstand vorauslaufen); false = verwerfen.
+func _consume_ammo(s: Soldier, w: Weapon) -> bool:
+	if w.in_mag > 0:
+		w.in_mag -= 1
+	elif w.reserve > 0:
+		w.reserve -= 1
+	else:
+		var debt := int(s.get_meta("ammo_debt", 0)) + 1
+		if debt > AMMO_SLACK:
+			return false
+		s.set_meta("ammo_debt", debt)
+		return true
+	s.set_meta("ammo_debt", 0)
+	return true
 
 
 # --- Server: Schaden, Tod, Punkte, Respawn, Spielende ------------------------------------
@@ -2317,7 +2706,7 @@ func _process(_delta: float) -> void:
 	_process_browse()
 	if not is_online or Game.current_mission() == null:
 		return
-	_show_board(match_over or Input.is_action_pressed("soldier_next"))
+	_show_board(match_over or Input.is_action_pressed("soldier_next") or Input.is_action_pressed("show_players"))
 
 
 func board_text() -> String:
@@ -3773,7 +4162,7 @@ func _bot_sync(delta: float) -> void:
 @rpc("authority", "call_remote", "unreliable_ordered")
 func _bst(id: int, pos: Vector3, vel: Vector3, yaw: float, pitch: float, stance: int, slot: int, aiming: bool) -> void:
 	var s: Soldier = _soldiers.get(id)
-	if not is_instance_valid(s) or not s.alive:
+	if not is_instance_valid(s) or not s.alive or id == my_id():
 		return
 	s.net_target = pos
 	s.net_velocity = vel
@@ -3781,7 +4170,7 @@ func _bst(id: int, pos: Vector3, vel: Vector3, yaw: float, pitch: float, stance:
 	s.look_pitch = pitch
 	s.stance_request = stance
 	s.aiming = aiming
-	if slot != s.current_slot and slot < s.weapons.size() and s.weapons[slot] != null:
+	if slot != s.current_slot and slot >= 0 and slot < s.weapons.size() and s.weapons[slot] != null:
 		s.current_slot = slot
 		s._on_weapon_switched()
 
