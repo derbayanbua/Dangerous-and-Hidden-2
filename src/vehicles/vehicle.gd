@@ -755,6 +755,7 @@ var _dbg_t := 0.0
 func drive_path(points: Array, kmh: float) -> void:
 	if fuel <= 0.0 or wrecked or points.is_empty():
 		return
+	_passable_exceptions()
 	script_driving = true
 	freeze = false
 	sleeping = false
@@ -765,6 +766,69 @@ func drive_path(points: Array, kmh: float) -> void:
 	_stuck_t = 0.0
 	_best_dist = INF
 	_recover_t = 0.0
+
+
+var _passable_done := false
+var _void_t := 0.0
+var _void_off := 0.6
+
+
+## fix_no2_panzer: flache Level-Frames ohne Klz-Link (OrigLevel, Gruppe „vehicle_passable“, z. B. Schutt) blockieren
+## Fahrzeuge nicht – im Original kollidiert nur, was in tree.klz verlinkt ist. Figuren/Geschosse treffen sie weiter.
+func _passable_exceptions() -> void:
+	if _passable_done or not is_inside_tree():
+		return
+	_passable_done = true
+	for b in get_tree().get_nodes_in_group(&"vehicle_passable"):
+		if b is PhysicsBody3D:
+			add_collision_exception_with(b)
+
+
+## fix_no2_panzer: Skriptfahrzeug ohne Boden unter sich (NORMANDY2 Tiger/Halbkette parken am Kartenrand über einer
+## Geländelücke; im Original stehen sie dort, bei uns fielen sie ins Leere): bis zum ersten Bodenkontakt kinematisch
+## auf Höhe weiter zum Routenpunkt gleiten [E]. true = Schritt erledigt.
+func _void_glide(target: Vector3, want: float, delta: float) -> bool:
+	if _void_t <= 0.0 and drive.grounded > 0:
+		return false
+	# Boden unter den vier Rumpfecken (Fahrzeugmitte reicht nicht: Heck hing noch über der Lücke, der Rumpf rutschte
+	# in die Geländekante und klemmte)
+	var space := get_world_3d().direct_space_state
+	var hx := _size.x * 0.5
+	var hz := _size.z * 0.5
+	var hits := 0
+	var top := -INF
+	for c in [Vector3(hx, 0, hz), Vector3(-hx, 0, hz), Vector3(hx, 0, -hz), Vector3(-hx, 0, -hz)]:
+		var p: Vector3 = global_transform * c
+		var down := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 2.0, p + Vector3.DOWN * 3.0, 1, [get_rid()])
+		var h := space.intersect_ray(down)
+		if not h.is_empty():
+			hits += 1
+			top = maxf(top, (h["position"] as Vector3).y)
+	if hits == 4:
+		if freeze and _void_t > 0.0:
+			freeze = false
+			_void_t = 0.0
+		return false
+	if _void_t <= 0.0:
+		# Höhe der Fahrzeugmitte über dem Fahrspurpunkt (Tiger: Ursprung 0,6 m über dem Netzknoten)
+		_void_off = clampf(global_position.y - _drive_goal.y, 0.3, 1.5)
+	_void_t += delta
+	freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+	freeze = true
+	var to := target - global_position
+	to.y = 0.0
+	if to.length() > 0.05:
+		var yaw := atan2(to.x, to.z)      # vorne = +Z
+		global_basis = Basis(Vector3.UP, rotate_toward(global_rotation.y, yaw, 1.2 * delta))
+		var np := global_position + global_basis.z * maxf(want, 1.5) * delta
+		var gy := _drive_goal.y + _void_off
+		if top > -INF:
+			gy = maxf(gy, top + _void_off)      # nie in die Geländekante
+		np.y = move_toward(np.y, gy, 1.5 * delta)
+		global_position = np
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	return true
 
 
 func drive_done() -> bool:
@@ -830,6 +894,14 @@ func _script_drive(delta: float) -> void:
 			own.append((o as Soldier).get_rid())
 	var ahead := PhysicsRayQueryParameters3D.create(from, from + heading.normalized() * stop_d, 1 | (1 << 1), own)
 	var ah := space.intersect_ray(ahead)
+	# fix_no2_panzer: Tote/Leichen halten keine Fahrt auf (NORMANDY2 Corpse_6 stirbt per Skript auf der Straße,
+	# der Sherman stand davor fest); überrollt wird über _check_runover
+	for _k in 3:
+		if ah.is_empty() or not (ah["collider"] is Soldier) or (ah["collider"] as Soldier).alive:
+			break
+		own.append((ah["collider"] as Soldier).get_rid())
+		ahead.exclude = own
+		ah = space.intersect_ray(ahead)
 	if not ah.is_empty() and (ah["normal"] as Vector3).y < 0.6 and _recover_t <= 0.0:
 		want = 0.0
 	if Game.cli.has("drive_debug"):
@@ -848,7 +920,9 @@ func _script_drive(delta: float) -> void:
 					for r in get_world_3d().direct_space_state.intersect_shape(hq, 4):
 						hits.append(String((r["collider"] as Node).get_path()).get_file())
 			print("DRIVEDBG2 kind %s grounded %d/%d thr %.2f brk %.2f hb %s park %s gear %d rpm %.0f force %.0f mass %.0f pow %.0f freeze %s sleep %s hull %s" % [drive.kind, drive.grounded, drive.wheels.size(), drive.throttle, drive.brake_in, drive.handbrake, drive.parked, drive.gear, drive.rpm, drive.drive_force, drive.mass, drive.power_w, freeze, sleeping, hits])
-	if _recover_t > 0.0:
+	if not _drive_reverse and _void_glide(target, want, delta):
+		pass
+	elif _recover_t > 0.0:
 		_recover_t -= delta
 		var back := global_position - heading.normalized() * 6.0 + global_basis.x * signf(to_local(_drive_goal).x) * -4.0
 		drive.ai_control(back, -2.5 * dirsign, delta)

@@ -62,7 +62,9 @@ func _run() -> void:
 	if tank:
 		OrigInteractive.damage_objects(get_tree(), tank.global_position, 6.0, 300.0)
 		await seconds(1.0)
-		check(tank.destroyed and not tank.frame.visible, "Explosion zerstört den Tank")
+		# B-028/O-009: mit Zerstörungsanimation (#dm_nadrz*.i3d) bleibt der Tank als Trümmer sichtbar, sonst ausgeblendet
+		check(tank.destroyed and (tank.frame.visible == tank.animated), "Explosion zerstört den Tank",
+			"animiert=%s sichtbar=%s" % [tank.animated, tank.frame.visible])
 		check(m.runtime.game_values.get(106) == 1, "Originalskript OnDeath ausgelöst (SaveGameValue 106)", str(m.runtime.game_values))
 
 	# --- Munitionskiste ---

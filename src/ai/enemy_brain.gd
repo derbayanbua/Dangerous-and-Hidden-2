@@ -109,12 +109,33 @@ func set_look_around(n: int) -> void:
 
 func script_move(pos: Vector3) -> void:
 	_script_target = pos
+	_script_route = []
 	script_look_at = Vector3.INF
 	move_to(pos, script_move_mode)
 
 
 func script_move_done() -> bool:
-	return not has_move_target() or arrived(1.2)
+	var done := not has_move_target() or arrived(1.2)
+	if done and not _script_route.is_empty():
+		# B-033: nächster Wegpunkt der Checkpoint-Kantenfolge (LsRuntime._checkpoint_route)
+		var rest := _script_route
+		script_move(rest.pop_front())
+		_script_route = rest
+		return false
+	return done
+
+
+## B-033: HUMAN_Move über die Checkpoint-Kanten (CheckpointJoin): Zwischenpunkte nacheinander, Ziel zuletzt.
+## Jeder andere script_move verwirft eine laufende Kantenfolge.
+var _script_route: Array = []
+
+
+func script_route(points: Array) -> void:
+	var q := points.duplicate()
+	if q.is_empty():
+		return
+	script_move(q.pop_front())
+	_script_route = q
 
 
 ## HUMAN_IllFire(Ziel, ms): ms lang auf ein Ziel (Akteur oder Frame) feuern, z. B. Zielscheiben (ALPS1), Hinrichtung
@@ -161,6 +182,65 @@ func script_attack(t: Soldier) -> void:
 	set_state(State.COMBAT)
 
 
+## AP-6: HUMAN_Attack/HUMAN_IllFire (gemeinsamer Handler 0x422776 → 0x58F1F0/0x58F260) [B]: Kampfauftrag am Gehirn
+## (+0x1C4 Ziel-Akteur bzw. +0x1C8 Ziel-Frame, +0x1C0 = Argument 2, +0xB4 = IllFire, +0x1DC = Skript-pc für die Rückmeldung),
+## Skript blockiert bis zur Rückmeldung. Argument 2 in den Originalskripten 200…60000 → Dauer in ms [P] (AFRICA3
+## af3a_18: „Warnschüsse in die Luft“, HUMAN_Attack(look_alarm, 200)).
+## Nachbau: Ziel = gegnerischer Soldat → Kampfautomat (OrigCombatFsm über _combat, Originalmissionen offline) mit diesem
+## Ziel; Rückmeldung bei Ablauf der Dauer, Tod des Ziels oder Ende des Kampfes. Ziel = Frame/kein Gegner → feuern auf den
+## Punkt für die Dauer. IllFire (+0xB4) = immer gezieltes Feuern auf Akteur/Frame ohne Automat [P]; die genaue Wirkung von
+## +0xB4 im Automaten ist nicht dekodiert [offen].
+## AP-6: HUMAN_SetSniper(an, n) → 0x4226B0 → 0x5AF700/0x5AE610 [B Setzer]: Gedächtnis(+0xB4).sniper = {Lage bei Aufruf
+## (Frame +0x70), float(n), an/aus}. Der Leser von +0x14 ist nicht gefunden [offen]. Deutung [P]: n = Bewegungsradius in m
+## um den Posten – die Originalskripte setzen nur 1/3/5/8/10 (AFRICA1/3/5), als Sichtweite unplausibel. Nachbau:
+## Leine = n m um die Postenlage, kein Anmarsch/Nachrücken über die Leine hinaus, Heimweg = Posten; Sicht/Treffsicherheit
+## unverändert (die frühere Annahme Sicht ≥ 120 m/Treffsicherheit +0,25 [E] entfällt). Flag 0x800 ist NICHT Sniper (blind).
+var sniper_enabled := false
+var sniper_post := Vector3.ZERO
+var sniper_range := 0.0
+
+
+func set_sniper(on: bool, range_m: float) -> void:
+	sniper_enabled = on
+	sniper_range = maxf(range_m, 0.0)
+	if on:
+		sniper_post = soldier.global_position
+		home_pos = sniper_post
+		home_yaw = soldier.look_yaw
+
+
+var attack_left := 0.0
+var attack_illfire := false
+var _attack_target: Soldier
+
+
+func script_attack_order(t: Node3D, seconds: float, illfire: bool) -> void:
+	attack_illfire = illfire
+	var s := t as Soldier
+	# IllFire (Flag +0xB4) = gezieltes Feuern ohne Positionswechsel [P] (ALPS1 Zielscheiben, ARCTIC3 Hinrichtung)
+	if not illfire and s and s.alive and s.team != soldier.team and s.team != Soldier.TEAM_NEUTRAL:
+		_attack_target = s
+		attack_left = maxf(seconds, 0.1)
+		_ill_fire_t = 0.0
+		script_attack(s)
+		orig_fsm = null      # frischer Automat (Zustand 0) mit diesem Ziel
+		return
+	_attack_target = null
+	attack_left = 0.0
+	script_ill_fire(t, seconds)
+
+
+func attack_done() -> bool:
+	if _attack_target == null:
+		return ill_fire_done()
+	if attack_left <= 0.0 or not is_instance_valid(_attack_target) or not _attack_target.alive \
+			or state != State.COMBAT or not soldier.alive:
+		_attack_target = null
+		attack_left = 0.0
+		return true
+	return false
+
+
 ## HUMAN_SETAIMODE_Defensive/Aggressive nach Zombie (B-020): Typisch ist OnAlarm → HUMAN_SETAIMODE_Defensive → EndScript
 ## (ARCTIC1 r_arc1a_walker*.scr). Die eigene KI übernimmt den anstehenden Alarm: gesehener Feind → Kampf, sonst zum Ort
 ## des Alarmreizes (HUMAN_MoveToAlarm-Ziel). Posten = aktuelle Stelle (der Skriptweg hat ihn verlegt). Vorher blieb der
@@ -194,7 +274,9 @@ func leash_radius() -> float:
 	# nur Originalmissionen (LsRuntime); eigene Übungseinsätze und MP-Bots behalten ihr bisheriges Verhalten
 	if not _orig_rules():
 		return INF
-	var sight := float(soldier.get_meta("orig_params", {}).get("sight_range", _base_sight))
+	if sniper_enabled:
+		return sniper_range
+	var sight :=float(soldier.get_meta("orig_params", {}).get("sight_range", _base_sight))
 	if zombie_mode:
 		return minf(sight / 3.0, 25.0)
 	if ai_mode == Mode.AGGRESSIVE:
@@ -257,6 +339,7 @@ func _script_tick(delta: float) -> void:
 			return
 	update_movement(delta, true)
 var flank_origin := Vector3.INF   ## Position bei der Flankenentscheidung
+var orig_fsm: OrigCombatFsm       ## AP-3: Kampfautomat 0x549AE0 (nur Originalmissionen offline, im Kampf)
 var _search_limit := -1.0
 
 
@@ -286,7 +369,7 @@ func _physics_process(delta: float) -> void:
 	if not enabled or soldier == null or not soldier.alive:
 		return
 	if perception:
-		perception.orig_formula = _orig_rules()   # B-021: Wahrnehmungsformel des Originals nur in Originalmissionen offline
+		perception.orig_formula = _orig_rules() or Perception.orig_everywhere()   # B-021; G-004 Option: Wahrnehmungsformel des Originals nur in Originalmissionen offline
 	if surrendered or captured:
 		_surrender_tick(delta)
 		return
@@ -302,11 +385,14 @@ func _physics_process(delta: float) -> void:
 		_check_surrender()
 		if surrendered:
 			return
+	_call_cooldown = maxf(_call_cooldown - delta, 0.0)
 	if _script_alarm_t > 0.0:
 		_script_alarm_t -= delta
 		if _script_alarm_t <= 0.0 and _alarm_notified and script_control:
 			_alarm_notified = false
 			_notify_script("ONALARMDONE")
+	if attack_left > 0.0:
+		attack_left -= delta
 	if _ill_fire_t > 0.0:
 		_ill_fire_tick(delta)
 		return
@@ -327,7 +413,7 @@ func _physics_process(delta: float) -> void:
 		State.SEARCH: _search(delta)
 	if stationary and state != State.GUARD:
 		stop_moving()
-	update_movement(delta, state != State.COMBAT)
+	update_movement(delta, state != State.COMBAT or (orig_fsm != null and orig_fsm.face_move))
 
 
 func set_state(s: int) -> void:
@@ -358,6 +444,7 @@ func set_state(s: int) -> void:
 	_flank_retry = 0.0
 	if s != State.COMBAT:
 		cease_fire()
+	orig_fsm = null    # AP-3: Automat startet bei jedem Kampfeintritt neu (Zustand 0)
 
 
 # --- Zustände ----------------------------------------------------------------
@@ -452,9 +539,12 @@ func _combat(delta: float) -> void:
 		_no_los_time = 0.0
 	else:
 		_no_los_time += delta
-	if target == null or not target.alive:
+	if (target == null or not target.alive) and not (orig_fsm != null and _orig_rules()):
 		target = null
 		set_state(State.SEARCH)
+		return
+	if target == null or not target.alive:
+		_orig_fsm_tick(delta)    # AP-3: Ziel tot/verloren – der Automat entscheidet (Zustand 8 → neues Ziel bzw. 2)
 		return
 	var tpos: Vector3 = perception.last_known.get(target, target.global_position)
 	var threat_eye := tpos + Vector3.UP * 1.5
@@ -479,6 +569,11 @@ func _combat(delta: float) -> void:
 			_cover_pos = Vector3.INF   # danach neue Deckung wählen
 			return
 
+	# AP-3: Originalmissionen offline → Kampfautomat hd2.exe 0x549AE0 (OrigCombatFsm) statt eigener Deckungs-/Flankenlogik.
+	# Stellungsposten (stationary) bleiben bei der bisherigen Logik (bewegen sich nicht).
+	if _orig_rules() and not stationary:
+		_orig_fsm_tick(delta)
+		return
 	if stationary:
 		_cover_pos = soldier.global_position
 	# Deckung suchen (einmalig bzw. wenn Deckung verloren)
@@ -550,6 +645,19 @@ func _combat(delta: float) -> void:
 			set_state(State.SEARCH)
 		elif _no_los_time > 14.0:
 			set_state(State.SEARCH)
+
+
+## AP-3: ein Schritt des Kampfautomaten 0x549AE0; Zustand 12 abgelaufen („Suche beendet“) → Ruhezustand.
+func _orig_fsm_tick(delta: float) -> void:
+	if orig_fsm == null:
+		orig_fsm = OrigCombatFsm.new(self)
+		orig_fsm.start(target if is_instance_valid(target) and target.alive else null)
+		if not (is_instance_valid(target) and target.alive):
+			orig_fsm.start_search(investigate_pos if investigate_pos != Vector3.ZERO else soldier.global_position)
+	if not orig_fsm.tick(delta):
+		orig_fsm = null
+		target = null
+		set_state(_calm_state())
 
 
 func _search(delta: float) -> void:
@@ -765,10 +873,36 @@ func _alarm_if_still_fighting() -> void:
 		_raise_alarm("Feindkontakt")
 
 
+## Leichenfund/Feindkontakt. Übungseinsätze/MP: mission.raise_alarm → kartenweite Kaskade [E].
+## Originalmissionen offline (B-031): mission.raise_alarm zählt nur und ruft local_alarm dieses Soldaten auf.
 func _raise_alarm(_reason: String) -> void:
 	var m := Game.current_mission()
 	if m and m.has_method("raise_alarm"):
 		m.raise_alarm(soldier.global_position, soldier)
+
+
+## B-031 (GAP_REA §2): Alarm nur für diesen Akteur – über Skript (HUMAN_SetAlarm) oder eigenen Leichenfund/Kampf.
+## Andere Gegner erfahren davon nur über ihr eigenes Gehör: Zuruf mit Lautstärke 1 (Radius 60 → wirksam = Hörweite
+## des Hörers, Perception._on_noise; Plan „Hörweite des Hörers“ [P]) bzw. über die Schüsse. Keine Rundmeldung [B 0x549AE0].
+func local_alarm(pos: Vector3) -> void:
+	if not soldier.alive or surrendered or captured:
+		return
+	alarm_pos = pos
+	alert_level = 1.0
+	if script_control:
+		_script_alarm(AL_SHOT, pos)    # wie bisher beim Skript-Alarm (Art 2) [E]
+	elif state != State.COMBAT and state != State.SEARCH:
+		perception.sight_range = maxf(_base_sight, 150.0)
+		investigate_pos = pos
+		set_state(State.SEARCH)
+		move_to(_leash_clamp(pos), Soldier.MoveMode.RUN)
+	if _call_cooldown <= 0.0:
+		_call_cooldown = CALL_OUT_COOLDOWN
+		Events.emit_noise(soldier.global_position, 60.0, soldier, soldier.team, &"alert")
+
+
+const CALL_OUT_COOLDOWN := 6.0
+var _call_cooldown := 0.0
 
 
 func state_name() -> String:

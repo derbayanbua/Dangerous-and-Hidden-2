@@ -9,7 +9,8 @@ Zusaetzlich die Textstil-Tabelle aus hd2.exe (0x641E30, 90 Stile: Schrift BIG=2/
 Anteil der Bildhoehe, Lage x/y im Rechteck, Rand, Ausrichtung) -> text_styles.json.
 
 Aufruf: python -I fmt_fonts.py [HD2-Ordner] [Zielordner]
-  Standard: D:\\Workspace_D\\HD2_orig -> D:\\Workspace_D\\DangerousHidden2\\orig_cache\\ui\\fonts
+  Standard (B-024/O-003): %DH2_ORIG% -> %DH2_CACHE%\\ui\\fonts, ohne Umgebung <tools>\\..\\HD2_orig bzw.
+  <tools>\\..\\DangerousHidden2\\orig_cache (wie die übrigen Konverter). Die Quelle wird nur gelesen.
 """
 import json
 import os
@@ -19,8 +20,10 @@ import sys
 
 from PIL import Image
 
-HD2 = sys.argv[1] if len(sys.argv) > 1 else r"D:\Workspace_D\HD2_orig"
-OUT = sys.argv[2] if len(sys.argv) > 2 else r"D:\Workspace_D\DangerousHidden2\orig_cache\ui\fonts"
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+HD2 = sys.argv[1] if len(sys.argv) > 1 else (os.environ.get("DH2_ORIG") or os.path.join(_ROOT, "HD2_orig"))
+OUT = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
+    os.environ.get("DH2_CACHE") or os.path.join(_ROOT, "DangerousHidden2", "orig_cache"), "ui", "fonts")
 CODEPAGE = {"ANSI": "cp1252", "CE": "cp1250"}
 
 

@@ -31,8 +31,8 @@ func open() -> void:
 static func style_name(st: int) -> String:
 	if st < 0:
 		return SAS.text(2890, "ALLE ARTEN")
-	if st == Net.Mode.TEAM_DEATHMATCH:
-		return Net.MODE_NAMES[1]
+	if st == Net.Mode.TEAM_DEATHMATCH or st == Net.Mode.COOP:
+		return Net.MODE_NAMES[st]          # Team-Deathmatch (Ergänzung), Kooperativ (B-029, kein deutscher Originaltext)
 	return SAS.text({0: 2891, 2: 2892, 3: 2893}.get(st, 2894), Net.MODE_NAMES[clampi(st, 0, 3)])
 
 

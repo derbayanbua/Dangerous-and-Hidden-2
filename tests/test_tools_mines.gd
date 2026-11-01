@@ -270,8 +270,21 @@ func _mine_shot(m: Mission, s: Soldier) -> void:
 	await seconds(0.6)
 	var pos := mine.global_position
 	var hits0 := Ballistics.shots_fired
+	# Kameraden aus der Schusslinie halten: sie folgen dem Schützen und standen 1,5 m vor ihm im Strahl (Spielerschüsse
+	# treffen eigene Kameraden – richtig so); Tests sind auf freie Linie zur Mine angewiesen
+	var parked: Array = []
+	for o in m.squad.members:
+		var mt := o as Soldier
+		if mt != null and mt != s and mt.alive:
+			mt.global_position = mine.global_position + Vector3(-4.5, 0.3, 8.0 + 1.5 * parked.size())
+			mt.velocity = Vector3.ZERO
+			mt.set_physics_process(false)
+			parked.append(mt)
 	await _shoot_at(s, mine.hit_area.global_position + Vector3.UP * 0.07)
 	await seconds(0.5)
+	for mt in parked:
+		if is_instance_valid(mt):
+			mt.set_physics_process(true)
 	check(Ballistics.shots_fired > hits0 and (not is_instance_valid(mine) or mine.is_queued_for_deletion()),
 		"Schuss auf die Mine → Detonation")
 	var dmg_expect := WeaponDB.explosion_damage(PlacedCharge.MINE_STRENGTH, PlacedCharge.MINE_RADIUS,
@@ -407,6 +420,7 @@ func _run_mp() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(RESULT))
 	await frames(5)
 	Net.local_name = "Host"
+	Net.move_check = false        # B-022: Testclient versetzt seine Figur direkt an die Minen – kein Spielzug
 	var ok := Net.host({"name": "Minen", "map": "mp_arena_a1_blizzard", "mode": Net.Mode.DEATHMATCH, "max_players": 4,
 		"time_limit_min": 0, "score_limit": 0, "respawn_s": 5, "password": "", "port": MP_PORT,
 		"friendly_fire": true, "bots_per_team": 0})

@@ -1199,12 +1199,32 @@ var last_result := {}               ## für das Nachbesprechungsmenü
 var cli := {}
 
 
+## B-038: exportierte EXE + separate .pck – Version der .pck (project.godot) gegen version.txt neben der EXE.
+## Fehlt version.txt, wird nichts geprüft (Editor, alte Builds). Abweichung → klarer Hinweis (Fenster: OS.alert).
+func _check_pck_version() -> String:
+	if OS.has_feature("editor"):
+		return ""
+	var f := OS.get_executable_path().get_base_dir().path_join("version.txt")
+	if not FileAccess.file_exists(f):
+		return ""
+	var want := FileAccess.get_file_as_string(f).strip_edges()
+	var have := str(ProjectSettings.get_setting("application/config/version", ""))
+	if want == "" or want == have:
+		return ""
+	var msg := "Spieldaten (DangerousHidden2.pck, v%s) passen nicht zur EXE (version.txt v%s).\nBitte EXE und .pck aus demselben Paket verwenden." % [have, want]
+	push_error(msg)
+	if DisplayServer.get_name() != "headless":
+		OS.alert(msg, "Dangerous Hidden 2 – Versionskonflikt")
+	return msg
+
+
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--"):
 			var kv := arg.substr(2).split("=", true, 1)
 			cli[kv[0]] = kv[1] if kv.size() > 1 else "1"
+	_check_pck_version()
 	_load_local_content()
 	_register_orig_missions()
 	_load_current_profile()
@@ -1431,7 +1451,7 @@ func save_game(slot: String = "quick") -> bool:
 	state["_saves_used"] = saves_used
 	state["_diary"] = _diary_pending.duplicate()
 	var data := {
-		"version": 2,
+		"version": SAVE_VERSION,
 		"mission": current_mission_id,
 		"title": String(MISSIONS.get(current_mission_id, {}).get("title", current_mission_id)),
 		"mode": game_mode, "single": single_mission, "mode_title": mode_title(),
@@ -1455,15 +1475,50 @@ func save_game(slot: String = "quick") -> bool:
 	return true
 
 
+## M-021: Spielstand vorhanden, wenn Hauptdatei oder eine Rückfalldatei (.bak/.tmp aus write_file_atomic) existiert.
 func has_save(slot: String = "quick") -> bool:
-	return FileAccess.file_exists(save_path(slot))
+	var p := save_path(slot)
+	return FileAccess.file_exists(p) or FileAccess.file_exists(p + ".bak") or FileAccess.file_exists(p + ".tmp")
 
 
 func delete_save(slot: String) -> void:
-	if has_save(slot):
-		DirAccess.remove_absolute(save_path(slot))
-		if FileAccess.file_exists(save_path(slot) + ".bak"):
-			DirAccess.remove_absolute(save_path(slot) + ".bak")
+	var p := save_path(slot)
+	for f in [p, p + ".bak", p + ".tmp"]:
+		if FileAccess.file_exists(f):
+			DirAccess.remove_absolute(f)
+
+
+## M-021: Spielstand lesen mit Rückfall. Reihenfolge Hauptdatei → .bak → .tmp; die erste Datei, die
+## validate_save_data (inkl. Versionsprüfung/Migration) besteht, gewinnt. Wurde eine Rückfalldatei
+## benutzt, wird die Hauptdatei daraus repariert. Rückgabe {data, source, error}; data = {} bei Fehler.
+var last_load_source := ""   ## "main"/"bak"/"tmp" – Herkunft des zuletzt gelesenen Spielstands (Tests)
+
+func read_save(slot: String, repair: bool = true) -> Dictionary:
+	var p := save_path(slot)
+	var first_err := ""
+	for pair in [["main", p], ["bak", p + ".bak"], ["tmp", p + ".tmp"]]:
+		var f: String = pair[1]
+		if not FileAccess.file_exists(f):
+			continue
+		var data = JSON.parse_string(FileAccess.get_file_as_string(f))
+		var why := validate_save_data(data)
+		if why != "":
+			if first_err == "":
+				first_err = why
+			# Neuere Version nicht durch ältere Sicherung ersetzen: sauber ablehnen
+			if why.begins_with("neuere Spielstandversion"):
+				return {"data": {}, "source": pair[0], "error": why}
+			continue
+		if pair[0] != "main":
+			push_warning("Spielstand %s: Hauptdatei fehlt/beschädigt, verwende %s" % [slot, f.get_file()])
+			if repair:
+				var txt := FileAccess.get_file_as_string(f)
+				if FileAccess.file_exists(p):
+					DirAccess.remove_absolute(p)
+				if DirAccess.copy_absolute(f, p) != OK or FileAccess.get_file_as_string(p) != txt:
+					push_warning("Spielstand %s: Reparatur der Hauptdatei fehlgeschlagen" % slot)
+		return {"data": data, "source": pair[0], "error": ""}
+	return {"data": {}, "source": "", "error": first_err if first_err != "" else "kein Spielstand vorhanden"}
 
 
 ## Spielstandliste des Profils (neueste zuerst): [{slot, title, mode_title, timestamp, mission}]
@@ -1472,14 +1527,22 @@ func list_saves() -> Array:
 	var d := DirAccess.open(save_dir())
 	if d == null:
 		return out
+	var seen := {}
 	for f in d.get_files():
-		if not f.ends_with(".json"):
+		var slot := ""
+		for ext in [".json", ".json.bak", ".json.tmp"]:
+			if f.ends_with(ext):
+				slot = f.substr(0, f.length() - ext.length())
+				break
+		if slot == "" or seen.has(slot):
 			continue
-		var slot := f.get_basename()
-		var data = JSON.parse_string(FileAccess.get_file_as_string(save_path(slot)))
-		if typeof(data) != TYPE_DICTIONARY or not MISSIONS.has(String(data.get("mission", ""))):
+		seen[slot] = true
+		var r := read_save(slot, false)
+		var data = r["data"]
+		if r["error"] != "" or not MISSIONS.has(String(data.get("mission", ""))):
 			continue
-		var mt := FileAccess.get_modified_time(ProjectSettings.globalize_path(save_path(slot)))
+		var src_path: String = save_path(slot) + String({"main": "", "bak": ".bak", "tmp": ".tmp"}[r["source"]])
+		var mt := FileAccess.get_modified_time(ProjectSettings.globalize_path(src_path))
 		out.append({"slot": slot, "mission": String(data["mission"]),
 			"title": String(data.get("title", MISSIONS[data["mission"]].get("title", ""))),
 			"mode_title": String(data.get("mode_title", "")), "timestamp": String(data.get("timestamp", "")), "mtime": mt})
@@ -1500,8 +1563,10 @@ func load_game(slot: String = "quick") -> bool:
 	if not has_save(slot):
 		Events.say("Kein Spielstand vorhanden.")
 		return false
-	var data = JSON.parse_string(FileAccess.get_file_as_string(save_path(slot)))
-	var why := validate_save_data(data)
+	var r := read_save(slot)
+	var data = r["data"]
+	last_load_source = String(r["source"])
+	var why := String(r["error"])
 	if why != "":
 		# F-013: kontrollierter Ladefehler, Spielstand und laufendes Spiel bleiben unangetastet
 		push_warning("Spielstand %s beschädigt: %s" % [slot, why])
@@ -1545,12 +1610,73 @@ func validate_save_data(data) -> String:
 		return "Feld 'single' ist kein Wahrheitswert"
 	if data.has("version") and not (typeof(data["version"]) in [TYPE_INT, TYPE_FLOAT]):
 		return "Feld 'version' ist keine Zahl"
+	# M-022: Version prüfen (fehlend = 1), neuere ablehnen, ältere migrieren
+	var ver := int(data.get("version", 1))
+	if ver > SAVE_VERSION:
+		return "neuere Spielstandversion %d (unterstützt bis %d)" % [ver, SAVE_VERSION]
+	if ver < 1:
+		return "ungültige Spielstandversion %d" % ver
 	var st: Dictionary = data["state"]
 	for k in ["_saves_used"]:
 		if st.has(k) and not (typeof(st[k]) in [TYPE_INT, TYPE_FLOAT]):
 			return "Feld 'state.%s' ist keine Zahl" % k
 	if st.has("_diary") and typeof(st["_diary"]) != TYPE_ARRAY:
 		return "Feld 'state._diary' ist keine Liste"
+	if ver < SAVE_VERSION:
+		migrate_save_data(data, ver)
+	return _validate_state(st)
+
+
+## M-022: Aktuelle Spielstandversion (Ebene game.gd). 1 = ohne Feld, 2 = bis B-022b, 3 = Inhalt geprüft.
+## Weitere Schlüssel in `state` (z. B. Skriptzustand der Originalmissionen) bleiben unverändert erhalten.
+const SAVE_VERSION := 3
+
+## Pflichtlisten in Mission.serialize: Schlüssel → erwarteter Typ (Inhalte je Eintrag Dictionary)
+const _STATE_DICTS := ["squad", "enemies", "interactables", "objectives", "extra", "stats"]
+
+## M-022: Spielstand schrittweise auf SAVE_VERSION heben (verändert data in place).
+func migrate_save_data(data: Dictionary, from_version: int) -> void:
+	var st: Dictionary = data["state"]
+	var v := from_version
+	if v < 2:
+		# v1 (ohne Versionsfeld): Kopf-/Modusfelder ergänzen
+		if not data.has("mode"):
+			data["mode"] = 0
+		if not data.has("single"):
+			data["single"] = false
+		v = 2
+	if v < 3:
+		# v2 → v3: fehlende Hauptlisten als leer ergänzen (deserialize greift direkt zu)
+		for k in ["squad", "enemies", "interactables", "objectives"]:
+			if not st.has(k):
+				st[k] = {}
+		v = 3
+	data["version"] = v
+	data["migrated_from"] = from_version
+
+
+## M-022: Inhalt von state prüfen, damit Mission.deserialize keine Laufzeitfehler bekommt.
+func _validate_state(st: Dictionary) -> String:
+	for k in ["squad", "enemies", "interactables", "objectives"]:
+		if not st.has(k):
+			return "Feld 'state.%s' fehlt" % k
+	for k in _STATE_DICTS:
+		if st.has(k) and typeof(st[k]) != TYPE_DICTIONARY:
+			return "Feld 'state.%s' ist kein Objekt" % k
+	for k in ["squad", "enemies", "interactables"]:
+		for id in st[k]:
+			if typeof(st[k][id]) != TYPE_DICTIONARY:
+				return "Eintrag 'state.%s.%s' ist kein Objekt" % [k, id]
+			if st[k][id].has("brain") and typeof(st[k][id]["brain"]) != TYPE_DICTIONARY:
+				return "Eintrag 'state.%s.%s.brain' ist kein Objekt" % [k, id]
+	for id in st["objectives"]:
+		if not (typeof(st["objectives"][id]) in [TYPE_INT, TYPE_FLOAT]):
+			return "Ziel 'state.objectives.%s' ist keine Zahl" % id
+	for k in ["active", "formation", "spacing_level", "elapsed"]:
+		if st.has(k) and not (typeof(st[k]) in [TYPE_INT, TYPE_FLOAT]):
+			return "Feld 'state.%s' ist keine Zahl" % k
+	if st.has("alarm") and typeof(st["alarm"]) != TYPE_BOOL:
+		return "Feld 'state.alarm' ist kein Wahrheitswert"
 	return ""
 
 

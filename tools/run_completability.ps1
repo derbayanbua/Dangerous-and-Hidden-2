@@ -4,7 +4,10 @@
 # Beachtet die Test-Sperre test_output\.godot_lock (fremde Sperre < 20 min -> warten) und lässt zwischen zwei
 # Missionen 20 s Zeit, damit andere Läufe die Sperre bekommen.
 param([string[]]$Only = @(), [string]$Speed = "2", [int]$TimeoutSec = 1500, [string]$LockName = "completability",
-  [switch]$TableOnly, [string]$Strategy = "kampf", [string]$Extra = "")
+  [switch]$TableOnly, [string]$Strategy = "kampf", [string]$Extra = "", [switch]$Human)
+# -Human (B-036): Löser-Modus „menschlich“ (--human=1, nur Spielereingaben/Navmesh-Wege, keine Teleports des Lösers);
+# Log completability_<id>_mensch.log, Zeitlimit mindestens 9000 s. Tabelle: test_output\completability_mensch.txt
+if ($Human) { $Extra = "$Extra --human=1"; if ($TimeoutSec -lt 9300) { $TimeoutSec = 9300 } }
 # -Strategy leise: Löser tötet erst in Runde 3 (Log completability_<id>_leise.log); die Tabelle nimmt je Mission
 # das bessere Ergebnis beider Strategien.
 $proj = Split-Path $PSScriptRoot -Parent
@@ -14,6 +17,8 @@ $all = @("training", "a1_blizzard", "a2_erkundung", "a3_rendezvous", "a4_eisberg
   "af3_gaeste", "af4_karawane", "af5_whiskey_bar", "af6_raubvoegel", "nw1_dampfleitung", "bu1_ameisenhuegel", "bu2_bergkoenig",
   "al1_waldgeister", "al2_makler", "no1_leuchtturm", "no2_schwerttaenzer", "cz1_eintrittsgeld", "cz2_maulwurf",
   "cz3_geschaeft", "cz4_volksfest", "cz5_trink_aus", "cz6_abrechnung")
+# powershell -File übergibt "-Only a,b" als EINEN String → an Kommas trennen (B-028-Hinweis)
+$Only = @($Only | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
 $ids = if ($Only.Count -gt 0) { $Only } else { $all }
 $lock = "$out\.godot_lock"
 if (-not $TableOnly) {
@@ -32,6 +37,7 @@ if (-not $TableOnly) {
       if (((Get-Content $lock -ErrorAction SilentlyContinue) -join "") -eq $LockName) { break }
     }
     $suffix = if ($Strategy -ne "kampf") { "_$Strategy" } else { "" }
+    if ($Human) { $suffix = "${suffix}_mensch" }
     $log = "$out\completability_$id$suffix.log"
     # AFRICA6 ist ein Bordschützen-Einsatz mit eigener Flugmechanik: Erfüllbarkeit über test_af6
     $script = if ($id -eq "af6_raubvoegel") { "test_af6" } else { "test_orig_complete" }
@@ -46,12 +52,12 @@ if (-not $TableOnly) {
 # Tabelle aus allen vorhandenen Logs
 $rows = @()
 foreach ($id in $all) {
-  $log = "$out\completability_$id.log"
+  $log = if ($Human) { "$out\completability_${id}_mensch.log" } else { "$out\completability_$id.log" }
   if (-not (Test-Path $log)) { continue }
   $txt = Get-Content $log -Encoding UTF8
   $line = $txt | Where-Object { $_ -match '^ERFUELLBAR\|' } | Select-Object -Last 1
   $alt = "$out\completability_${id}_leise.log"
-  if ((-not $line -or $line.Split("|")[3] -ne "1") -and (Test-Path $alt)) {
+  if ((-not $line -or $line.Split("|")[3] -ne "1") -and (Test-Path $alt) -and -not $Human) {
     $t2 = Get-Content $alt -Encoding UTF8
     $l2 = $t2 | Where-Object { $_ -match '^ERFUELLBAR\|' } | Select-Object -Last 1
     if ($l2 -and $l2.Split("|")[3] -eq "1") { $txt = $t2; $line = $l2 }
@@ -71,5 +77,7 @@ $md = @("| Mission | Ordner | Erfolg (Löser) | Pflichtziele erfüllt | Skriptfe
 foreach ($r in $rows) { $md += "| $($r.id) | $($r.folder) | $(if ($r.success -eq '1') { 'ja' } else { 'nein' }) | $($r.req) | $($r.errors) | $($r.unimpl) | $($r.reason) $($r.notes) |" }
 $md += ""
 foreach ($r in $rows) { $md += "### $($r.id)"; $md += $r.objectives }
-$md | Set-Content -Path "$out\completability.txt" -Encoding UTF8
-"Tabelle: $out\completability.txt"
+$tab = if ($Human) { "$out\completability_mensch.txt" } else { "$out\completability.txt" }
+$md | Set-Content -Path $tab -Encoding UTF8
+"Tabelle: $tab"
+

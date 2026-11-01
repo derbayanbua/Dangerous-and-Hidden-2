@@ -14,7 +14,165 @@ func _run() -> void:
 	_t_key()
 	_vsync_migration()
 	_gamma()
+	_bak_fallback()
+	_save_versions()
+	_settings_sanitize()
 	_finish()
+
+
+func _good_save(marker: String, version := 3) -> String:
+	var d := {"mission": "m01_funkfeuer", "mode": 0, "single": false, "title": marker,
+		"state": {"squad": {}, "enemies": {}, "interactables": {}, "objectives": {}, "marker": marker}}
+	if version > 0:
+		d["version"] = version
+	return JSON.stringify(d)
+
+
+func _put(path: String, text: String) -> void:
+	var f := FileAccess.open(path, FileAccess.WRITE)
+	f.store_string(text)
+	f.close()
+
+
+## B-027 / M-021: .bak-/.tmp-Rückfall beim Laden
+func _bak_fallback() -> void:
+	DirAccess.make_dir_recursive_absolute(Game.save_dir())
+	var slot := "bak_test"
+	var p := Game.save_path(slot)
+	Game.delete_save(slot)
+	Game.write_file_atomic(p, _good_save("A"))
+	Game.write_file_atomic(p, _good_save("B"))
+	var r := Game.read_save(slot)
+	check(r["source"] == "main" and r["data"]["state"]["marker"] == "B", "M-021: intakte Hauptdatei gewinnt", str(r["source"]))
+	# Hauptdatei beschädigt → .bak, Hauptdatei repariert
+	_put(p, "{ kaputt")
+	r = Game.read_save(slot)
+	check(r["error"] == "" and r["source"] == "bak" and r["data"]["state"]["marker"] == "A", "M-021: beschädigte Hauptdatei → .bak",
+		"%s %s" % [r["source"], r["error"]])
+	check(JSON.parse_string(FileAccess.get_file_as_string(p)) is Dictionary, "M-021: Hauptdatei aus .bak repariert")
+	# Abbruch zwischen remove(path) und rename(tmp → path): nur .bak + .tmp vorhanden
+	Game.delete_save(slot)
+	_put(p + ".bak", _good_save("ALT"))
+	_put(p + ".tmp", _good_save("NEU"))
+	check(not FileAccess.file_exists(p) and Game.has_save(slot), "M-021: Abbruch mitten im Speichern – has_save erkennt Rückfalldateien")
+	var listed := false
+	for s in Game.list_saves():
+		listed = listed or s["slot"] == slot
+	check(listed, "M-021: Abbruch mitten im Speichern – Slot weiter in list_saves")
+	r = Game.read_save(slot, false)
+	check(r["source"] == "bak" and r["data"]["state"]["marker"] == "ALT", "M-021: Abbruch → .bak geladen", str(r["source"]))
+	check(not FileAccess.file_exists(p), "M-021: repair=false schreibt nichts")
+	# .bak kaputt → .tmp (vollständig geschrieben und zurückgelesen)
+	_put(p + ".bak", "x")
+	r = Game.read_save(slot)
+	check(r["source"] == "tmp" and r["data"]["state"]["marker"] == "NEU" and FileAccess.file_exists(p), "M-021: .bak kaputt → .tmp, repariert",
+		str(r["source"]))
+	# alles kaputt → sauberer Fehler, kein Laden
+	_put(p, "x")
+	_put(p + ".bak", "y")
+	_put(p + ".tmp", "z")
+	var scene := get_tree().current_scene
+	check(not Game.load_game(slot) and Game.last_load_error != "" and Game.pending_load.is_empty()
+		and get_tree().current_scene == scene, "M-021: alle Dateien kaputt → sauber abgewiesen", Game.last_load_error)
+	Game.delete_save(slot)
+	check(not Game.has_save(slot) and not FileAccess.file_exists(p + ".tmp") and not FileAccess.file_exists(p + ".bak"),
+		"M-021: delete_save entfernt auch .bak/.tmp")
+
+
+## B-027 / M-022: Versionsnummer, Migration, Inhaltsprüfung
+func _save_versions() -> void:
+	check(Game.SAVE_VERSION == 3, "M-022: SAVE_VERSION 3", str(Game.SAVE_VERSION))
+	# v1 (ohne Versionsfeld, ohne Hauptlisten) → migriert, fremder Schlüssel (AP-1 Skriptzustand) bleibt
+	var d1 := {"mission": "m01_funkfeuer", "state": {"orig_script": {"pc": 7}}}
+	check(Game.validate_save_data(d1) == "" and int(d1["version"]) == 3 and int(d1["migrated_from"]) == 1
+		and d1["state"]["squad"] is Dictionary and d1["mode"] == 0 and d1["single"] == false, "M-022: v1 → v3 migriert", str(d1))
+	check(d1["state"].get("orig_script", {}).get("pc") == 7, "M-022: fremder state-Schlüssel bleibt erhalten")
+	var d2 := {"version": 2, "mission": "m01_funkfeuer", "state": {"squad": {}}}
+	check(Game.validate_save_data(d2) == "" and int(d2["version"]) == 3 and d2["state"].has("objectives"), "M-022: v2 → v3 migriert")
+	var d3: Dictionary = JSON.parse_string(_good_save("C"))
+	check(Game.validate_save_data(d3) == "" and not d3.has("migrated_from"), "M-022: v3 unverändert")
+	# neuere Version sauber ablehnen – auch wenn eine ältere .bak existiert
+	var why := Game.validate_save_data(JSON.parse_string(_good_save("X", 99)))
+	check(why.begins_with("neuere Spielstandversion"), "M-022: v99 abgelehnt", why)
+	var slot := "ver_test"
+	var p := Game.save_path(slot)
+	Game.delete_save(slot)
+	_put(p, _good_save("ZUKUNFT", 99))
+	_put(p + ".bak", _good_save("ALT"))
+	check(not Game.load_game(slot) and Game.last_load_error.begins_with("neuere") and Game.pending_load.is_empty()
+		and FileAccess.get_file_as_string(p).contains("ZUKUNFT"), "M-022: neuere Version nicht durch .bak überschrieben", Game.last_load_error)
+	Game.delete_save(slot)
+	check(Game.validate_save_data({"version": 0, "mission": "m01_funkfeuer", "state": {}}) != "", "M-022: Version 0 abgelehnt")
+	# Inhalt von state
+	var bad := {
+		"squad_entry": {"squad": {"s1": 5}},
+		"enemies_type": {"enemies": [1]},
+		"brain": {"enemies": {"e1": {"brain": "x"}}},
+		"objective": {"objectives": {"o1": "fertig"}},
+		"alarm": {"alarm": "ja"},
+		"active": {"active": "eins"},
+		"stats": {"stats": 3},
+	}
+	for k in bad:
+		var st: Dictionary = {"squad": {}, "enemies": {}, "interactables": {}, "objectives": {}}
+		st.merge(bad[k], true)
+		var e := Game.validate_save_data({"version": 3, "mission": "m01_funkfeuer", "state": st})
+		check(e != "", "M-022: state-Fehler %s erkannt" % k, e)
+	var miss := Game.validate_save_data({"version": 3, "mission": "m01_funkfeuer", "state": {"squad": {}}})
+	check(miss.contains("fehlt"), "M-022: v3 ohne Pflichtliste abgelehnt", miss)
+
+
+## B-027 / M-024: kaputte settings.cfg-Werte typgeprüft und geklemmt
+const _SET_KEYS := ["resolution", "fullscreen", "quality", "render_scale", "fov", "mouse_sensitivity", "invert_y",
+	"master_volume", "music_volume", "sfx_volume", "speech_volume", "gamma", "shadows", "blood", "blood_level",
+	"vsync_mode", "max_fps", "aa_mode", "texture_quality", "anisotropy", "voice_volume", "connection_type", "language"]
+
+func _settings_sanitize() -> void:
+	var snap := {}
+	for k in _SET_KEYS:
+		snap[k] = Settings.get(k)
+	var c := ConfigFile.new()
+	c.set_value("display", "resolution", Vector2i(-5, 3))
+	c.set_value("display", "fullscreen", "ja")
+	c.set_value("graphics", "quality", 99)
+	c.set_value("graphics", "render_scale", 7.0)
+	c.set_value("graphics", "fov", "weit")
+	c.set_value("graphics", "gamma", -2)
+	c.set_value("graphics", "blood_level", 9)
+	c.set_value("audio", "master_volume", 5.0)
+	c.set_value("audio", "music_volume", -1)
+	c.set_value("audio", "sfx_volume", "laut")
+	c.set_value("setup", "vsync_mode", "an")
+	c.set_value("setup", "texture_quality", -3)
+	c.set_value("setup", "aa_mode", 3.0)
+	c.set_value("setup", "anisotropy", 42)
+	c.set_value("setup", "max_fps", -60)
+	c.set_value("setup", "language", "klingonisch")
+	c.set_value("multiplayer", "connection_type", 17)
+	c.set_value("multiplayer", "voice_volume", 3)
+	Settings.fov = 70.0
+	Settings.fullscreen = true
+	Settings.sfx_volume = 0.9
+	Settings.vsync_mode = 1
+	Settings.load_from_config(c)
+	check(Settings.resolution == Vector2i.ZERO, "M-024: unsinnige Auflösung → Desktop", str(Settings.resolution))
+	check(Settings.fullscreen == true and Settings.fov == 70.0 and is_equal_approx(Settings.sfx_volume, 0.9),
+		"M-024: falscher Typ → Wert bleibt", "%s %s %s" % [Settings.fullscreen, Settings.fov, Settings.sfx_volume])
+	check(Settings.quality == Settings.QUALITY_NAMES.size() - 1 and Settings.blood_level == 2 and Settings.texture_quality == 0
+		and Settings.anisotropy == 4 and Settings.aa_mode == 3 and Settings.vsync_mode == 1 and Settings.connection_type == 4,
+		"M-024: Menüindizes geklemmt", "q%d b%d t%d a%d aa%d v%d c%d" % [Settings.quality, Settings.blood_level,
+		Settings.texture_quality, Settings.anisotropy, Settings.aa_mode, Settings.vsync_mode, Settings.connection_type])
+	check(Settings.master_volume == 1.0 and Settings.music_volume == 0.0 and Settings.voice_volume == 1.0,
+		"M-024: Lautstärken 0…1")
+	check(Settings.render_scale == 1.0 and is_equal_approx(Settings.gamma, 0.6) and Settings.max_fps == 0,
+		"M-024: Renderskalierung/Gamma/Bildrate geklemmt")
+	check(Settings.language == "german", "M-024: unbekannte Sprache → Deutsch", Settings.language)
+	# Optionsseiten mit ungeklemmten Werten (direkt gesetzt) dürfen nicht abstürzen
+	var mm = load("res://src/ui/main_menu.gd")
+	check(mm._pick(Settings.VSYNC_NAMES, 9) == "DREIFACHPUFFER" and mm._pick(Settings.BLOOD_NAMES, -4) == "AUS",
+		"M-024: Menü klemmt Listenindizes")
+	for k in _SET_KEYS:
+		Settings.set(k, snap[k])
 
 
 func _profiles_base() -> void:

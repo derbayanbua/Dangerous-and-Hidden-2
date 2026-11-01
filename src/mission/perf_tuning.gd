@@ -11,10 +11,31 @@ const SIZE_STEPS := [[0.6, 70.0, false], [2.0, 140.0, true], [6.0, 320.0, true],
 const QUALITY_K := [0.6, 0.8, 1.0, 1.6, 2.4]   ## Stufe 4 = „4K Ultra“ (B-013)
 const LIGHT_FADE_M := 90.0
 static var last := {}
+const StaticMergeScript := preload("res://src/mission/static_merge.gd")
 
 
 static func enabled() -> bool:
 	return String(Game.cli.get("perf_tuning", "1")) != "0"
+
+
+## B-039: Hauptschalter der Gesamt-Optimierung (`--b039=0` = Stand vor B-039, Vergleichsmessung). Einzelschalter:
+## `--static_merge=0`, `--tex_compress=0`, `--whenever_raster=0`.
+static func b039(sub := "") -> bool:
+	if String(Game.cli.get("b039", "1")) == "0":
+		return false
+	return sub == "" or String(Game.cli.get(sub, "1")) != "0"
+
+
+## B-039: Bild blockkomprimieren (BC1/BC3 bzw. BC5 für Normalen), damit Texturen im Grafikspeicher – unter WARP im
+## Arbeitsspeicher – 4–8× weniger belegen. Mipmaps vorher. Kleine Bilder (< 64 px) und schon komprimierte bleiben.
+static func compress_image(img: Image, normal := false) -> void:
+	if img == null or img.is_compressed() or img.get_width() < 64 or img.get_height() < 64:
+		return
+	if img.get_width() % 4 != 0 or img.get_height() % 4 != 0:
+		return
+	if not img.has_mipmaps():
+		img.generate_mipmaps()
+	img.compress(Image.COMPRESS_S3TC, Image.COMPRESS_SOURCE_NORMAL if normal else Image.COMPRESS_SOURCE_SRGB)
 
 
 static func apply(m: Node) -> Dictionary:
@@ -55,6 +76,7 @@ static func apply(m: Node) -> Dictionary:
 		l.distance_fade_length = 20.0
 		st.lights += 1
 	last = st
+	st["merge"] = StaticMergeScript.apply(m)   # B-039: nach den Sichtweiten (Gruppen übernehmen sie)
 	print("PERF: Sichtweiten %d/%d Objekte, %d ohne Schatten, %d Lichter mit Ausblendung" % [st.ranged, st.meshes, st.no_shadow,
 		st.lights])
 	return st

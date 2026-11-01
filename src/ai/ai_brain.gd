@@ -33,6 +33,9 @@ var _off_mesh := false
 var _off_check := 0.0
 var _detour := 0.0
 var _detour_sign := 1.0
+## B-033 HUMAN_SetIgnoreCircumventionFlag (hd2.exe Gehirn +0x11C, 0x562E30 [B]): keine Umgehung von Hindernissen/stehenden
+## Menschen (kein seitliches Ausweichen, kein Durchlaufen) – der Soldat bleibt stehen und bricht nach 2,5 s ab [P Wirkung]
+var ignore_circumvention := false
 var _human_tries := 0
 var _climb_retry := 0.0
 var _climb_dir := Vector3.ZERO
@@ -165,14 +168,16 @@ func update_movement(delta: float, face_move := true) -> void:
 	else:
 		_stuck_time = 0.0
 	_last_pos = soldier.global_position
-	if direct and _stuck_time > 1.5:
+	if ignore_circumvention:
+		_detour = 0.0
+	elif direct and _stuck_time > 1.5:
 		# Hindernis ohne Netz: hinübersteigen versuchen, sonst abwechselnd links/rechts ausweichen
 		_stuck_time = 0.0
 		soldier.jump_or_climb()
 		_detour_sign = -_detour_sign
 		_detour = 1.5
 		return
-	if _stuck_time > 1.0:
+	if _stuck_time > 1.0 and not ignore_circumvention:
 		var blocker := _blocked_by_human()
 		if blocker:
 			# ein stehender Mensch versperrt den Weg (ALPS2: AL2_20 auf dem schmalen Treppenabsatz): erst seitlich

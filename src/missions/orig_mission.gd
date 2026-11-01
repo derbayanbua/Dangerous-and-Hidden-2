@@ -277,18 +277,15 @@ func _orig_inventory(s: Soldier, nm: String) -> void:
 
 ## actors.bin-Parameter (docs/re_notes_actors_items.md): Gesundheit, Schießen, Sicht-/Hörweite.
 func _apply_orig_params(s: Soldier, nm: String) -> void:
-	var p: Dictionary = actor_params.get(nm, {}).get("params", {})
-	if p.is_empty():
+	var p0: Dictionary = actor_params.get(nm, {}).get("params", {})
+	if p0.is_empty():
 		return
-	# Schwierigkeitsgrad des Profils wie im Original (nur Gegner, Seite 2):
-	# 1 leicht ×0,7 · 2 normal ×0,85 · 3 schwer unverändert · 4 sehr schwer Fähigkeiten 100
-	var diff := Game.difficulty()
-	var k: float = {1: 0.7, 2: 0.85}.get(diff, 1.0)
-	var enemy := int(p.get("side", 2)) == 2
-	var hp := float(p.get("health", 200)) * (k if enemy else 1.0)
+	# Schwierigkeitsgrad wie im Original (hd2.exe 0x59F2C0 → 0x5A8990, nur Gegner Seite 2); Stufe nach 0x6B6700:
+	# Einzelspieler = Profil, Coop = coopdifficulty, übrige MP-Stile fest 3 (B-029, Net.difficulty_level)
+	var enemy := int(p0.get("side", 2)) == 2
+	var p: Dictionary = _apply_difficulty(p0, Net.difficulty_level()) if enemy else p0
+	var hp := float(p.get("health", 200))
 	var shooting := float(p.get("shooting", 64))
-	if enemy:
-		shooting = 100.0 if diff >= 4 else shooting * k
 	s.max_health = maxf(hp * HP_SCALE, 1.0)
 	s.health = s.max_health
 	var per: Perception = s.get_node_or_null("Perception")
@@ -298,10 +295,71 @@ func _apply_orig_params(s: Soldier, nm: String) -> void:
 	var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
 	if b:
 		b.accuracy_skill = clampf(shooting / 100.0 * 0.7, 0.1, 0.9)
-		# Moral (actors.bin +0xF8): „sehr schwer“ setzt Gegnerwerte 2–8 auf 100 (0x5A8990) -> nie Panik
-		b.morale = 100.0 if enemy and diff >= 4 else float(p.get("morale", 80))
+		# Moral (actors.bin +0xF8, Index 3): Schwierigkeit nach 0x5A8990; „sehr schwer“ = 100 -> nie Panik
+		b.morale = float(p.get("morale", 80))
 		b.morale_initial = b.morale
 	s.set_meta("orig_params", p)
+	s.set_meta("orig_params_base", p0)
+
+
+## Fähigkeitswerte in HumanStore-Reihenfolge (0x59EDC0: Index i → +0x11C+4i); 9–11 = Sicht/Gehör/… bleiben unberührt
+const SKILL_KEYS := ["health", "strength", "endurance", "morale", "shooting", "skill5_unknown", "stealth", "first_aid", "lockpick"]
+
+
+## Schwierigkeit → Gegnerwerte wie hd2.exe 0x5A8990 [B] (GAP_REA §4). stufe = Game.difficulty() 1…4.
+##   1 leicht:     Index 0 und 4–8 ×0,7,  Moral (3) ×0,9
+##   2 normal:     Index 0 und 4–8 ×0,85, Moral (3) ×0,95
+##   3 schwer:     unverändert
+##   4 sehr schwer: Index 0 unverändert, Index 2, 3 und 4–8 = 100
+## Index 1 und 9–11 bleiben auf allen Stufen. Nur für Gegner (Akteurtyp 2) – der Aufrufer prüft die Seite.
+static func _apply_difficulty(params: Dictionary, stufe: int) -> Dictionary:
+	var p := params.duplicate()
+	var k := 1.0
+	var km := 1.0
+	match stufe:
+		1:
+			k = 0.7
+			km = 0.9
+		2:
+			k = 0.85
+			km = 0.95
+		4:
+			for i in [2, 3, 4, 5, 6, 7, 8]:
+				p[SKILL_KEYS[i]] = 100
+			return p
+		_:
+			return p
+	for i in [0, 4, 5, 6, 7, 8]:
+		if p.has(SKILL_KEYS[i]):
+			p[SKILL_KEYS[i]] = float(p[SKILL_KEYS[i]]) * k
+	if p.has("morale"):
+		p["morale"] = float(p["morale"]) * km
+	return p
+
+
+# --- Spielstand (B-030/AP-1): Skriptzustand der Originalmission ---------------------------
+const ORIG_VM_VERSION := 1
+
+
+func _serialize_extra() -> Dictionary:
+	var d := super._serialize_extra()
+	if runtime:
+		d["orig_vm"] = runtime.save_state()
+		d["orig_vm_version"] = ORIG_VM_VERSION
+	return d
+
+
+func _deserialize_extra(d: Dictionary) -> void:
+	super._deserialize_extra(d)
+	if runtime == null:
+		return
+	if not d.has("orig_vm") or typeof(d["orig_vm"]) != TYPE_DICTIONARY:
+		# Älterer Spielstand ohne Skriptzustand: lädt weiter, Skripte beginnen von vorn (bisheriges Verhalten)
+		push_warning("Spielstand ohne Skriptzustand (vor B-030): Missionsskripte starten neu")
+		Events.say("Hinweis: älterer Spielstand ohne Skriptzustand – Missionsablauf beginnt neu.", 6.0)
+		return
+	for note in runtime.load_state(d["orig_vm"]):
+		print("ORIG-LADEN: ", note)
 
 
 ## Wachhund (Akteurtyp 30) mit Originalmodell; Verhalten über DOG_*-Befehle des Originalskripts.

@@ -145,4 +145,12 @@ func info_lines() -> PackedStringArray:
 		# B-011: Artillerie/Luftangriff per Funkgerät
 		"Funk-Unterstützung: %s" % (["aus", "Artillerie", "Luftangriff", "Artillerie + Luftangriff"][clampi(int(r.get("support_strike", 0)), 0, 3)]
 			+ ("" if int(r.get("support_strike", 0)) == 0 else " (alle %d min%s)" % [int(r.get("support_interval_min", 5)), ", KI" if bool(r.get("support_bots", false)) else ""]))]
+	# B-029 Coop-Regeln (Original-Texte 20210–20213); Fadenkreuz wie im Original nur angezeigt
+	if mode == Net.Mode.COOP:
+		var lv := int(r.get("coop_lives", -1))
+		out.append("%s: %s" % [t.call(20210, "SCHWIERIGKEITSGRAD"),
+			t.call(20219 + clampi(int(r.get("coop_difficulty", 3)), 1, 4), "SCHWER")])
+		out.append("%s: %s" % [t.call(20213, "RESPAWN-ANZAHL"), "unbegrenzt" if lv < 0 else str(lv)])
+		out.append("%s: %s" % [t.call(20211, "TEAM-LEBEN"), _yn(r.get("team_lives", true))])
+		out.append("%s: %s" % [t.call(20212, "FADENKREUZ ZULASSEN"), _yn(r.get("allow_crosshair", true))])
 	return out

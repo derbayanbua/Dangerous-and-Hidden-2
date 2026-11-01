@@ -22,19 +22,41 @@ var awareness := {}               ## Soldier -> 0..1
 var visible_now := {}             ## Soldier -> bool (aktueller Tick)
 var last_known := {}              ## Soldier -> Vector3
 var known_corpses := {}           ## Soldier -> true
+var disguise_seen := {}           ## AP-6: Soldier -> bool, getarnt wahrgenommen (aktueller Tick, nur orig_formula)
 var _tick := 0.0
 const TICK := 0.15
 
 ## B-021: Formel des Originals (nur Originalmissionen offline; setzt EnemyBrain, MP-Bots/Übungseinsätze unverändert).
-## hd2.exe 0x5A59E0 „Sichtbarkeitsweite des Ziels“ (HUD zeigt sie als „%.0fm“, 0x4B4258) [B Werte]:
-##   Grundwert je Haltung 50/70/100 m (Bits 1/2/4 der Steuerung +0x50; Fahrzeug 100) [B Werte, P Zuordnung liegend/hockend/stehend],
-##   in Bewegung (Bits 0xF8) × 1,05/1,2/1,3/1,6/1,8 je Gangart [B Werte, P Zuordnung], nach eigenem Schuss (Zähler < 8000 ms)
-##   mindestens 450/380/300 m [B Werte, P Deutung], × Licht des Sektors (+0xDA4, 0x5AC350) [B]. Sicht 0x570280: Reichweite
-##   = min(Sichtbarkeitsweite, Sichtweite +0x110), Kegel ±50° (Spielerseite ±60° und ×1,3) [B].
+## hd2.exe 0x5A59E0 „Sichtbarkeitsweite des Ziels“ (HUD zeigt sie als „%.0fm“, 0x4B4258; ECX = Ziel) [B, AP-7 I]:
+##   Grundwert nach WAFFENHALTUNG (Steuerwort +0x50 Bits 0–2, Setzer 0x584B60): 50 m Waffe weg / 70 m bereit / 100 m Anschlag
+##   oder im Fahrzeug [B]; in Bewegung (Bits 0xF8) × Gangklasse: 0x10000 Sprint ×1,8, 0x4000 Laufen/Gehen ×1,6, 0x2000 geduckt
+##   ×1,3, 0x8000 ×1,2 (keinem KI-Gang zugeordnet), 0x1000 Schleichen ×1,05 [B]; nach eigenem Schuss (+0xB0 ≤ 8000 ms)
+##   mindestens 300/380/450 m [B Werte, P Zuordnung zur Waffenhaltung], × Licht des Sektors (+0xDA4, 0x5AC350) [B].
+##   Sicht 0x570280: Reichweite = min(Sichtbarkeitsweite, Sichtweite +0x110), Kegel ±50°, Treffer → sofort 100 [B].
 var orig_formula := false
+## G-004 (B-026): BEWUSSTE ABWEICHUNG – MP-Bots und Übungseinsätze (eigene Entwürfe) behalten die abgestufte Erkennung
+## `_visibility` [E] (Spielbalance, kein Original-Gegenstück). Option `--orig_perception=1` schaltet die Original-Formel
+## für alle KI ein (Vergleich/Spieltest). Wird beim ersten Zugriff aus der Kommandozeile gelesen.
+static var _orig_all := -1
+
+
+static func orig_everywhere() -> bool:
+	if _orig_all < 0:
+		_orig_all = 1 if "--orig_perception=1" in OS.get_cmdline_user_args() else 0
+	return _orig_all == 1
+
+
+static func set_orig_everywhere(on: bool) -> void:
+	_orig_all = 1 if on else 0
 const ORIG_HALF_FOV := 50.0                       ## Grad, 0x570280 (local_70 = 50) [B]
-const ORIG_BASE := [100.0, 70.0, 50.0]            ## je Soldier.Stance STAND/CROUCH/PRONE [B Werte, P Zuordnung]
-const ORIG_SHOT_FLOOR := [450.0, 380.0, 300.0]    ## nach Schuss (< 8 s) [B Werte, P Zuordnung]
+const ORIG_BASE := [50.0, 70.0, 100.0]            ## Waffenhaltung WEG/BEREIT/ANSCHLAG [B]
+const ORIG_SHOT_FLOOR := [300.0, 380.0, 450.0]    ## nach Schuss (≤ 8 s) je Waffenhaltung [B Werte, P Zuordnung]
+enum WeaponHold { AWAY, READY, AIMED }
+## Gangklassen-Faktoren 0x5A59E0 [B]
+const ORIG_GAIT_SPRINT := 1.8
+const ORIG_GAIT_RUN := 1.6
+const ORIG_GAIT_CROUCH := 1.3
+const ORIG_GAIT_SNEAK := 1.05
 const ORIG_SHOT_MS := 8.0                         ## 0x810BC0 = 8000 (7000 in Sonderfall 0x461A20) [B]
 
 
@@ -63,15 +85,31 @@ func enemy_team() -> int:
 
 ## Mögliche Gegner: Einzelspieler die andere Seite; Mehrspieler-KI (Deathmatch: jeder für sich) alle
 ## Soldaten anderer Teams außer Neutralen. Erkannt werden sie trotzdem nur über Sicht/Gehör (kein „Aimbot“).
+## G-007 (B-026): Kandidatenliste je Team und Physikbild einmal gebaut und von allen Beobachtern geteilt (vorher legte online
+## jeder Soldat je Takt ein neues Array über alle Soldaten an). Der Beobachter selbst ist nie im eigenen Teamfremd-Satz.
+static var _cand_cache := {}      ## Team (online) bzw. Gegnerteam (offline) -> Array
+static var _cand_frame := -1
+
+
 func enemy_candidates() -> Array:
+	var f := Engine.get_physics_frames()
+	if f != _cand_frame:
+		_cand_frame = f
+		_cand_cache.clear()
+	var key := (100 + soldier.team) if Net.is_online else enemy_team()
+	if _cand_cache.has(key):
+		return _cand_cache[key]
+	var out: Array
 	if Net.is_online:
-		var out: Array = []
+		out = []
 		for n in get_tree().get_nodes_in_group("soldiers"):
 			var t := n as Soldier
-			if t and t != soldier and t.team != soldier.team and t.team != Soldier.TEAM_NEUTRAL:
+			if t and t.team != soldier.team and t.team != Soldier.TEAM_NEUTRAL:
 				out.append(t)
-		return out
-	return get_tree().get_nodes_in_group("team_%d" % enemy_team())
+	else:
+		out = get_tree().get_nodes_in_group("team_%d" % enemy_team())
+	_cand_cache[key] = out
+	return out
 
 
 func _update_sight(dt: float) -> void:
@@ -85,18 +123,36 @@ func _update_sight(dt: float) -> void:
 			continue
 		var tpos := t.global_position + Vector3.UP * (1.2 if t.stance == Soldier.Stance.STAND else (0.8 if t.stance == Soldier.Stance.CROUCH else 0.3))
 		var to := tpos - eye
-		var dist := to.length()
 		var seen := false
-		var reach := minf(sight_range, orig_visibility_distance(t)) if orig_formula else sight_range
-		if dist < reach:
-			var ang := fwd.angle_to(to)
+		# fix_performance: Vorfilter quadratisch (Reichweite ≤ sight_range), Kegel vor der teuren Sichtbarkeitsweite
+		# (Licht über alle Lampen) und dem Raycast – Ergebnis unverändert
+		var dist2 := to.length_squared()
+		var ang := 0.0
+		var cand := dist2 < sight_range * sight_range
+		if cand:
+			ang = fwd.angle_to(to)
 			# Nahbereich: auch knapp hinter dem Sichtfeld wird Bewegung bemerkt
-			if ang < half_fov or (dist < 4.0 and t.is_moving() and t.move_mode == Soldier.MoveMode.RUN):
-				seen = _line_of_sight(space, eye, tpos, t)
-				if seen:
-					var gain := (_orig_gain(t, dist, reach) if orig_formula else _visibility(t, dist, ang, half_fov)) * detection_speed * dt
+			cand = ang < half_fov or (dist2 < 16.0 and t.is_moving() and t.move_mode == Soldier.MoveMode.RUN)
+		var dist := sqrt(dist2) if cand else 0.0
+		var reach := sight_range
+		if cand and orig_formula:
+			reach = minf(sight_range, orig_visibility_distance(t))
+		if orig_formula:
+			disguise_seen[t] = false
+		if cand and dist < reach:
+			seen = _line_of_sight(space, eye, tpos, t)
+			# AP-6: getarnter Spieler (Feinduniform, Tarnwert > 0) gilt als eigene Seite (0x5A84F0/0x5A0AB0): wahrgenommen
+			# (zählt für −1/Update, OrigDisguise), aber kein Ziel [B]
+			if seen and orig_formula and OrigDisguise.is_cover_active(t):
+				disguise_seen[t] = true
+				seen = false
+			if seen:
+				if orig_formula:
+					awareness[t] = 1.0    # AP-3/AP-7: 0x570280 sofort 100, keine Rampe [B]
+				else:
+					var gain := _visibility(t, dist, ang, half_fov) * detection_speed * dt
 					awareness[t] = minf(awareness.get(t, 0.0) + gain, 1.0)
-					last_known[t] = t.global_position
+				last_known[t] = t.global_position
 		visible_now[t] = seen
 		if not seen:
 			awareness[t] = maxf(awareness.get(t, 0.0) - dt * 0.08, 0.0)
@@ -112,7 +168,7 @@ func _update_sight(dt: float) -> void:
 			continue
 		var cp := c.global_position + Vector3.UP * 0.3
 		var to := cp - eye
-		if to.length() < sight_range * 0.6 and fwd.angle_to(to) < half_fov and _line_of_sight(space, eye, cp, null):
+		if to.length_squared() < sight_range * sight_range * 0.36 and fwd.angle_to(to) < half_fov and _line_of_sight(space, eye, cp, null):
 			known_corpses[c] = true
 			corpse_seen.emit(c)
 
@@ -135,37 +191,74 @@ func _visibility(t: Soldier, dist: float, ang: float, half_fov: float) -> float:
 			return 0.0
 		var odd := 1.0 if (t.stance == Soldier.Stance.PRONE or t.move_mode == Soldier.MoveMode.RUN) else 0.35
 		periph *= odd
-	var light: float = _mission.light_at(t.global_position + Vector3.UP) if _mission else 1.0
+	var light := _light_of(t)
 	return stance_k * move_k * dist_k * periph * 1.4 * light * Soldier.skill_k(t.skill_stealth, 1.3, 0.6)
 
 
 ## Sichtbarkeitsweite eines Ziels in m nach hd2.exe 0x5A59E0 (siehe orig_formula).
 func orig_visibility_distance(t: Soldier) -> float:
-	var st := clampi(t.stance, 0, 2)
-	var v: float = 100.0 if t.vehicle != null else ORIG_BASE[st]
+	var hold := weapon_hold(t)
+	var v: float = 100.0 if t.vehicle != null else ORIG_BASE[hold]
 	if t.vehicle == null and t.is_moving():
-		match t.move_mode:
-			Soldier.MoveMode.SNEAK: v *= 1.05
-			Soldier.MoveMode.WALK: v *= 1.2
-			Soldier.MoveMode.JOG: v *= 1.3
-			_: v *= 1.8
+		v *= orig_gait_factor(t)
 	if t.seconds_since_shot() < ORIG_SHOT_MS:
-		v = maxf(v, ORIG_SHOT_FLOOR[st])
-	var light: float = _mission.light_at(t.global_position + Vector3.UP) if _mission else 1.0
-	# Tarnung in Feinduniform: Original über Seitenwechsel (Mission_SetUniformDisguise), hier wie bisher [E]
-	if t.disguised and t.seconds_since_shot() > 6.0 and t.global_position.distance_to(soldier.global_position) > 8.0:
-		return 0.0
+		v = maxf(v, ORIG_SHOT_FLOOR[hold])
+	var light := _light_of(t)
+	# Tarnung in Feinduniform: seit AP-6 über den Tarnwert (OrigDisguise, Seitenwechsel 0x5A84F0) in _update_sight;
+	# die frühere Schätzung 8 m/6 s [E] gilt nur noch außerhalb der Originalregeln (_visibility)
 	return v * light
 
 
-## Erkennungszuwachs je s innerhalb der Reichweite. Original 0x570280 meldet sofort 100 (sichtbar); die kurze Rampe
-## (≈ 0,3–1 s je nach Abstand) ersetzt die nicht dekodierte Reaktionszeit [E].
-func _orig_gain(t: Soldier, dist: float, reach: float) -> float:
-	var k := clampf(1.0 - dist / maxf(reach, 0.1), 0.0, 1.0)
-	return (1.0 + 2.5 * k) * Soldier.skill_k(t.skill_stealth, 1.3, 0.6)
+## Waffenhaltung des Ziels (Steuerwort +0x50 Bits 0–2, 0x559360) [B Werte]. Zuordnung im Nachbau [P]: kein Gewehr in der Hand
+## (Hilfsmittel, Messer, Granate, unbewaffnet) = weg; Zielen = Anschlag; sonst bereit.
+static func weapon_hold(t: Soldier) -> int:
+	if t.aiming:
+		return WeaponHold.AIMED
+	var w := t.current_weapon()
+	if t.tool != "" or w == null or w.data.action in [WeaponData.Action.MELEE, WeaponData.Action.THROWN]:
+		return WeaponHold.AWAY
+	return WeaponHold.READY
+
+
+## Gangklassen-Faktor des bewegten Ziels [B Werte, P Zuordnung MoveMode → Gangklasse]: Sprint (RUN) ×1,8; Schleichen
+## (SNEAK) ×1,05; geduckt/liegend bewegt ×1,3; aufrecht Gehen/Laufschritt ×1,6.
+static func orig_gait_factor(t: Soldier) -> float:
+	if t.move_mode == Soldier.MoveMode.RUN and t.stance == Soldier.Stance.STAND:
+		return ORIG_GAIT_SPRINT
+	if t.move_mode == Soldier.MoveMode.SNEAK:
+		return ORIG_GAIT_SNEAK
+	if t.stance != Soldier.Stance.STAND:
+		return ORIG_GAIT_CROUCH
+	return ORIG_GAIT_RUN
+
+
+## AP-3/AP-7: 0x570280 meldet ein sichtbares Ziel innerhalb der Reichweite sofort mit 100 – keine Erkennungsrampe [B].
+## Die Verzögerung bis zum ersten Schuss entsteht im Kampfautomaten (Zustand 0/4/5, OrigCombatFsm).
+func _orig_gain(_t: Soldier, _dist: float, _reach: float) -> float:
+	return INF
 
 
 var _mission: Node
+
+## fix_performance: Licht am Ziel je Physikbild nur einmal berechnen (light_at läuft über alle Lampen + Suchscheinwerfer;
+## alle Beobachter desselben Bildes teilen den Wert – im selben Bild bewegt sich das Ziel nicht).
+static var _light_cache := {}     ## Instanz-ID des Ziels -> Licht
+static var _light_frame := -1
+
+
+func _light_of(t: Soldier) -> float:
+	if _mission == null:
+		return 1.0
+	var f := Engine.get_physics_frames()
+	if f != _light_frame:
+		_light_frame = f
+		_light_cache.clear()
+	var id := t.get_instance_id()
+	if _light_cache.has(id):
+		return _light_cache[id]
+	var l: float = _mission.light_at(t.global_position + Vector3.UP)
+	_light_cache[id] = l
+	return l
 
 
 func _refresh_light() -> void:
@@ -238,9 +331,13 @@ func best_target() -> Soldier:
 	return best
 
 
+## G-009/fix_performance: läuft je Physikbild – ohne Kopie der Schlüssel, nur bei Fund wird gelöscht.
 func forget_dead() -> void:
-	for k in awareness.keys():
+	var gone: Array = []
+	for k in awareness:
 		if not is_instance_valid(k) or not k.alive:
-			awareness.erase(k)
-			visible_now.erase(k)
-			last_known.erase(k)
+			gone.append(k)
+	for k in gone:
+		awareness.erase(k)
+		visible_now.erase(k)
+		last_known.erase(k)

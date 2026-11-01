@@ -53,4 +53,42 @@ func _run() -> void:
 	await seconds(0.12)
 	await _shot("original")
 	Settings.blood_level = 2
+	if "--gore=1" in OS.get_cmdline_user_args():
+		await _gore_shots(s, es[2], fwd, side)
 	_finish()
+
+
+## B-037 EXTRA GORE (vorbereitet): `--gore=1` → blood_gore_head.png (Kopfschuss, Teil fliegt), blood_gore_lying.png
+## (Stumpf + liegender Kopf), blood_gore_blast.png (Explosion, mehrere Teile). Figur ge01a wie test_ragdoll.
+func _gore_shots(s: Soldier, e: Soldier, fwd: Vector3, side: Vector3) -> void:
+	var tpl := OrigWeapons._load(OrigLevel.cache_root() + "/characters/ge01a.glb")
+	if tpl == null:
+		print("Gore-Bilder: ge01a fehlt")
+		return
+	e.model.attach_orig(tpl.duplicate())
+	var e2: Soldier = m_spawn(e.global_position + side * 3.0, tpl)
+	Settings.blood_level = Settings.BLOOD_GORE
+	Gore.force_roll = 0.0
+	await seconds(1.0)
+	e.health = 1.0
+	var tgt := e.global_position + Vector3.UP * 1.62
+	var org := tgt - fwd * 6.0
+	Ballistics.fire(s, org, (tgt - org).normalized(), WeaponDB.get_weapon(&"kar98k"), [] as Array[RID], s.team)
+	await seconds(0.25)
+	await _shot("gore_head")
+	await seconds(4.0)
+	await _shot("gore_lying")
+	if e2:
+		Effects.explosion(e2.global_position + Vector3.UP * 0.4 - fwd * 0.6, 6.0)
+		e2.apply_hit(500.0, &"torso", s, fwd)
+		await seconds(0.3)
+		await _shot("gore_blast")
+	Gore.force_roll = -1.0
+	Settings.blood_level = 2
+
+
+func m_spawn(pos: Vector3, tpl: Node3D) -> Soldier:
+	var x: Soldier = mission().spawn_soldier(pos, 0.0, Soldier.TEAM_AXIS, "gore_shot", ["mp40"], Color(0.36, 0.38, 0.33), "stahlhelm", "gore_shot_1")
+	if x:
+		x.model.attach_orig(tpl.duplicate())
+	return x

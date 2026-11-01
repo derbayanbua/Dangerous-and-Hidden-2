@@ -46,7 +46,7 @@ func _run() -> void:
 	await frames(3)
 
 	# --- MEHR (Standard) ---
-	check(Settings.blood_level == 2 or Settings.BLOOD_NAMES.size() == 3, "Option Blut dreistufig", str(Settings.blood_level))
+	check(Settings.blood_level == 2 and Settings.BLOOD_NAMES.size() == 4, "Option Blut vierstufig (B-037), Standard MEHR", str(Settings.blood_level))
 	Settings.blood_level = 2
 	var st0: Dictionary = fx.stats.duplicate()
 	var head: Vector3 = e0.global_position + Vector3.UP * 1.55
@@ -217,6 +217,21 @@ func _run() -> void:
 	check(wk != null and wk.global_position.distance_to(wp0 + Vector3(0.5, 0, 0)) < 0.05, "Skelett: Kleidungsblut folgt dem Knochen",
 		str(wk.global_position - wp0) if wk else "-")
 	fig.queue_free()
+
+	# --- B-037 EXTRA GORE: Blut wie MEHR, Abtrennung nur mit Original-Skelett (Rest: test_ragdoll) ---
+	Settings.blood_level = 3
+	check(Settings.blood_level == 3 and Gore.enabled() and Settings.blood, "EXTRA GORE wählbar")
+	var g0: Dictionary = fx.stats.duplicate()
+	Effects.blood(head, -fwd, fwd, &"head", e2)
+	await frames(2)
+	check(fx.stats["sprays"] - g0["sprays"] >= 2 and fx.stats["jets"] > g0["jets"], "EXTRA GORE: Blut mindestens wie MEHR")
+	var ga := int(Gore.stats["applied"])
+	Gore.apply(e2, Gore.bit("f"), fwd, true)
+	check(int(Gore.stats["applied"]) == ga and Gore.mask_node_of(e2) == null, "Figur ohne Original-Skelett: keine Abtrennung, kein Fehler")
+	Settings.blood_level = 4
+	check(Settings.blood_level == 3, "Blutstufe begrenzt auf EXTRA GORE")
+	Settings.blood_level = (Settings.blood_level + 1) % Settings.BLOOD_NAMES.size()
+	check(Settings.blood_level == 0, "Menü-Wechsel EXTRA GORE → AUS")
 
 	# --- ORIGINAL ---
 	Settings.blood_level = 1

@@ -341,7 +341,12 @@ func tac_key(event: InputEvent) -> bool:
 	return true
 
 
+var locked := false   ## SetupTacticalMode(False) im Originalskript (AP-5): Karte lässt sich nicht öffnen [P]
+
+
 func open() -> void:
+	if locked:
+		return
 	is_open = true
 	_center = mission.controller.active.global_position if mission.controller.active else Vector3.ZERO
 	_update_camera()

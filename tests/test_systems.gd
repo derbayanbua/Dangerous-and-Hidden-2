@@ -4,6 +4,15 @@ extends "res://tests/test_gameplay.gd"
 ##   tools\godot.cmd --headless -- --mission=m01_funkfeuer --autoplay=test_systems
 
 
+## Zerstörbares-Sonde für den Sprengplatztest (Gruppe destructibles, on_bullet_hit)
+class _BlastProbe extends Node3D:
+	var hits := 0.0
+	func _ready() -> void:
+		add_to_group("destructibles")
+	func on_bullet_hit(d: float, _by) -> void:
+		hits += d
+
+
 func place(s: Soldier, x: float, z: float, yaw: float) -> void:
 	s.global_position = mission().lb.ground(x, z, 0.3)
 	s.look_yaw = yaw
@@ -368,6 +377,38 @@ func _run() -> void:
 	await tap("binoculars")
 	await seconds(0.6)
 	check(not hale.using_binoculars and m.rig.camera.fov > 50.0, "Fernglas abgesetzt")
+
+	# --- Sprengplatz (G-006/G-021/G-023, B-026): Schaden über WeaponDB, Objekte, Lärm-Team des Anbringenden ---
+	var cs := ChargeSite.new()
+	m.dynamic_root.add_child(cs)
+	cs.global_position = m.lb.ground(-40, 60, 0.0)
+	var victim: Soldier = null
+	for n in get_tree().get_nodes_in_group("team_%d" % Soldier.TEAM_AXIS):
+		if n is Soldier and n.alive and n.get_node_or_null("EnemyBrain"):
+			victim = n
+			break
+	reset_enemy(victim, -38, 60, 0.0)
+	victim.set_physics_process(false)
+	victim.health = 1000.0
+	var hp0 := victim.health
+	var obj := _BlastProbe.new()
+	m.dynamic_root.add_child(obj)
+	obj.global_position = cs.global_position + Vector3(3.0, 0, 0)
+	var noise_team := [-99]
+	var on_noise := func(_p, _r, _s, tm2: int, kind: StringName) -> void:
+		if kind == &"explosion":
+			noise_team[0] = tm2
+	Events.noise_emitted.connect(on_noise)
+	cs._planter = victim                     # Achse bringt an → Lärm-Team Achse
+	cs.detonate()
+	Events.noise_emitted.disconnect(on_noise)
+	var exp_dmg := WeaponDB.explosion_damage(PlacedCharge.CHARGE_STRENGTH, PlacedCharge.CHARGE_RADIUS,
+		(cs.global_position + Vector3.UP).distance_to(victim.global_position + Vector3.UP * 0.5))
+	check(absf((hp0 - victim.health) - exp_dmg) < 1.0 and exp_dmg > 0.0, "Sprengplatz: Splitterschaden = WeaponDB.explosion_damage",
+		"%.1f / %.1f" % [hp0 - victim.health, exp_dmg])
+	check(obj.hits > 0.0, "Sprengplatz trifft Zerstörbares/Fahrzeuge", "%.1f" % obj.hits)
+	check(noise_team[0] == Soldier.TEAM_AXIS, "Sprengplatz-Lärm mit dem Team des Anbringenden", str(noise_team[0]))
+	obj.queue_free()
 
 	# --- Missionsfehlschlag: ganzer Trupp fällt ---
 	for mm in m.squad.members:

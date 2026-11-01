@@ -4,7 +4,7 @@
 #   -Zip     zusätzlich ein ZIP daneben erzeugen (dauert bei ~5 GB einige Minuten)
 #   -Verify  danach mit der fertigen EXE prüfen: Gameplay-Test und LAN-Test mit zwei Prozessen
 #   -NoHD    ohne KI-Texturen (textures_hd/textures_4k) – kleiner, dann nur Originaltexturen
-# Ergebnis: <Ordner>\DangerousHidden2.exe (Spieldaten eingebettet), <Ordner>\orig_cache\ (aus der eigenen
+# Ergebnis: <Ordner>\DangerousHidden2.exe + DangerousHidden2.pck (Spieldaten, B-038) + version.txt, <Ordner>\orig_cache\ (aus der eigenen
 # HD2-Installation erzeugte Originaldaten – nur für den eigenen Gebrauch, nicht weitergeben),
 # Firewall_freigeben.cmd, SPIELTEST_LIESMICH.txt.
 param([string]$Out = "", [switch]$Zip, [switch]$Verify, [switch]$NoHD)
@@ -36,11 +36,17 @@ try {
   "   $($res.Line)"
   if ($LASTEXITCODE -ne 0) { throw "Skriptprüfung fehlgeschlagen (test_output\release_check.log) – kein Build." }
 
-  # 2) Export (PCK in die EXE eingebettet)
+  # 2) Export (B-038: EXE + separate DangerousHidden2.pck, embed_pck=false im Preset)
   New-Item -ItemType Directory -Force $Out | Out-Null
+  Remove-Item "$Out\DangerousHidden2.exe", "$Out\DangerousHidden2.pck", "$Out\version.txt" -ErrorAction SilentlyContinue
   "-- Export"
   cmd /c "`"$godot`" --headless --export-release `"Windows Desktop`" `"$Out\DangerousHidden2.exe`" > `"$proj\test_output\release_export.log`" 2>&1"
-  if (-not (Test-Path "$Out\DangerousHidden2.exe")) { throw "Export fehlgeschlagen (test_output\release_export.log)." }
+  foreach ($f in @("DangerousHidden2.exe", "DangerousHidden2.pck")) {
+    if (-not (Test-Path "$Out\$f") -or (Get-Item "$Out\$f").Length -eq 0) { throw "Export fehlgeschlagen: $f fehlt (test_output\release_export.log)." }
+  }
+  # Versionsmarke für die Startprüfung (Game._check_pck_version) und das Nutzer-Werkzeug
+  [IO.File]::WriteAllText("$Out\version.txt", $version, (New-Object Text.UTF8Encoding $false))
+  "   EXE + PCK ($([math]::Round((Get-Item "$Out\DangerousHidden2.pck").Length / 1MB, 1)) MB), version.txt = $version"
 } finally { Remove-Item $lock -ErrorAction SilentlyContinue }
 
 # 3) Originaldaten (orig_cache) spiegeln – nur Änderungen werden kopiert
@@ -93,7 +99,8 @@ SPIELDATEN SELBST ERZEUGEN (eigene Installation von Hidden & Dangerous 2 nötig)
 $lan = @"
 
 LAN MIT ZWEI PCS
-  1. Den kompletten Ordner (EXE + orig_cache) auf beide PCs kopieren.
+  1. Den kompletten Ordner (DangerousHidden2.exe + DangerousHidden2.pck + version.txt + orig_cache)
+     auf beide PCs kopieren. EXE und .pck gehören zusammen – nie einzeln austauschen.
   2. Auf beiden PCs einmal Firewall_freigeben.cmd als Administrator ausführen
      (Netzwerk in Windows als "Privat" eingestellt).
   3. PC 1: MEHRSPIELER-SPIEL – LAN -> Server erstellen -> "Server starten".

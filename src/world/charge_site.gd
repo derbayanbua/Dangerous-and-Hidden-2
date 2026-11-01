@@ -62,18 +62,13 @@ func detonate() -> void:
 	if _charge_mesh:
 		_charge_mesh.queue_free()
 	var pos := global_position + Vector3.UP
-	Effects.explosion(pos, 6.0, [OrigAudio.CAT_EXPLOSION, OrigAudio.EXP_CHARGE_OUT])   # „Explosion Naloz Ext“
-	Events.emit_noise(pos, 400.0, _planter, Soldier.TEAM_ALLIED, &"explosion")
-	# Splitterwirkung wie Granate (mit Sichtlinienprüfung)
-	var space := get_world_3d().direct_space_state
-	for n in get_tree().get_nodes_in_group("soldiers"):
-		var s := n as Soldier
-		if s and s.alive:
-			var d := s.global_position.distance_to(pos)
-			if d < 8.0:
-				var q := PhysicsRayQueryParameters3D.create(pos, s.global_position + Vector3.UP * 0.6, 1)
-				if space.intersect_ray(q).is_empty():
-					s.apply_hit(250.0 * (1.0 - d / 8.0), &"torso", _planter, (s.global_position - pos).normalized())
+	# G-006 (B-026): Stärke/Radius der Sprengladung des Spielers (PlacedCharge, linearer Originalabfall über
+	# WeaponDB.explosion_damage) statt fest 250/8 m; trifft auch Fahrzeuge/Zerstörbares; Lärm-Team = Team des Anbringenden.
+	var r := PlacedCharge.CHARGE_RADIUS
+	var by: Soldier = _planter if is_instance_valid(_planter) else null
+	Effects.explosion(pos, r * 0.85, [OrigAudio.CAT_EXPLOSION, OrigAudio.EXP_CHARGE_OUT])   # „Explosion Naloz Ext“
+	Events.emit_noise(pos, 400.0, by, by.team if by else Soldier.TEAM_ALLIED, &"explosion")
+	WeaponDB.apply_blast(get_tree(), get_world_3d().direct_space_state, pos, r, PlacedCharge.CHARGE_STRENGTH, by)
 	if is_instance_valid(target_node):
 		target_node.visible = false
 		for c in target_node.find_children("*", "CollisionShape3D", true, false):

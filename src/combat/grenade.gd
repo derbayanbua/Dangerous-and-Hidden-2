@@ -106,21 +106,10 @@ func explode() -> void:
 	Events.emit_noise(pos, data.noise_radius, thrower if is_instance_valid(thrower) else null, team, &"explosion")
 	var space := get_world_3d().direct_space_state
 	Net.hit_source = String(data.id) if data else ""     # Integration Kill-Feed: Waffe der Explosion (nicht Hand des Werfers)
-	for s in get_tree().get_nodes_in_group("soldiers"):
-		var sol := s as Soldier
-		if sol == null or not sol.alive:
-			continue
-		var target := sol.global_position + Vector3.UP * 0.5
-		var dist := pos.distance_to(target)
-		if dist > radius:
-			continue
-		var q := PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 0.15, target, 1)
-		if not space.intersect_ray(q).is_empty():
-			continue   # Deckung
-		# Original hd2.exe 0x6DE780: linear (1 − d/r) · Stärke, Zone Körper, keine Haltungsminderung
-		var dmg := WeaponDB.explosion_damage(data.damage, radius, dist)
-		sol.apply_hit(dmg, &"torso", thrower if is_instance_valid(thrower) else null, (target - pos).normalized())
+	# Original hd2.exe 0x6DE780: linear (1 − d/r) · Stärke, Zone Körper, keine Haltungsminderung (G-021: WeaponDB.apply_blast)
+	var by: Node = thrower if is_instance_valid(thrower) else null
+	WeaponDB.apply_blast(get_tree(), space, pos, radius, data.damage, by, 0.15, false)
 	Net.hit_source = ""
 	# Fahrzeuge und Hunde (on_bullet_hit) nehmen Explosionsschaden ohne Deckungsprüfung
-	OrigInteractive.damage_objects(get_tree(), pos, radius, data.damage, thrower if is_instance_valid(thrower) else null, _veh_factor)
+	OrigInteractive.damage_objects(get_tree(), pos, radius, data.damage, by, _veh_factor)
 	queue_free()

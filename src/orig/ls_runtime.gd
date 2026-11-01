@@ -11,11 +11,15 @@ var orig: OrigLevel
 var texts := {}                ## Original-Texte (texts_german.json): ID -> Text
 var actors := {}               ## Name -> Soldier
 var waypoints := {}            ## Name -> Node3D
+var checkpoints := LsCheckpoints.new()   ## CheckpointJoin/Separate-Kanten (AP-5, src/orig/ls_checkpoints.gd), im Spielstand
 var vms: Array[LsVM] = []
 var vm_of := {}                ## Node -> LsVM
 var game_values := {}          ## SaveGameValue / _LoadGameValue
 var subtitles_on := false
 var unimplemented := {}
+## B-028/O-006: bekannte Befehle OHNE Wirkung („stumm“): Befehl -> {"count", "owner"} (owner = zuständiger Backlogpunkt,
+## z. B. B-035 Darstellung). Rauchtest/Laufzeit melden sie zählend (write_silent_report → test_output/ls_silent.txt).
+var stubbed := {}
 var calls := {}                ## Statistik: Befehl -> Anzahl
 var log_calls := false
 var objective_map := {}        ## Original-Index -> Objective-ID
@@ -25,6 +29,7 @@ const MissionAreaScript := preload("res://src/orig/mission_area.gd")
 var object_models := {}        ## Szenenobjekt (groß) -> Modellname (klein), scene.json
 var area: Node                 ## Einsatzgebiet-Grenze (mission_area.gd), null ohne Grenzdreiecke/im Netzspiel
 var anim: Node = LsAnimScript.new()   ## Skriptanimationen *.i3d (src/orig/ls_anim.gd), Kind ab _ready
+var disguise := OrigDisguise.new()    ## AP-6: Uniformtarnung (Tarnwert je Soldat, 30-Hz-Raster [E])
 
 
 func setup(m: Mission, level: OrigLevel) -> void:
@@ -43,6 +48,7 @@ func setup(m: Mission, level: OrigLevel) -> void:
 		wroot.add_child(n)
 		n.position = Vector3(p[0], p[1], p[2])
 		waypoints[String(wn).to_upper()] = n
+	checkpoints.known = func(k: String) -> bool: return waypoints.has(k)
 	for o in data.get("objects", []):
 		if String(o.get("model", "")) != "":
 			object_models[String(o.get("name", "")).to_upper()] = String(o["model"]).to_lower()
@@ -156,6 +162,10 @@ func _physics_process(delta: float) -> void:
 		var step: float = minf(absf(r["speed"]) * delta, r["left"])
 		r["left"] -= step
 		(r["node"] as Node3D).rotate_object_local(r["axis"], deg_to_rad(step * signf(r["speed"])))
+	_display_tick(delta)
+	# AP-6: Uniformtarnung nur im Einzelspieler (0x59FFD0: DAT_00982100 & 7 == 7) [B]
+	if not Net.is_online and mission and mission.get("squad") and mission.squad:
+		disguise.tick(delta, mission.squad.members, get_tree())
 	for at in _air_targets.keys():
 		if not is_instance_valid(at):
 			_air_targets.erase(at)
@@ -335,6 +345,7 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				if not who.has_meta("tnf_back"):
 					who.set_meta("tnf_back", who.global_transform)
 				who.global_position = to.global_position
+				who.set_meta("tnf_to", to)      # B-035: Hand-Frame für FRM_SetTarget
 			return null
 		"SCRIPTASSIGN":
 			var sf2 := _frame_arg(vm, args[0])
@@ -468,6 +479,34 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				print("LS %s: %s %s" % [vm.name, str(vm.value(args[0])), str(vm.value(args[1])) if args.size() > 1 else ""])
 			return null
 		"HINT_CLEARALL":
+			# Original: HUD-Hinweise löschen [P, Handler nicht dekodiert]. Der Nachbau hat kein Skript-Hinweissystem
+			# (HINT_* sonst unbenutzt) → leert nur Hinweise, falls das HUD sie anbietet [E]
+			var hh = mission.get("hud") if mission else null
+			if hh is Object and hh.has_method("clear_hints"):
+				hh.clear_hints()
+			return null
+		"CHECKPOINTJOIN", "CHECKPOINTSEPARATE":
+			# AP-5 [B] 0x418009/0x417F17: Kante im Wegpunktnetz anlegen/entfernen (LsCheckpoints)
+			if args.size() >= 2:
+				var ca := _str(vm.value(args[0]))
+				var cb := _str(vm.value(args[1]))
+				if fname == "CHECKPOINTJOIN":
+					checkpoints.join(ca, cb)
+				else:
+					checkpoints.separate(ca, cb)
+			return null
+		"SETWHENEVERTIME":
+			# AP-5 [B] 0x419980: Periode der Whenever (Name, ms); kein Reset der verstrichenen Zeit
+			if args.size() >= 2 and args[0] is Array and args[0][0] == "var":
+				vm.whenever_interval_ms[String(args[0][1])] = int(vm.value(args[1]))
+			return null
+		"SETUPTACTICALMODE":
+			# Taktikkarte sperren/freigeben [P aus Namen/Parameter; alle 14 Aufrufe: False/0] – TacticalMap.locked
+			var tmap = mission.get("tactical_map") if mission else null
+			if tmap is Object and "locked" in tmap:
+				tmap.locked = not (LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true)
+				if tmap.locked and bool(tmap.get("is_open")) and tmap.has_method("close"):
+					tmap.close()
 			return null
 		"SETALARMTYPE":
 			# (Maske, an/aus): Alarmarten, die OnAlarm auslösen (SetAlarmType(1023, true) = alle)
@@ -498,12 +537,14 @@ func call_api(vm: LsVM, fname: String, args: Array):
 					bm.script_move(ap)
 					return {"wait_until": bm.script_move_done, "timeout": 60.0}
 			return null
-		"HUMAN_ILLFIRE":
+		"HUMAN_ILLFIRE", "HUMAN_ATTACK":
+			# AP-6: gemeinsamer Handler 0x422776 [B], IllFire-Flag = (Opcode 48); Kampfauftrag mit Rückmeldung an den pc
 			var bf := _brain(vm)
 			var ft := _frame_arg(vm, args[0]) if args.size() > 0 else null
 			if bf and ft:
-				bf.script_ill_fire(ft, (float(vm.value(args[1])) if args.size() > 1 else 1000.0) / 1000.0)
-				return {"wait_until": bf.ill_fire_done, "timeout": 60.0}
+				var ms := float(vm.value(args[1])) if args.size() > 1 else 1000.0
+				bf.script_attack_order(ft, ms / 1000.0, fname == "HUMAN_ILLFIRE")
+				return {"wait_until": bf.attack_done, "timeout": maxf(60.0, ms / 1000.0 + 5.0)}
 			return null
 		"HUMAN_WEAPONUP":
 			var sw := _soldier(vm)
@@ -660,9 +701,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			# Partikelsystem auslaufen lassen (keine neuen Teilchen, Knoten verschwindet danach)
 			var fpi := int(vm.value(args[0])) if args.size() > 0 else -1
 			var fpn = _indexed_particles.get(fpi)
-			if is_instance_valid(fpn) and fpn is GPUParticles3D:
-				(fpn as GPUParticles3D).emitting = false
-				get_tree().create_timer((fpn as GPUParticles3D).lifetime + 0.5, false).timeout.connect(fpn.queue_free)
+			if is_instance_valid(fpn):
+				OrigParticles.stop(fpn)
 			_indexed_particles.erase(fpi)
 			return null
 		"FRM_SETANIMATION", "FRM_SETANIMATIONDELAYED":
@@ -684,7 +724,13 @@ func call_api(vm: LsVM, fname: String, args: Array):
 					anim.reset_animation(af4, ch4)
 			return null
 		"FRM_SETSHIFTING":
-			return null    # Texturverschiebung (Kette CZECH1): ohne Wirkung
+			# (Frame, an, rückwärts): CZECH1 Schrankenkette („retez“) – Texturverschiebung, solange die Schranke sich bewegt
+			# (_ACTOR_GetState 2/3) [P aus den Skripten]; Geschwindigkeit [E]
+			var shf := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if shf:
+				set_shifting(shf, LsVM._truthy(vm.value(args[1])) if args.size() > 1 else false,
+					LsVM._truthy(vm.value(args[2])) if args.size() > 2 else false)
+			return null
 		"_MP_ISITEMINTEAMINVENTORY":
 			# (Seite, Gegenstand, var): trägt ein Soldat der Seite (1 = Achse, 0 = Alliierte) den Gegenstand?
 			var team_mp := Soldier.TEAM_AXIS if args.size() > 0 and int(vm.value(args[0])) == 1 else Soldier.TEAM_ALLIED
@@ -706,8 +752,9 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			var b4 := _brain(vm)
 			var tgt := _frame_arg(vm, args[0])
 			if b4 and tgt:
-				b4.script_move(tgt.global_position)
-				return {"wait_until": b4.script_move_done, "timeout": 40.0}
+				var route := checkpoint_route(b4.soldier.global_position, tgt)
+				b4.script_route(route)
+				return {"wait_until": b4.script_move_done, "timeout": 40.0 * maxf(1.0, route.size() * 0.5)}
 			return null
 		"HUMAN_MOVERANDOMRADIUS":
 			var b5 := _brain(vm)
@@ -788,12 +835,12 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			elif b10:
 				b10.calm_down()
 			return null
-		"HUMAN_KILL", "HUMAN_ATTACK", "HUMAN_KILLEX":
+		"HUMAN_KILL", "HUMAN_KILLEX":
 			var b11 := _brain(vm)
 			var victim := _frame_arg(vm, args[0]) as Soldier
 			if b11 and victim:
 				b11.script_attack(victim)
-			elif victim and victim.alive and fname != "HUMAN_ATTACK" and (not (vm.me is Soldier) or victim == vm.me):
+			elif victim and victim.alive and (not (vm.me is Soldier) or victim == vm.me):
 				victim.die(null)     # aus einem Objekt-/Dummy-Skript (z. B. AFRICA1 Flugzeug): Akteur stirbt
 			return null
 		# --- Zwischensequenzen ---
@@ -801,6 +848,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			run_cutscene(int(vm.value(args[0])) if args.size() > 0 else 1, vm)
 			return null
 		"CSC_ENDCUTSCENE":
+			if in_cutscene:
+				cutscene_end_reason = "script"
 			end_cutscene()
 			return null
 		"FRM_SETACTIVECAMERA":
@@ -932,7 +981,7 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		"FRM_CREATEINDEXEDPARTICLE":
 			var pf2 := _frame_arg(vm, args[1]) if args.size() > 1 else null
 			if pf2:
-				var node := _particles(int(vm.value(args[0])), pf2.global_position)
+				var node := _particles(int(vm.value(args[0])), pf2.global_position, true)
 				_particle_index += 1
 				_indexed_particles[_particle_index] = node
 				if args.size() > 2 and args[2][0] == "var":
@@ -969,17 +1018,11 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			_set_interface_timer(float(vm.value(args[0])) / 1000.0)
 			return null
 		"HUMAN_SETSNIPER":
-			# Scharfschütze: bleibt in Stellung, größere Sichtweite, ruhiger Schuss
+			# AP-6: Setzer 0x5AF700 [B]: Postenlage, float(Arg 2), an/aus; Wirkung = Leine um den Posten [P] (EnemyBrain.set_sniper)
 			var sb2 := _brain(vm)
-			var ss := _soldier(vm)
-			if sb2 and ss and LsVM._truthy(vm.value(args[0])):
-				sb2.stationary = true
-				var sp2: Perception = ss.get_node_or_null("Perception")
-				if sp2:
-					sp2.sight_range = maxf(sp2.sight_range, 120.0)
-				sb2.accuracy_skill = minf(sb2.accuracy_skill + 0.25, 0.95)
-			elif sb2:
-				sb2.stationary = false
+			if sb2:
+				sb2.set_sniper(LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true,
+					float(vm.value(args[1])) if args.size() > 1 else 0.0)
 			return null
 		"DOG_MOVE":
 			var dm := vm.me as Dog
@@ -1001,7 +1044,17 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				anim.set_camera_animation(cf3, _str(vm.value(args[1])) if args.size() > 1 else "")
 			return null
 		"FRM_SOUNDADJUSTDOPPLER":
-			return null    # Doppler-Feinabstimmung
+			# B-033: Handler 0x41A0AF [B]: nur Klangframes (Typ 4), Arg 2 × Faktor an vtable +0x8C (Dopplerstärke), Arg 3 je nach
+			# Arg-Typ [P]. Nachbau: Dopplerverfolgung am Klangspieler + Kamera, Rohwerte als Meta „doppler“ [P/E]
+			var dpf := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			if dpf is AudioStreamPlayer3D:
+				(dpf as AudioStreamPlayer3D).doppler_tracking = AudioStreamPlayer3D.DOPPLER_TRACKING_PHYSICS_STEP
+				dpf.set_meta("doppler", args.slice(1).map(func(a): return vm.value(a)))
+				var dcam := get_viewport().get_camera_3d() if is_inside_tree() else null
+				if dcam:
+					dcam.doppler_tracking = Camera3D.DOPPLER_TRACKING_PHYSICS_STEP
+			doppler_calls += 1
+			return null
 		"SETNPCTEAMSTATUS":
 			# NPC kämpft als Teil des Teams (KI statt Skriptsteuerung), z. B. befreite Verbündete
 			var nf := _frame_arg(vm, args[0])
@@ -1068,10 +1121,31 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				mission.setup_junkers88(float(vm.value(args[0])) if args.size() > 0 else 60.0,
 					float(vm.value(args[1])) if args.size() > 1 else 100.0)
 			return null
-		"DECORATOR_SETON", "HUMAN_SETIGNORECIRCUMVENTIONFLAG":
-			return null    # Zwischensequenz-Dekoration / Ju-88-Angriff (Flugmechanik) noch nicht umgesetzt
-		"SETWHENEVERTIME", "SETUPTACTICALMODE", "FRM_SETTARGET":
-			return null    # Prüfintervall / Taktikmodus / Zielmarke: ohne sichtbare Wirkung
+		"DECORATOR_SETON":
+			# NORMANDY x_n1_kamera-ya / CZECH3 r_cz3_cutscene: Dekoration (Bewuchs) während der Zwischensequenz aus/an [P];
+			# im Nachbau = die Bewuchs-Meshes des Levels (Grafikoption „Gras“ bleibt maßgeblich)
+			decorator_on = LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true
+			if orig.has_method("set_decorator"):
+				orig.set_decorator(decorator_on)
+			return null
+		"HUMAN_SETIGNORECIRCUMVENTIONFLAG":
+			# B-033: Handler 0x422BE2 [B]: nur für Menschen (Typ 5), Gehirn +0x11C = (Arg ≠ 0); 0x562E30 überspringt bei gesetztem
+			# Byte die Umgehungsplanung auf dem Pfad (0x5626B0), Spielstand 0x577440 (Block 0x13A6). Nachbau: AIBrain lässt das
+			# seitliche Ausweichen/Durchlaufen an Hindernissen und stehenden Menschen weg [P Wirkung]. Nur AFRICA3 af3a_21 (Mechaniker).
+			var icb := _soldier(vm)
+			var icai: AIBrain = icb.get_node_or_null("EnemyBrain") as AIBrain if icb else null
+			if icai:
+				icai.ignore_circumvention = LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true
+			return null
+		"FRM_SETTARGET":
+			# (Waffe, Ziel-Dummy, an/aus): nur Zwischensequenzen, Skriptkommentare „link/unlink zbrane“ (BURMA2 cutsas1):
+			# Waffe bleibt an der Hand (zuvor FRM_TeleportNearFrame(Waffe, hw1)) und zeigt auf den Dummy „wt“ der Figur [P].
+			# Nachbau: je Bild Lage = Hand-Frame, Ausrichtung -Z auf das Ziel (LS3D +z vorn → Godot -z, convert_mission).
+			var tw_f := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			var tw_t := _frame_arg(vm, args[1]) if args.size() > 1 else null
+			if tw_f:
+				set_aim_link(tw_f, tw_t, LsVM._truthy(vm.value(args[2])) if args.size() > 2 else true)
+			return null
 		"FRM_SETCAMERAFRAME":
 			_cam_target = _frame_arg(vm, args[0]) if args.size() > 0 else null
 			return null
@@ -1106,9 +1180,28 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				weather.color = Color8(int(wa[0]), int(wa[1]), int(wa[2]), int(wa[3]))
 			_apply_weather()
 			return null
-		"WEATHER_SETDIR", "WEATHER_SETSPACE", "WEATHER_SETCOLOROUT", "CSC_RUNCLOUDER", \
-				"__SETUPAUTOLOGGING":
+		"WEATHER_SETDIR", "WEATHER_SETSPACE", "WEATHER_SETCOLOROUT":
+			# r_arc1a_pocasi: SetDir(X, Y, Z) mit Y = -100, X/Z zufällig ±60 (Wind) → Fallrichtung [P];
+			# SetSpace(15, 15) / (12, 30) → Ausdehnung des Niederschlagsvolumens in m (waagrecht, senkrecht) [P];
+			# SetColorOut RGBA (Alpha stets 0) → Farbe am Ende der Lebenszeit (Verlauf ColorIn → ColorOut) [P]
+			var wd: Array = []
+			for a in args:
+				wd.append(float(vm.value(a)))
+			if fname == "WEATHER_SETDIR" and wd.size() > 2:
+				weather.dir = Vector3(wd[0], wd[1], -wd[2])
+			elif fname == "WEATHER_SETSPACE" and wd.size() > 1:
+				weather.space = Vector2(wd[0], wd[1])
+			elif fname == "WEATHER_SETCOLOROUT" and wd.size() > 3:
+				weather.color_out = Color8(int(wd[0]), int(wd[1]), int(wd[2]), int(wd[3]))
+			_apply_weather()
 			return null
+		"CSC_RUNCLOUDER":
+			# ARCTIC1 r_arc1a_cutscene „spustam mraky“ (Wolken an): hd2.exe nennt dazu clouder.tga/clouder2.tga (0x839658)
+			# → Wolkenschatten über der Szene [P]; Nachbau: wandernde Projektion (Decal) der Originaltextur [E Größe/Tempo]
+			set_clouder(LsVM._truthy(vm.value(args[0])) if args.size() > 0 else false)
+			return null
+		"__SETUPAUTOLOGGING":
+			return _noop(fname, "0x41C8C6: nur pc weiter (Diagnose)")    # B-033 [B]
 		# --- Sprache: Original-Aufnahme + Untertitel (Lippenbewegung: Platzhalter) ---
 		"FRM_MORPHSPEECH", "FRM_MORPHSPEECHDELAYED":
 			var spk := _frame_arg(vm, args[0])
@@ -1311,9 +1404,37 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				anim.set_animation(hsa, _str(vm.value(args[0])), 100,
 					LsVM._truthy(vm.value(args[3])) if args.size() > 3 else false, true)
 			return null
-		"HUMAN_SETOPTIMIZED", \
-				"FRM_SWITCHFACETEXTURE", "FRM_SETLIGHTMAP", "FRM_SETGROUPLIGHTMAP", "CHECKPOINTJOIN", "CHECKPOINTSEPARATE":
-			return null    # Animation/Gesicht/Beleuchtung: vorerst ohne Wirkung (Original-Animationen: offen)
+		"HUMAN_SETOPTIMIZED":
+			# [B] hd2.exe Befehlstabelle 0x835E14 (Kennung 0x3F) → Menschen-Dispatcher 0x421C00 → 0x5AF5C0: nur im KI-Zustand 5,
+			# 0x58FCC0 merkt den Wert (+0x1D4) → 0x5AC110 setzt Renderbits 2/4 am Modell-Frame (+0x22C). Reine Darstellungs-/
+			# Leistungsoptimierung ohne Spielwirkung → im Nachbau belegt wirkungslos.
+			return _noop(fname, "0x5AF5C0: nur Renderbits am Modell")
+		"FRM_SWITCHFACETEXTURE":
+			var ff := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			var ftex := _str(vm.value(args[1])) if args.size() > 1 else ""
+			if ff is Soldier and (ff as Soldier).model and ftex != "":
+				if (ff as Soldier).model.set_face_texture(ftex):
+					face_switches += 1
+				else:
+					face_missing[ftex] = int(face_missing.get(ftex, 0)) + 1
+			return null
+		"FRM_SETLIGHTMAP", "FRM_SETGROUPLIGHTMAP":
+			# (Frame | "Gruppe", Stufe): Original-Lightmapstufen aus scene2.bin (tools/fmt_lightmaps.py, B-035 [B Daten]);
+			# Stufe n = Satz n+1, Helligkeit relativ zu Stufe 0 → Albedo der Meshes (OrigLevel.set_lightmap)
+			var lv := int(vm.value(args[1])) if args.size() > 1 else 0
+			if fname == "FRM_SETGROUPLIGHTMAP":
+				var gname := _str(vm.value(args[0])) if args.size() > 0 else ""
+				for m in orig.lightmap_group(gname):
+					var gf := find_frame(String(m))
+					if gf:
+						orig.set_lightmap(gf, String(m), lv)
+				lightmap_calls[gname] = lv
+			else:
+				var lf := _frame_arg(vm, args[0]) if args.size() > 0 else null
+				if lf:
+					orig.set_lightmap(lf, String(lf.name), lv)
+					lightmap_calls[String(lf.name)] = lv
+			return null
 		"HUMAN_ACTIVITY_SMOKE", "HUMAN_ACTIVITY_POINT", "HUMAN_ACTIVITY_SIT", "HUMAN_ACTIVITY_DRINKBOTTLE", \
 				"HUMAN_ACTIVITY_COLD", "HUMAN_ACTIVITY_HAT", "HUMAN_ACTIVITY_TURK", "HUMAN_ACTIVITY_HOT", "HUMAN_ACTIVITY_CHECKWEAPON", "HUMAN_ACTIVITY_BINOCULARS", \
 				"HUMAN_ACTIVITY_BINOCULARSEND", "HUMAN_ACTIVITY_SALUTE", "HUMAN_ACTIVITY_CARD", "HUMAN_ACTIVITY_CUBES", \
@@ -1327,6 +1448,232 @@ func call_api(vm: LsVM, fname: String, args: Array):
 		unimplemented[fname] = 0
 	unimplemented[fname] += 1
 	return null
+
+
+## O-006: stummen Befehl zählen (einmalige Konsolenmeldung je Befehl) – Rückgabe null wie ein normaler Befehl
+func _stub(fname: String, owner: String):
+	if not stubbed.has(fname):
+		stubbed[fname] = {"count": 0, "owner": owner}
+		print("LS stumm: %s (%s)" % [fname, owner])
+	stubbed[fname]["count"] = int(stubbed[fname]["count"]) + 1
+	return null
+
+
+## B-035: belegt wirkungsloser Befehl (Beleg im Bericht), kein „stumm“
+var noop_calls := {}
+var doppler_calls := 0             ## B-033: FRM_SoundAdjustDoppler (Diagnose/Test)
+
+
+## B-033: Führerweg über die Checkpoint-Kanten (CheckpointJoin/Separate, AP-5). Ist das Ziel ein Wegpunkt mit Kanten und
+## steht der Soldat ≤ CHECKPOINT_SNAP m an einem verbundenen Wegpunkt, läuft er die Kantenfolge ab (Zwischenpunkte, dann
+## Ziel); sonst direkt (Navmesh) zum Ziel. Original: Wegfindung im Wegpunktnetz 0x698500 +0x54 [B]; Startwahl
+## „nächster Wegpunkt“ und Fangradius [P/E] (Grundkanten aus check.bin fehlen, s. docs/status/b026_b033.md).
+const CHECKPOINT_SNAP := 4.0
+
+
+func checkpoint_route(from: Vector3, tgt: Node3D) -> Array:
+	var direct: Array = [tgt.global_position]
+	if checkpoints.edges.is_empty() or "--checkpoint_route=0" in OS.get_cmdline_user_args():
+		return direct
+	_drive_load()
+	if not checkpoints.base_pos.is_empty():
+		# Gesamtnetz (Grundkanten + Skriptkanten): nur wenn der kürzeste Weg eine Skriptkante nutzt, folgt der Soldat den
+		# Netzknoten – sonst bleibt das Navmesh maßgeblich (Navmesh ersetzt das Grundnetz [E], Skriptkanten = Ablauf)
+		var tn := -1
+		for k in checkpoints.name_node:
+			if waypoints.get(k) == tgt:
+				tn = int(checkpoints.name_node[k])
+				break
+		var sn := checkpoints.nearest_node(from, CHECKPOINT_SNAP)
+		if tn < 0 or sn < 0 or sn == tn:
+			return direct
+		var r := checkpoints.route_nodes(sn, tn)
+		if r.is_empty() or not bool(r["script_edge"]):
+			return direct
+		var pts: Array = []
+		var nodes: Array = r["nodes"]
+		for i in range(1, nodes.size() - 1):
+			pts.append(checkpoints.base_pos[nodes[i]])
+		pts.append(tgt.global_position)
+		print("CHECKPOINT-WEG %s: %d Punkte %s" % [tgt.name, pts.size(), str(nodes)])
+		return pts
+	var tname := ""
+	var start := ""
+	var best := CHECKPOINT_SNAP * CHECKPOINT_SNAP
+	var seen := {}
+	for e in checkpoints.edges:
+		for k in e:
+			if seen.has(k):
+				continue
+			seen[k] = true
+			var wp: Node3D = waypoints.get(k)
+			if wp == null:
+				continue
+			if wp == tgt:
+				tname = k
+			var d2 := wp.global_position.distance_squared_to(from)
+			if d2 < best:
+				best = d2
+				start = k
+	if tname == "" or start == "" or start == tname:
+		return direct
+	var names := checkpoints.path(start, tname)
+	if names.size() < 2:
+		return direct
+	var out: Array = []
+	for i in range(1, names.size()):
+		out.append((waypoints[names[i]] as Node3D).global_position)
+	return out
+
+
+func _noop(fname: String, proof: String):
+	if not noop_calls.has(fname):
+		noop_calls[fname] = {"count": 0, "proof": proof}
+	noop_calls[fname]["count"] = int(noop_calls[fname]["count"]) + 1
+	return null
+
+
+# --- B-035 Darstellung: Gesichter, Lightmaps, Zielverknüpfung, Texturverschiebung, Wolken ---------------------
+var face_switches := 0             ## erfolgreiche FRM_SwitchFaceTexture
+var face_missing := {}             ## Textur fehlt im Cache -> Anzahl
+var lightmap_calls := {}           ## Frame/Gruppe -> zuletzt gesetzte Stufe (Diagnose)
+var decorator_on := true
+var aim_links := {}                ## Waffe -> {target, hand}
+var _shifting := {}                ## Frame -> Richtung (+1/-1)
+const SHIFT_SPEED := 0.6           ## UV/s [E]
+var _clouder: Decal
+var clouder_on := false
+
+
+func set_aim_link(w: Node3D, target: Node3D, on: bool) -> void:
+	if not on or target == null:
+		aim_links.erase(w)
+		return
+	var hand = w.get_meta("tnf_to") if w.has_meta("tnf_to") else null
+	aim_links[w] = {"target": target, "hand": hand}
+	_update_aim(w)
+
+
+func _update_aim(w: Node3D) -> void:
+	var l: Dictionary = aim_links[w]
+	var t: Node3D = l["target"]
+	if not is_instance_valid(t):
+		aim_links.erase(w)
+		return
+	var h = l["hand"]
+	if h is Node3D and is_instance_valid(h):
+		w.global_position = (h as Node3D).global_position
+	var to := t.global_position - w.global_position
+	if to.length() > 0.01:
+		var up := Vector3.UP if absf(to.normalized().y) < 0.99 else Vector3.BACK
+		w.look_at(t.global_position, up)
+
+
+func set_shifting(f: Node3D, on: bool, reverse: bool) -> void:
+	if on:
+		_shifting[f] = -1.0 if reverse else 1.0
+		for mi in _meshes_of(f):
+			for s in mi.mesh.get_surface_count():
+				var m := mi.get_active_material(s) as BaseMaterial3D
+				if m and not m.has_meta("shift_own"):
+					var nm := m.duplicate() as BaseMaterial3D
+					nm.set_meta("shift_own", true)
+					mi.set_surface_override_material(s, nm)
+	else:
+		_shifting.erase(f)
+
+
+func shift_offset(f: Node3D) -> float:
+	for mi in _meshes_of(f):
+		var m := mi.get_active_material(0) as BaseMaterial3D
+		if m:
+			return m.uv1_offset.y
+	return 0.0
+
+
+static func _meshes_of(f: Node3D) -> Array:
+	var out: Array = []
+	if f is MeshInstance3D and (f as MeshInstance3D).mesh:
+		out.append(f)
+	for c in f.find_children("*", "MeshInstance3D", true, false):
+		if (c as MeshInstance3D).mesh:
+			out.append(c)
+	return out
+
+
+func set_clouder(on: bool) -> void:
+	clouder_on = on
+	if on and _clouder == null:
+		var p := "%s/textures/clouder.png" % OrigLevel.cache_root()
+		if FileAccess.file_exists(p):
+			var img := Image.load_from_file(p)
+			if img:
+				_clouder = Decal.new()
+				_clouder.name = "Clouder"
+				_clouder.texture_albedo = ImageTexture.create_from_image(img)
+				_clouder.size = Vector3(160, 120, 160)
+				_clouder.modulate = Color(0, 0, 0, 0.45)       # dunkler Schatten [E]
+				_clouder.upper_fade = 0.0
+				_clouder.lower_fade = 0.0
+				add_child(_clouder)
+	if _clouder:
+		_clouder.visible = on
+
+
+func _display_tick(delta: float) -> void:
+	for w in aim_links.keys():
+		if not is_instance_valid(w):
+			aim_links.erase(w)
+			continue
+		_update_aim(w)
+	for f in _shifting.keys():
+		if not is_instance_valid(f):
+			_shifting.erase(f)
+			continue
+		for mi in _meshes_of(f):
+			for s in mi.mesh.get_surface_count():
+				var m := mi.get_surface_override_material(s) as BaseMaterial3D
+				if m:
+					m.uv1_offset.y = fposmod(m.uv1_offset.y + SHIFT_SPEED * delta * float(_shifting[f]), 1.0)
+	if _clouder and clouder_on:
+		var cam: Camera3D = _cut_cam if in_cutscene and _cut_cam else (mission.rig.camera if mission and mission.get("rig") else null)
+		if cam:
+			_clouder.global_position.x = cam.global_position.x
+			_clouder.global_position.z = cam.global_position.z
+			_clouder.global_position.y = cam.global_position.y
+		# Wolken ziehen: Textur über die Lage verschieben (Decal hat keinen UV-Versatz → Position relativ zu einem Driftpunkt)
+		_cloud_drift += delta * 2.0
+		_clouder.global_position.x += fposmod(_cloud_drift, 160.0) - 80.0
+
+
+var _cloud_drift := 0.0
+
+
+## Bericht der stummen und nicht umgesetzten Befehle (anhängend, je Mission ein Block)
+func write_silent_report(path := "res://test_output/ls_silent.txt", tag := "") -> void:
+	var abs_path := ProjectSettings.globalize_path(path)
+	DirAccess.make_dir_recursive_absolute(abs_path.get_base_dir())
+	var f := FileAccess.open(abs_path, FileAccess.READ_WRITE) if FileAccess.file_exists(abs_path) else FileAccess.open(abs_path, FileAccess.WRITE)
+	if f == null:
+		return
+	f.seek_end()
+	var total := 0
+	for k in stubbed:
+		total += int(stubbed[k]["count"])
+	f.store_line("== %s  stumm: %d Befehle / %d Aufrufe, nicht umgesetzt: %d" % [tag, stubbed.size(), total, unimplemented.size()])
+	var keys := stubbed.keys()
+	keys.sort()
+	for k in keys:
+		f.store_line("stumm\t%s\t%d\t%s" % [k, int(stubbed[k]["count"]), stubbed[k]["owner"]])
+	var nk := noop_calls.keys()
+	nk.sort()
+	for k in nk:
+		f.store_line("wirkungslos\t%s\t%d\t%s" % [k, int(noop_calls[k]["count"]), noop_calls[k]["proof"]])
+	for k in face_missing:
+		f.store_line("gesicht_fehlt\t%s\t%d" % [k, int(face_missing[k])])
+	for k in unimplemented:
+		f.store_line("unbekannt\t%s\t%d" % [k, int(unimplemented[k])])
+	f.close()
 
 
 var _voice_cache := {}
@@ -1763,42 +2110,19 @@ func _ground(p: Vector3) -> Vector3:
 	return hit.position if not hit.is_empty() else p
 
 
-## Original-Partikelsysteme (Index in die Partikeltabelle, Definitionen noch nicht dekodiert):
-## Platzhalter Rauchsäule/Feuer, je nach Zweck des Original-Aufrufs.
-func _particles(id: int, pos: Vector3) -> Node3D:
-	var fire := id in [43, 53]
-	var gp := GPUParticles3D.new()
-	gp.amount = 80 if fire else 40
-	gp.lifetime = 3.0
-	gp.visibility_aabb = AABB(Vector3(-6, -1, -6), Vector3(12, 16, 12))
-	var pm := ParticleProcessMaterial.new()
-	pm.direction = Vector3.UP
-	pm.spread = 12.0
-	pm.initial_velocity_min = 1.0
-	pm.initial_velocity_max = 2.5
-	pm.gravity = Vector3(0.6, 0.4, 0.2)
-	pm.scale_min = 0.6
-	pm.scale_max = 1.6
-	gp.process_material = pm
-	var q := QuadMesh.new()
-	q.size = Vector2(1.2, 1.2)
-	var m := StandardMaterial3D.new()
-	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.albedo_color = Color(1.0, 0.55, 0.15, 0.7) if id == 43 else Color(0.2, 0.2, 0.2, 0.45)
-	q.material = m
-	gp.draw_pass_1 = q
-	mission.dynamic_root.add_child(gp)
-	gp.global_position = pos
-	if fire:
-		var l := OmniLight3D.new()
-		l.light_color = Color(1.0, 0.6, 0.3)
-		l.omni_range = 10.0
-		l.light_energy = 2.0
-		gp.add_child(l)
-	get_tree().create_timer(60.0).timeout.connect(gp.queue_free)
-	return gp
+## Original-Partikelsysteme (B-028/O-007): Index = Eintrag der Tabelle TABLES\effects.def (orig_particles.gd).
+## Stoßeffekte enden nach ihrer Lebensdauer; Dauereffekte (FRM_CreateParticle) laufen 60 s [E: Original-Dauer nicht
+## dekodiert], indizierte bis FRM_Finish/DestroyIndexedParticle.
+func _particles(id: int, pos: Vector3, indexed := false) -> Node3D:
+	var node := OrigParticles.spawn(id, pos, mission.dynamic_root)
+	if not indexed:
+		if OrigParticles.is_continuous(id):
+			get_tree().create_timer(60.0, false).timeout.connect(func(): OrigParticles.stop(node))
+		else:
+			get_tree().create_timer(float(node.get_meta("max_life", 2.0)) + 1.0, false).timeout.connect(func():
+				if is_instance_valid(node):
+					node.queue_free())
+	return node
 
 
 ## MakeExplosion: Explosion mit Splitterschaden (Soldaten mit Sichtlinie, Hunde).
@@ -1815,6 +2139,8 @@ func _drive_load() -> void:
 	var d = _read_json(orig.mission_dir + "/drive.json")
 	if typeof(d) != TYPE_DICTIONARY:
 		return
+	# B-033: Fußwegenetz (Abschnitt 1) als Grundkanten der Checkpoints; fehlt bei alten drive.json (ohne „walk“)
+	checkpoints.load_base(d.get("walk"))
 	var v: Dictionary = d.get("vehicle", {})
 	_drive_nodes = v.get("nodes", [])
 	_drive_names = v.get("names", [])
@@ -1899,6 +2225,32 @@ var _skip_label: Label
 var _snow: GPUParticles3D
 var auto_skip := false          ## Tests: Zwischensequenzen sofort überspringen
 var _cutscene_vms: Array = []   ## Skripte mit OnCutscene(n) der laufenden Sequenz (Schnelldurchlauf beim Überspringen)
+const CUTSCENE_FALLBACK_S := 90.0
+const CUT_IDLE_AFTER_CAMERA := 0.5   ## [E] Nachlauf nach Ende der Kameraanimation + Skriptablauf
+const CUT_IDLE_NO_CAMERA := 3.0      ## [E] ohne Kameraanimation: Sequenzskripte untätig so lange → Ende
+var _cut_idle := 0.0
+var _cut_cam_used := false
+var cutscene_end_reason := ""   ## Diagnose/Tests: "script" (CSC_EndCutscene), "camera", "scripts_idle", "fallback", "skip"
+
+
+## O-008: Sequenz endet, wenn keine Kameraanimation mehr läuft und alle OnCutscene-Abläufe fertig (ended, ohne Warten)
+## sind. Wartende/blockierte Skripte (Delay, HUMAN_Move …) halten die Sequenz offen → CSC_EndCutscene bleibt maßgeblich.
+func _cutscene_auto_end(delta: float) -> void:
+	var cs: Dictionary = anim.camera_state()
+	if int(cs["active"]) > 0:
+		_cut_cam_used = true
+		_cut_idle = 0.0
+		return
+	# auch das aufrufende Skript (CSC_RunCutscene) zählt: viele Sequenzen laufen direkt in ihm weiter
+	for v in _cutscene_vms + ([_cutscene_vm] if _cutscene_vm else []):
+		var lv := v as LsVM
+		if lv and not lv.terminated and (not lv.ended or lv.wait > 0.0 or lv.wait_until.is_valid() or not lv.events.is_empty()):
+			_cut_idle = 0.0
+			return
+	_cut_idle += delta
+	if _cut_idle >= (CUT_IDLE_AFTER_CAMERA if _cut_cam_used else CUT_IDLE_NO_CAMERA):
+		cutscene_end_reason = "camera" if _cut_cam_used else "scripts_idle"
+		end_cutscene()
 
 
 func _ready() -> void:
@@ -1926,11 +2278,16 @@ func _ready() -> void:
 func run_cutscene(n: int, vm: LsVM) -> void:
 	in_cutscene = true
 	cutscene_id = n
-	# Sequenzen ohne CSC_EndCutscene (z. B. CZECH1 cuttrebissky) enden im Original mit ihrer Kameraanimation
-	# (.i3d, nicht dekodiert) – Ersatz: spätestens nach 90 s beenden
+	# B-028/O-008: Sequenzen ohne CSC_EndCutscene (z. B. CZECH1 cuttrebissky) enden mit ihrer Kameraanimation
+	# (ls_anim, Länge = letztes Bild / 25) bzw. mit dem Ende ihrer Skriptabläufe (_cutscene_auto_end, [E]);
+	# 90 s bleiben nur als Rückfall
 	var my_n := n
-	get_tree().create_timer(90.0, false).timeout.connect(func():
+	_cut_idle = 0.0
+	_cut_cam_used = false
+	cutscene_end_reason = ""
+	get_tree().create_timer(CUTSCENE_FALLBACK_S, false).timeout.connect(func():
 		if in_cutscene and cutscene_id == my_n:
+			cutscene_end_reason = "fallback"
 			end_cutscene())
 	_cutscene_vm = vm
 	mission.controller.input_enabled = false
@@ -1995,6 +2352,8 @@ func _fade_to(a: float, secs: float) -> void:
 
 
 func _process(_delta: float) -> void:
+	if in_cutscene and not auto_skip:
+		_cutscene_auto_end(_delta)
 	if in_cutscene and is_instance_valid(_cam_frame):
 		_cut_cam.global_transform = _cam_frame.global_transform
 	if in_cutscene and is_instance_valid(_cam_target):
@@ -2006,6 +2365,7 @@ func _process(_delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if in_cutscene and (event.is_action_pressed("stance_stand") or event.is_action_pressed("pause")):
+		cutscene_end_reason = "skip"
 		end_cutscene()
 		get_viewport().set_input_as_handled()
 
@@ -2014,7 +2374,9 @@ func _unhandled_input(event: InputEvent) -> void:
 ## „dazd“ = déšť, ohne SetMode), 1 = Schnee (ARCTIC1 SetMode(1)). Früher immer Schnee → weiße Punkte im Dschungel.
 ## Einheiten [E]: Speed mm/s (Kommentar r_arc1a_pocasi „1200 == 1.2 m/s“), Size 0,1 mm (Länge, Breite), ColorIn RGBA.
 var weather := {"mode": 0, "count": 2000.0, "speed": 20000.0, "size": Vector2(1200, 40),
-	"color": Color8(37, 37, 37, 128), "on": false}
+	"color": Color8(37, 37, 37, 128), "on": false,
+	# B-035: WEATHER_SetDir (Richtung, Länge egal), SetSpace (waagrecht, senkrecht in m), SetColorOut (Endfarbe)
+	"dir": Vector3(0, -1, 0), "space": Vector2(0, 0), "color_out": Color(0, 0, 0, -1)}
 var _weather_mode_built := -1
 var _rain_count0 := 0.0
 
@@ -2035,7 +2397,36 @@ func _apply_weather() -> void:
 	else:
 		_apply_snow_mode()
 	if _snow:
+		_apply_weather_extras()
 		_snow.emitting = weather.on
+
+
+## B-035: Richtung, Volumen und Endfarbe (WEATHER_SetDir/SetSpace/SetColorOut) auf den Niederschlag anwenden
+func _apply_weather_extras() -> void:
+	var pm := _snow.process_material as ParticleProcessMaterial
+	if pm == null:
+		return
+	var d: Vector3 = weather.dir
+	if d.length() > 0.001:
+		pm.direction = d.normalized()
+		if weather.mode != 0:
+			pm.gravity = d.normalized() * 2.0       # Schnee treibt in Windrichtung
+	var sp: Vector2 = weather.space
+	if sp.x > 0.0:
+		pm.emission_box_extents = Vector3(sp.x, maxf(sp.y * 0.1, 1.0), sp.x)
+		_snow.visibility_aabb = AABB(Vector3(-sp.x - 10, -sp.y - 10, -sp.x - 10), Vector3(sp.x * 2 + 20, sp.y * 2 + 20, sp.x * 2 + 20))
+	var co: Color = weather.color_out
+	if co.a >= 0.0:
+		var c0: Color = weather.color if weather.mode == 0 else Color(0.95, 0.97, 1.0, 0.8)
+		var g := Gradient.new()
+		g.set_color(0, Color(c0.r, c0.g, c0.b, 1.0))
+		g.set_color(1, Color(co.r, co.g, co.b, co.a))
+		var gt := GradientTexture1D.new()
+		gt.gradient = g
+		pm.color_ramp = gt
+		var dp = _snow.draw_pass_1
+		if dp and dp.surface_get_material(0) is StandardMaterial3D:
+			(dp.surface_get_material(0) as StandardMaterial3D).vertex_color_use_as_albedo = true
 
 
 func _apply_rain() -> void:
@@ -2067,7 +2458,7 @@ func _apply_rain() -> void:
 	pm2.initial_velocity_min = spd * 0.9
 	pm2.initial_velocity_max = spd * 1.1
 	_snow.lifetime = clampf(22.0 / spd, 0.5, 4.0)
-	_snow.amount_ratio = clampf(float(weather.count) / maxf(_rain_count0, 1.0), 0.0, 1.0)
+	_snow.amount_ratio = clampf(float(weather.count) / maxf(_rain_count0, 1.0), 0.0, 1.0) * weather_quality_factor()
 	var bm2 := _snow.draw_pass_1 as BoxMesh
 	var sz: Vector2 = weather.size
 	bm2.size = Vector3(clampf(sz.y * 1e-4, 0.002, 0.02), clampf(sz.x * 1e-4, 0.03, 0.5), clampf(sz.y * 1e-4, 0.002, 0.02))
@@ -2102,6 +2493,15 @@ func _apply_snow_mode() -> void:
 		_snow.draw_pass_1 = q
 		add_child(_snow)
 		_weather_mode_built = 1
+	_snow.amount_ratio = weather_quality_factor()
+
+
+## B-040: Wetterpartikel je Grafikstufe 0–4 (Settings.quality): 0,4 / 0,6 / 1 / 1 / 1
+const WEATHER_QUALITY_FACTOR := [0.4, 0.6, 1.0, 1.0, 1.0]
+
+
+static func weather_quality_factor() -> float:
+	return WEATHER_QUALITY_FACTOR[clampi(Settings.quality, 0, 4)]
 
 
 ## Engine-Ereignisse an das Skript des Akteurs weiterreichen.
@@ -2109,3 +2509,379 @@ func notify(n: Node, key: String) -> void:
 	var vm: LsVM = vm_of.get(n)
 	if vm:
 		vm.fire(key)
+
+
+# --- Spielstand (B-030/AP-1, GO-001) --------------------------------------------------------
+# Original: Speicherroutine für den Skriptzustand nicht dekodiert (GAP_REA §1, [P] binärer Strom wie die Akteure).
+# Nachbau [E]: funktional gleichwertig – Skripte setzen exakt an der gespeicherten Stelle fort.
+const SAVE_VERSION := 1
+const BRAIN_SCRIPT_PROPS := ["ai_mode", "script_control", "zombie_mode", "suspended", "script_alarm_enabled",
+	"script_stance", "script_move_mode", "alarm_mask", "events_enabled", "last_alarm_type", "wait_for_player",
+	"wait_stop_dist", "wait_resume_dist", "home_pos", "home_yaw", "stationary", "enabled", "look_around"]
+const DOG_PROPS := ["suspended", "aggressive", "run_mode", "sight_range", "hear_range", "health", "alarmed",
+	"attacking", "attack_any", "move_target", "lying", "owner_frame"]
+var _rev := {}     ## Spielstand: Node -> ["$a"|"$w", Name] (nur während save_state)
+
+
+## Skriptwert → JSON (Frames als Akteur-/Wegpunktname bzw. Pfad, Fließkommazahlen markiert, damit Ganzzahlen nach
+## dem JSON-Rundweg wieder Ganzzahlen sind).
+func save_value(v):
+	match typeof(v):
+		TYPE_OBJECT:
+			if not is_instance_valid(v) or not (v is Node):
+				return null
+			if _rev.has(v):
+				return {_rev[v][0]: _rev[v][1]}
+			if mission and (v as Node).is_inside_tree() and mission.is_ancestor_of(v):
+				return {"$p": String(mission.get_path_to(v))}
+			return null
+		TYPE_FLOAT:
+			return {"$r": v} if is_finite(v) else {"$r": null, "$inf": signf(v) if not is_nan(v) else 0.0}
+		TYPE_VECTOR3:
+			var a: Array = []
+			for i in 3:
+				a.append(v[i] if is_finite(v[i]) else null)
+			return {"$v3": a}
+		TYPE_VECTOR2:
+			return {"$v2": [v.x, v.y]}
+		TYPE_COLOR:
+			return {"$c": [v.r, v.g, v.b, v.a]}
+		TYPE_ARRAY:
+			return (v as Array).map(save_value)
+		TYPE_PACKED_VECTOR3_ARRAY:
+			return {"$pv3": Array(v).map(save_value)}
+		TYPE_DICTIONARY:
+			var out: Array = []
+			for k in v:
+				out.append([save_value(k), save_value(v[k])])
+			return {"$d": out}
+		TYPE_STRING_NAME:
+			return String(v)
+	return v
+
+
+func load_value(v):
+	if v is Dictionary:
+		if v.has("$a"):
+			return actors.get(String(v["$a"]))
+		if v.has("$w"):
+			return waypoints.get(String(v["$w"]))
+		if v.has("$p"):
+			return mission.get_node_or_null(NodePath(String(v["$p"]))) if mission else null
+		if v.has("$r"):
+			if v["$r"] == null:
+				var s := float(v.get("$inf", 0.0))
+				return INF * s if s != 0.0 else NAN
+			return float(v["$r"])
+		if v.has("$v3"):
+			var a: Array = v["$v3"]
+			return Vector3(INF if a[0] == null else float(a[0]), INF if a[1] == null else float(a[1]), INF if a[2] == null else float(a[2]))
+		if v.has("$v2"):
+			return Vector2(float(v["$v2"][0]), float(v["$v2"][1]))
+		if v.has("$c"):
+			var c: Array = v["$c"]
+			return Color(float(c[0]), float(c[1]), float(c[2]), float(c[3]))
+		if v.has("$pv3"):
+			return PackedVector3Array((v["$pv3"] as Array).map(load_value))
+		if v.has("$d"):
+			var d := {}
+			for kv in v["$d"]:
+				d[load_value(kv[0])] = load_value(kv[1])
+			return d
+		return v
+	if v is float:
+		return int(v) if is_finite(v) and v == floorf(v) and absf(v) < 9.0e15 else v
+	if v is Array:
+		return (v as Array).map(load_value)
+	return v
+
+
+func _save_props(o: Object, names: Array) -> Dictionary:
+	var d := {}
+	for p in names:
+		if p in o:
+			d[p] = save_value(o.get(p))
+	return d
+
+
+func _load_props(o: Object, d: Dictionary) -> void:
+	for p in d:
+		if p in o:
+			var val = load_value(d[p])
+			var cur = o.get(p)
+			if cur is float and val is int:
+				val = float(val)
+			elif cur is bool and not (val is bool):
+				val = LsVM._truthy(val)
+			if typeof(cur) == TYPE_OBJECT or cur == null or typeof(val) == typeof(cur):
+				o.set(p, val)
+
+
+## Zustand der Skriptlaufzeit für den Spielstand (OrigMission._serialize_extra → "orig_vm").
+func save_state() -> Dictionary:
+	_rev.clear()
+	for k in actors:
+		var n = actors[k]
+		if is_instance_valid(n) and not _rev.has(n):
+			_rev[n] = ["$a", k]
+	for k in waypoints:
+		if is_instance_valid(waypoints[k]) and not _rev.has(waypoints[k]):
+			_rev[waypoints[k]] = ["$w", k]
+	var vl: Array = []
+	var idx := {}
+	var frames := {}       # vom Skript benutzte Frames (Sichtbarkeit, FRM_SetOn)
+	for vm in vms:
+		if not is_instance_valid(vm.me):
+			continue
+		idx[vm] = vl.size()
+		vl.append({"owner": save_value(vm.me), "state": vm.save_state(save_value)})
+		for k in vm.vars:
+			var fv = vm.vars[k]
+			if typeof(fv) == TYPE_OBJECT and is_instance_valid(fv) and fv is Node3D:
+				frames[fv] = true
+	var gv: Array = []
+	for k in game_values:
+		gv.append([save_value(k), save_value(game_values[k])])
+	var cut_vms: Array = []
+	for v in _cutscene_vms:
+		if idx.has(v):
+			cut_vms.append(idx[v])
+	var forms: Array = []
+	for lead in formations:
+		if is_instance_valid(lead):
+			var f: Dictionary = formations[lead]
+			forms.append({"lead": save_value(lead), "members": (f["members"] as Array).map(save_value),
+				"type": String(f["type"]), "scale": float(f["scale"])})
+	# Darsteller aus CSC_DuplicateHuman
+	var dups: Array = []
+	if mission and mission.dynamic_root:
+		for c in mission.dynamic_root.get_children():
+			if c.has_meta("csc_duplicate") and c is Node3D:
+				var t: Transform3D = (c as Node3D).global_transform
+				dups.append({"name": String(c.get_meta("csc_duplicate")), "node": String(c.name),
+					"pos": save_value(t.origin), "yaw": t.basis.get_euler().y, "visible": (c as Node3D).visible})
+	# Akteure: Seite, Skript-KI-Felder, Begleiter, Hunde, Fahrzeuge, NPCs außerhalb von mission.enemies
+	var act := {}
+	var seen := {}
+	for k in actors:
+		var n = actors[k]
+		if not is_instance_valid(n) or seen.has(n) or not (n is Node3D):
+			continue
+		seen[n] = true
+		frames[n] = true
+		var e := {}
+		if n is Soldier:
+			var s := n as Soldier
+			if mission.squad and mission.squad.members.has(s):
+				continue
+			e["team"] = s.team
+			if not mission.enemies.has(s):
+				e["soldier"] = s.serialize()
+			var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
+			if b:
+				if not mission.enemies.has(s):
+					e["brain"] = b.serialize()
+				e["script"] = _save_props(b, BRAIN_SCRIPT_PROPS)
+			var esc := s.get_node_or_null("EscortBrain")
+			e["escort"] = esc != null and not esc.is_queued_for_deletion()
+		elif n is Dog:
+			var dg := n as Dog
+			e["dog"] = _save_props(dg, DOG_PROPS)
+			e["alive"] = dg.alive
+			e["pos"] = save_value(dg.global_position)
+			e["yaw"] = dg.rotation.y
+		elif n is Vehicle and "fuel" in n:
+			e["fuel"] = float(n.fuel)
+		if not e.is_empty():
+			act[String(k)] = e
+	var vis: Array = []
+	for f in frames:
+		var key = save_value(f)
+		if key != null:
+			vis.append([key, (f as Node3D).visible])
+	var out := {
+		"version": SAVE_VERSION, "vms": vl, "game_values": gv,
+		"cutscene": {"on": in_cutscene, "id": cutscene_id, "vms": cut_vms},
+		"formations": forms, "dups": dups, "actors": act, "visible": vis,
+		"weather": {"mode": int(weather.mode), "count": float(weather.count), "speed": float(weather.speed),
+			"size": save_value(weather.size), "color": save_value(weather.color), "on": bool(weather.on)},
+		"thunder": {"on": _thunder_on, "light": save_value(_thunder_light)},
+		"timer": _timer_left, "no_team_damage": no_team_damage,
+		"input": mission.controller.input_enabled if mission and mission.controller else true,
+	}
+	# Checkpoint-Kantenliste (CheckpointJoin/Separate, AP-5; Original speichert sie mit, 0x4147D0-Umfeld): Haken, sobald
+	# AP-5 ein Objekt `checkpoints` mit save_state()/load_state(d) anlegt
+	var cp = get("checkpoints")
+	if cp is Object and cp.has_method("save_state"):
+		out["checkpoints"] = cp.save_state()
+	# B-033: HUMAN_SetIgnoreCircumventionFlag (Original speichert +0x11C mit, 0x577440)
+	var icf: Array = []
+	for n in get_tree().get_nodes_in_group("soldiers"):
+		var icb := (n as Node).get_node_or_null("EnemyBrain") as AIBrain
+		if icb and icb.ignore_circumvention:
+			icf.append(save_value(n))
+	if not icf.is_empty():
+		out["ignore_circumvention"] = icf
+	_rev.clear()
+	return out
+
+
+## Spielstand anwenden (nach Mission.deserialize der Akteure, vor dem ersten Skripttakt). Liefert Hinweise/Warnungen.
+func load_state(d: Dictionary) -> Array:
+	var notes: Array = []
+	game_values.clear()
+	for kv in d.get("game_values", []):
+		game_values[load_value(kv[0])] = load_value(kv[1])
+	# Darsteller zuerst (Skriptvariablen verweisen über den Namen darauf)
+	for dd in d.get("dups", []):
+		var dup := Node3D.new()
+		dup.name = String(dd.get("node", "CSC_dup")).validate_node_name()
+		mission.dynamic_root.add_child(dup)
+		var p = load_value(dd.get("pos"))
+		if p is Vector3 and p.is_finite():
+			dup.global_position = p
+		dup.rotation.y = float(dd.get("yaw", 0.0))
+		dup.visible = bool(dd.get("visible", true))
+		dup.set_meta("csc_duplicate", String(dd.get("name", "")))
+		var src: Node3D = actors.get(String(dd.get("name", "")).to_upper())
+		if String(dd.get("name", "")) != "" and dup.name.begins_with("CSC_"):
+			register_actor(String(dd["name"]), dup)
+		if src and src is Soldier and (src as Soldier).model and (src as Soldier).model.get("orig_figure") != null \
+				and is_instance_valid((src as Soldier).model.orig_figure):
+			dup.add_child(((src as Soldier).model.orig_figure as Node3D).duplicate())
+	# Akteure
+	var act: Dictionary = d.get("actors", {})
+	for k in act:
+		var n = actors.get(String(k))
+		var e: Dictionary = act[k]
+		if not is_instance_valid(n):
+			continue
+		if n is Soldier:
+			var s := n as Soldier
+			if e.has("soldier"):
+				s.deserialize(e["soldier"])
+			var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
+			if b and e.has("brain"):
+				b.deserialize(e["brain"])
+			var team := int(e.get("team", s.team))
+			if team != s.team:
+				s.remove_from_group("team_%d" % s.team)
+				s.team = team
+				if s.alive:
+					s.add_to_group("team_%d" % s.team)
+			if b and e.has("script"):
+				_load_props(b, e["script"])
+				b.set_physics_process(bool(b.get("enabled")) if "enabled" in b else true)
+			var esc: EscortBrain = s.get_node_or_null("EscortBrain")
+			if bool(e.get("escort", false)) and esc == null and s.alive:
+				# wie SETNPCTEAMSTATUS(join): Begleit-KI
+				if b:
+					b.enabled = false
+					b.set_physics_process(false)
+				esc = EscortBrain.new()
+				esc.name = "EscortBrain"
+				esc.squad = mission.squad
+				s.add_child(esc)
+				esc.setup(s)
+				esc.released = true
+			elif not bool(e.get("escort", false)) and esc:
+				esc.queue_free()
+		elif n is Dog:
+			var dg := n as Dog
+			_load_props(dg, e.get("dog", {}))
+			var dp = load_value(e.get("pos"))
+			if dp is Vector3 and dp.is_finite():
+				dg.global_position = dp
+			dg.rotation.y = float(e.get("yaw", dg.rotation.y))
+			if not bool(e.get("alive", true)) and dg.alive:
+				dg.die()
+		elif n is Vehicle and e.has("fuel") and "fuel" in n:
+			n.fuel = float(e["fuel"])
+	# Skript-VMs
+	var restored := {}
+	var missing := 0
+	for ve in d.get("vms", []):
+		var ow0 = load_value(ve.get("owner"))
+		var st: Dictionary = ve.get("state", {})
+		if not (ow0 is Node3D):
+			missing += 1
+			continue
+		var vm: LsVM = vm_of.get(ow0)
+		var sname := String(st.get("script", ""))
+		if vm == null or (sname != "" and vm.name != sname):
+			vm = attach_script(ow0, sname)     # ScriptAssign während des Spiels
+			if vm == null:
+				missing += 1
+				continue
+		vm.load_state(st, load_value)
+		restored[vm] = true
+	var stale := 0
+	for vm in vms:
+		if not restored.has(vm):
+			# Skript ohne gespeicherten Gegenpart: nicht von vorn beginnen lassen (würde Abläufe doppelt auslösen)
+			vm._started = true
+			vm.ended = true
+			vm.terminated = true
+			vm.events.clear()
+			stale += 1
+	if missing > 0 or stale > 0:
+		notes.append("Skriptzustand: %d gespeicherte Skripte ohne Objekt, %d Skripte ohne Spielstand angehalten" % [missing, stale])
+	# Formationen, Wetter, Gewitter, Zeitgeber
+	formations.clear()
+	for f in d.get("formations", []):
+		var lead = load_value(f.get("lead"))
+		if lead is Node3D:
+			formations[lead] = {"members": (f.get("members", []) as Array).map(load_value).filter(func(x): return x is Node3D),
+				"type": String(f.get("type", "line")), "scale": float(f.get("scale", 3.0))}
+	var w: Dictionary = d.get("weather", {})
+	if not w.is_empty():
+		weather.mode = int(w.get("mode", 0))
+		weather.count = float(w.get("count", weather.count))
+		weather.speed = float(w.get("speed", weather.speed))
+		var ws = load_value(w.get("size"))
+		if ws is Vector2:
+			weather.size = ws
+		var wc = load_value(w.get("color"))
+		if wc is Color:
+			weather.color = wc
+		weather.on = bool(w.get("on", false))
+		_apply_weather()
+	var th: Dictionary = d.get("thunder", {})
+	_thunder_on = bool(th.get("on", false))
+	var tl = load_value(th.get("light"))
+	_thunder_light = tl if tl is Node3D else null
+	var tleft := float(d.get("timer", -1.0))
+	if tleft >= 0.0:
+		_set_interface_timer(tleft)
+	no_team_damage = bool(d.get("no_team_damage", false))
+	var cp = get("checkpoints")
+	if d.has("checkpoints") and cp is Object and cp.has_method("load_state"):
+		cp.load_state(d["checkpoints"])
+	for icv in d.get("ignore_circumvention", []):
+		var icn = load_value(icv)
+		var icb: AIBrain = (icn as Node).get_node_or_null("EnemyBrain") as AIBrain if icn is Node else null
+		if icb:
+			icb.ignore_circumvention = true
+	for fv in d.get("visible", []):
+		var fn = load_value(fv[0])
+		if fn is Node3D:
+			(fn as Node3D).visible = bool(fv[1])
+	if mission and mission.controller:
+		mission.controller.input_enabled = bool(d.get("input", true))
+	# Laufende Zwischensequenz: Zustand herstellen und wie per Leertaste überspringen – die OnCutscene-Abläufe laufen
+	# im Schnelldurchlauf zu Ende (Spielzustand wie bei „Überspringen“), Kamera/Blende sind danach wieder beim Spieler
+	var cut: Dictionary = d.get("cutscene", {})
+	if bool(cut.get("on", false)):
+		in_cutscene = true
+		cutscene_id = int(cut.get("id", 0))
+		_cutscene_vms.clear()
+		var vl: Array = d.get("vms", [])
+		for i in cut.get("vms", []):
+			var ow = load_value(vl[int(i)].get("owner")) if int(i) < vl.size() else null
+			if ow and vm_of.has(ow):
+				_cutscene_vms.append(vm_of[ow])
+		if mission.controller:
+			mission.controller.input_enabled = false
+		end_cutscene.call_deferred()
+		notes.append("Zwischensequenz %d beim Laden übersprungen" % cutscene_id)
+	return notes

@@ -717,6 +717,13 @@ func _options_menu() -> void:
 
 ## Original options.4ds „network settings“ (Builder 0x61cf80 ff.): Netzwerk-Einstellungen (T2473) mit
 ## Verbindungsgeschwindigkeit (T2875–2879), Voice-Chat-Einstellungen (T2433): ermöglichen (T2431), Lautstärke (T2432)
+## M-024: Listeneintrag mit geklemmtem Index (alte/handbearbeitete settings.cfg darf die Optionsseite nicht abstürzen lassen)
+static func _pick(names, i: int) -> String:
+	if names.is_empty():
+		return ""
+	return String(names[clampi(i, 0, names.size() - 1)])
+
+
 func _page_network() -> void:
 	_label(Rect2(67, 149, 383, 18), text(2473) if texts.has("2473") else "Netzwerk-Einstellungen:", 16, TEXT_COLOR)
 	var ct := clampi(Settings.connection_type, 0, 4)
@@ -864,21 +871,21 @@ func _page_display() -> void:
 	y += 38
 	_yesno(y, "VOLLBILD", Settings.fullscreen, func(v: bool): Settings.fullscreen = v)
 	y += 38
-	_cycle(Rect2(67, y, 412, 32), tr("VSYNC:") + " " + tr(Settings.VSYNC_NAMES[Settings.vsync_mode]), func():
-		Settings.vsync_mode = (Settings.vsync_mode + 1) % 4, true, "bvsync")
+	_cycle(Rect2(67, y, 412, 32), tr("VSYNC:") + " " + tr(_pick(Settings.VSYNC_NAMES, Settings.vsync_mode)), func():
+		Settings.vsync_mode = (clampi(Settings.vsync_mode, 0, 3) + 1) % 4, true, "bvsync")
 	y += 38
 	var fi := Settings.FPS_STEPS.find(Settings.max_fps)
 	_cycle(Rect2(67, y, 412, 32), tr("BILDRATE:") + " " + (tr("UNBEGRENZT") if Settings.max_fps == 0 else "MAX. %d" % Settings.max_fps), func():
 		Settings.max_fps = Settings.FPS_STEPS[(maxi(fi, 0) + 1) % Settings.FPS_STEPS.size()], true, "bfps")
 	y += 38
-	_cycle(Rect2(67, y, 412, 32), tr("KANTENGLÄTTUNG:") + " " + tr(Settings.AA_NAMES[Settings.aa_mode]), func():
-		Settings.aa_mode = (Settings.aa_mode + 1) % Settings.AA_NAMES.size(), true, "baa")
+	_cycle(Rect2(67, y, 412, 32), tr("KANTENGLÄTTUNG:") + " " + tr(_pick(Settings.AA_NAMES, Settings.aa_mode)), func():
+		Settings.aa_mode = (clampi(Settings.aa_mode, 0, Settings.AA_NAMES.size() - 1) + 1) % Settings.AA_NAMES.size(), true, "baa")
 	y += 38
-	_cycle(Rect2(67, y, 412, 32), tr("TEXTUREN:") + " " + tr(Settings.TEXTURE_NAMES[Settings.texture_quality]), func():
-		Settings.texture_quality = (Settings.texture_quality + 1) % 3, true, "btex")
+	_cycle(Rect2(67, y, 412, 32), tr("TEXTUREN:") + " " + tr(_pick(Settings.TEXTURE_NAMES, Settings.texture_quality)), func():
+		Settings.texture_quality = (clampi(Settings.texture_quality, 0, 2) + 1) % 3, true, "btex")
 	y += 38
-	_cycle(Rect2(67, y, 412, 32), tr("ANISOTROPE FILTERUNG:") + " " + tr(Settings.ANISO_NAMES[Settings.anisotropy]), func():
-		Settings.anisotropy = (Settings.anisotropy + 1) % 5, true, "baniso")
+	_cycle(Rect2(67, y, 412, 32), tr("ANISOTROPE FILTERUNG:") + " " + tr(_pick(Settings.ANISO_NAMES, Settings.anisotropy)), func():
+		Settings.anisotropy = (clampi(Settings.anisotropy, 0, 4) + 1) % 5, true, "baniso")
 	y += 38
 	var scales := [1.0, 0.85, 0.7, 0.5]
 	var si := scales.find(snappedf(Settings.render_scale, 0.05))
@@ -893,12 +900,12 @@ func _page_display() -> void:
 	_yesno(y, "BEI INAKTIVEM FENSTER PAUSIEREN", Settings.pause_unfocused, func(v: bool): Settings.pause_unfocused = v)
 	y += 38
 	# B-013: Grafikstufe Niedrig … 4K Ultra (ersetzt den früheren Schalter „Zusatzeffekte“)
-	_cycle(Rect2(67, y, 412, 32), "GRAFIKSTUFE: " + Settings.QUALITY_NAMES[Settings.quality].to_upper(), func():
+	_cycle(Rect2(67, y, 412, 32), "GRAFIKSTUFE: " + String(_pick(Settings.QUALITY_NAMES, Settings.quality)).to_upper(), func():
 		Settings.quality = (Settings.quality + 1) % Settings.QUALITY_NAMES.size(), true, "bquality")
 	y += 38
 	# BEWUSSTE ABWEICHUNG (Auftraggeber): dreistufig; „AUS“ = Original BLUTFLECKEN NEIN
-	_cycle(Rect2(67, y, 412, 32), tr("BLUT:") + " " + tr(Settings.BLOOD_NAMES[Settings.blood_level]), func():
-		Settings.blood_level = (Settings.blood_level + 1) % 3, true, "bblood")
+	_cycle(Rect2(67, y, 412, 32), tr("BLUT:") + " " + tr(_pick(Settings.BLOOD_NAMES, Settings.blood_level)), func():
+		Settings.blood_level = (clampi(Settings.blood_level, 0, Settings.BLOOD_NAMES.size() - 1) + 1) % Settings.BLOOD_NAMES.size(), true, "bblood")
 	_cycle(Rect2(67, 670, 412, 33), text(2410), func(): options_page = "graphics")
 	_label(Rect2(67, 638, 412, 26), "Texturänderung wirkt beim nächsten Laden einer Mission.", 11, TEXT_COLOR)
 

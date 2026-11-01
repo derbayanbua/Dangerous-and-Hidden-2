@@ -31,6 +31,11 @@ func _ready() -> void:
 					samples.append(c.errors[0])
 	for s in samples:
 		print("  ", s)
+	# B-025/O-018: ohne Skripte (Cache fehlt, --scripts falsch) ist der Test gescheitert; --min_scripts=N = Mindestzahl
+	var min_scripts := maxi(1, int(Game.cli.get("min_scripts", "1")))
+	if total < min_scripts:
+		print("FAIL: nur %d Skripte gefunden, erwartet mindestens %d (%s)" % [total, min_scripts, ", ".join(dirs)])
+		bad += 1
 	print("ERGEBNIS: %d Skripte, %d mit Fehlern (%d Fehlermeldungen)" % [total, bad, err_lines])
 	get_tree().quit(0 if bad == 0 else 1)
 

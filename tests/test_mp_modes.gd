@@ -43,6 +43,7 @@ func _run() -> void:
 		check(s.weapons[0] != null and s.has_meta("mp_class"), "Original-Klasse (Gewehrschütze)",
 			"%s / %s" % [s.weapons[0].data.display_name if s.weapons[0] else "-", s.get_meta("mp_class", "-")])
 		check(s.has_meta("protect_until"), "Spawnschutz gesetzt")
+		check(Net.difficulty_level() == 3, "B-029: MP-Stile außer Coop – Gegner-Schwierigkeit fest 3 (0x6B6700)")
 		s.apply_hit(50.0, &"torso", null, Vector3.FORWARD)
 		check(is_equal_approx(s.health, s.max_health), "Kein Schaden während des Spawnschutzes")
 		s.set_meta("protect_until", 0)
@@ -107,5 +108,47 @@ func _run() -> void:
 		await seconds(7.0)
 		var again: Soldier = Net._soldiers.get(1)
 		check(again == s3 and not again.alive, "HD2-Aufgaben: kein Wiedereinstieg (Original)")
+		_check_single_slots(m)
 	Net.leave(false)
 	_finish()
+
+
+## B-029 M-010 (0x5ED700 [B]): ohne allowrespawn jeder Spawnplatz einer Zone nur einmal; nach dem letzten ist die Zone
+## neutral/gesperrt (Besitzer 2). Mit allowrespawn reihum.
+func _check_single_slots(m: Node) -> void:
+	var zs: Array = m.mp_zones()
+	var zi := -1
+	for i in zs.size():
+		if (zs[i]["slots"] as Array).size() >= 2:
+			zi = i
+			break
+	if zi < 0:
+		check(true, "Einmalige Spawnplätze: Karte ohne Zonen-Spawnplätze (übersprungen)")
+		return
+	if Net.zone_owner.size() != zs.size():
+		Net.zone_owner = zs.map(func(z): return int(z["owner"]))
+	var n: int = (zs[zi]["slots"] as Array).size()
+	check(not bool(Net.rule("allow_respawn")), "HD2-Aufgaben: allowrespawn aus (Standard)")
+	var k0 := int(Net._slot_next.get(zi, 0))
+	var got: Array = []
+	for i in n + 2:
+		var si := Net.take_zone_slot(zi)
+		if si < 0:
+			break
+		got.append(si)
+	var expect: Array = range(k0, n)
+	check(got == expect, "Jeder Spawnplatz nur einmal (%d Plätze)" % n, "%s / erwartet %s" % [str(got), str(expect)])
+	check(Net.zone_locked.has(zi) and int(Net.zone_owner[zi]) == -1, "Letzter Platz vergeben: Zone neutral/gesperrt (Besitzer 2)")
+	check(Net.take_zone_slot(zi) == -1, "Erschöpfte Zone liefert keinen Platz mehr")
+	# mit allowrespawn: reihum (modulo)
+	Net.settings["allow_respawn"] = true
+	var zj := (zi + 1) % zs.size()
+	var seq: Array = []
+	if (zs[zj]["slots"] as Array).size() > 0:
+		var nj: int = (zs[zj]["slots"] as Array).size()
+		var kj := int(Net._slot_next.get(zj, 0))
+		for i in nj + 1:
+			seq.append(Net.take_zone_slot(zj))
+		check(seq[nj] == seq[0] and not Net.zone_locked.has(zj) or zj == zi, "Mit allowrespawn reihum, Zone bleibt offen",
+			"%s (Start %d)" % [str(seq), kj])
+	Net.settings["allow_respawn"] = false

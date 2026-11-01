@@ -2,6 +2,44 @@
 
 Versionierung: vorerst immer 0.9.x – jeder Commit nach GitHub zählt die letzte Stelle hoch und bekommt einen Tag.
 
+## 0.9.7 (01.11.2026)
+
+**Neu**
+- Blut-Stufe „EXTRA GORE“ (Option, Standard aus): Körperteile werden je nach Treffer/Explosion abgetrennt, mit Physik und Stumpf.
+- Mehrspieler-Coop auf Kampagnenkarten (Leben je Spieler/Team, Coop-Schwierigkeit); einmalige Spawnplätze ohne Respawn.
+- Builds liefern EXE + separate `.pck` + `version.txt` (Versionsprüfung beim Start); neues Skript für das öffentliche Paket.
+
+**Originaltreue (KI und Skripte)**
+- Kampfautomat der Gegner nach dem Original (Anmarsch, Flankieren im 5-m-Raster, Nachrücken, Feuerpausen); Sichtweite nach
+  Waffenhaltung, Sprint am auffälligsten, sofortige Erkennung.
+- Alarm wie im Original: kein kartenweiter Alarm mehr in Originalmissionen, nur Zuruf/Schüsse in Hörweite.
+- Schwierigkeitsgrad wirkt auf die Gegnerwerte; Scharfschützen-Posten, Skript-Angriffsbefehl, Uniformtarnung mit Tarnwert.
+- Spielstände in Originalmissionen speichern den kompletten Skriptzustand.
+- Skript-Auslöser im Original-Takt, Führerwege über das Original-Wegpunktnetz, weitere bisher wirkungslose Befehle umgesetzt.
+- Original-Partikel, Zwischensequenz-Ende aus der Kameraanimation, Zerstörungsanimationen und explodierende Fässer.
+- Leuchtturmlicht, Lichtwechsel, Gesichter, Wetterrichtung/-farbe aus den Skripten.
+
+**Fehlerbehebungen**
+- Operation Schwerttänzer: beide Panzer hingen fest – behoben.
+- Graue Wände in der Ferne (africa1, arctic1) – Himmelswürfel des Originals stand fest in der Landschaft.
+- arctic2: Löser-Sackgasse an Treppen behoben; arctic1 ohne Teleports bis Ziel 2 durchgespielt.
+
+**Sicherheit und Robustheit**
+- Mehrspieler: Munition/Respawn nicht mehr vom Client, Anmeldepflicht, Admin-Login-Sperre, gedrosselte Serverabfrage
+  und Sprachchat, abgesicherte Admin-Befehle.
+- Spielstände mit Versionsnummer und Rückfall auf Sicherungskopie; Einstellungen werden geprüft.
+- Nutzer-Werkzeug: Export setzt nach Fehlern korrekt fort, funktioniert mit allen Sprachversionen, liefert Original-Schriften mit.
+
+**Leistung**
+- Wahrnehmung und HUD deutlich schneller; Texturkompression halbiert bis viertelt den Speicherbedarf.
+- Zusammengefasste Level-Meshes (weniger Draw Calls); Navmesh-Cache: Ladezeit z. B. arctic1 109 s → 17 s.
+
+**Tests:** Gesamttestreihe mit Sperre, Zeitlimit je Reihe und Ergebnistabelle; viele neue Testreihen.
+
+**Bekannt offen**
+- Arktis „menschlich“: arctic2–4 laufen noch; NORWAY-Treppen und weitere Erreichbarkeitslücken (B-010b).
+- Neue Screenshots folgen mit dem nächsten Update.
+
 ## 0.9.6 (30.10.2026)
 
 **Mehrspieler-Sicherheit und Stabilität (Code-Review)**

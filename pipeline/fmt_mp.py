@@ -49,7 +49,8 @@ def load_json(p, default=None):
         return default
 
 
-TEXTS = load_json(os.path.join(CACHE, "texts_german.json"), {})
+import hd2_texts  # noqa: E402  B-024/O-002: vorhandene Sprache statt fest texts_german.json
+TEXTS = hd2_texts.load_texts(CACHE)
 TEXTS = TEXTS.get("texts", TEXTS) if isinstance(TEXTS, dict) else {}
 _items = load_json(os.path.join(CACHE, "items.json"), {}) or {}
 ITEMS = {i["id"]: i for i in _items.get("items", [])}

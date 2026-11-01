@@ -10,6 +10,9 @@ var _spawn_points: Array = []
 func _spawn_actors() -> void:
 	if orig == null or orig.actors.is_empty():
 		return
+	if Net.is_online and Net.mode() == Net.Mode.COOP:
+		_spawn_coop_actors()
+		return
 	runtime = LsRuntime.new()
 	add_child(runtime)
 	runtime.setup(self, orig)
@@ -178,12 +181,6 @@ func mp_allowed_known() -> bool:
 	return _allowed_known
 
 
-## Original-Missionsskripte melden Aufgaben: im Mehrspieler an Net (Punkte für die begünstigte Seite)
-func set_orig_objective(index: int, status: int) -> void:
-	if status == 1:
-		Net.objective_done(index)
-
-
 func mp_spawns() -> Array:
 	if _spawn_points.is_empty():
 		return [{"pos": Vector3(0, 2, 0), "yaw": 0.0, "team": -1}]
@@ -191,4 +188,104 @@ func mp_spawns() -> Array:
 
 
 func _setup_objectives() -> void:
-	pass       # Mehrspieler: Punkte statt Missionsziele
+	if coop:
+		super._setup_objectives()       # B-029 Coop: Ziele der Originalmission (Missionsdatenbank)
+	# sonst Mehrspieler: Punkte statt Missionsziele
+
+
+# --- B-029 Coop (Original-Stil 3) --------------------------------------------------------------------------
+## Kampagnenkarte mit der vollständigen Originalmission: Gegner (Typ 3), Hunde, Fahrzeuge, Objekte wie im
+## Einzelspieler; Kommando-Startplätze (Typ 10) = Spawnpunkte der Spieler. Die Skripte laufen nur auf dem Server,
+## die KI ebenso (Clients: Netzfiguren über Net.coop, src/autoload/net_coop.gd). Coop-Karten des Originals
+## (gr_mp_coopmaps) fehlen in der Installation.
+var coop := false
+
+
+func _spawn_coop_actors() -> void:
+	coop = true
+	Net.coop.reset()          # neue Karte/Runde: Indizes neu (Server und Client in derselben Reihenfolge)
+	var ap =LsRuntime._read_json(orig.mission_dir + "/actor_params.json")
+	if typeof(ap) == TYPE_DICTIONARY:
+		actor_params = ap.get("actors", {})
+	runtime = LsRuntime.new()
+	add_child(runtime)
+	runtime.setup(self, orig)
+	ls_runtime = runtime
+	var ex := OrigExtras.new()
+	add_child(ex)
+	ex.setup(self, runtime, orig.mission_dir)
+	runtime.extras = ex
+	var starts: Array = []
+	for a in orig.actors:
+		var an := String(a.get("name", "")).to_lower()
+		if int(a.get("actor_type", -1)) == 10 or an.begins_with("commando") or an.begins_with("spawnsingle"):
+			starts.append(a)
+	starts.sort_custom(func(x, y): return _trailing_number(x.get("name", "")) < _trailing_number(y.get("name", "")))
+	_player_names.clear()
+	for a in starts:
+		var t := actor_xform(a)
+		_spawn_points.append({"pos": t.origin + Vector3.UP * 0.5, "yaw": t.basis.get_euler().y, "team": Soldier.TEAM_ALLIED})
+		_player_names.append(String(a.get("name", "")).to_lower())
+	for a in orig.actors:
+		var nm: String = a.get("name", "")
+		var model := String(a.get("model", ""))
+		var typ := int(a.get("actor_type", -1))
+		if nm.to_lower().begins_with("commando") or nm.to_lower().begins_with("spawnsingle") or _player_names.has(nm.to_lower()) or typ == 10:
+			continue
+		var t2 := actor_xform(a)
+		if typ == 3 and model != "":
+			_spawn_orig_human(nm, model, t2)
+			_register_coop_ai(nm)
+		elif typ == 30:
+			_spawn_orig_dog(nm, model, t2)
+			_register_coop_ai(nm)
+		elif typ == 4:
+			_spawn_orig_car(nm, model, t2)
+		else:
+			var inst: Node3D = orig.model_instance(model) if model != "" else null
+			if inst == null:
+				inst = Node3D.new()
+			inst.name = nm.validate_node_name()
+			dynamic_root.add_child(inst)
+			inst.global_transform = t2
+			if model != "" and typ in [5, 7, 9, 13, 14, 15, 20, 21, 22, 23, 25, 28]:
+				orig._add_collision(inst)
+			runtime.register_actor(nm, inst)
+	interactive = OrigInteractive.new()
+	interactive.name = "OrigInteractive"
+	add_child(interactive)
+	interactive.setup(self, runtime, orig)
+	if _spawn_points.is_empty():
+		_spawn_points = [{"pos": Vector3(0, 2, 0), "yaw": 0.0, "team": Soldier.TEAM_ALLIED}]
+	if multiplayer.is_server():
+		var n := runtime.start_scripts()
+		print("COOP: %d KI, %d Startplätze, %d Originalskripte (Server)" % [Net.coop.ai.size(), _spawn_points.size(), n])
+	else:
+		print("COOP: %d KI als Netzfiguren, %d Startplätze" % [Net.coop.ai.size(), _spawn_points.size()])
+
+
+func _register_coop_ai(nm: String) -> void:
+	var n: Node3D = runtime.actors.get(nm.to_upper())
+	if n:
+		Net.coop.register_ai(n)
+	else:
+		push_warning("COOP: Akteur %s nicht gefunden" % nm)
+
+
+## Coop: Ziele der Originalskripte wie im Einzelspieler; sonst HD2-Aufgaben (Punkte)
+func set_orig_objective(index: int, status: int) -> void:
+	if coop:
+		super.set_orig_objective(index, status)
+		return
+	if status == 1:
+		Net.objective_done(index)
+
+
+## Coop: Missionsende (alle Pflichtziele bzw. gescheitertes Pflichtziel) beendet die Runde statt des Nachbesprechungsbilds
+func finish(success: bool, reason: String) -> void:
+	if not Net.is_online:
+		super.finish(success, reason)
+		return
+	if coop and not finished and Net.is_authority():
+		finished = true
+		Net.coop_mission_end(success, reason)
