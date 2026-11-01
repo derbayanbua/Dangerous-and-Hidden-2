@@ -53,6 +53,20 @@ def main():
                 n = norm(m.group(2))
                 if n:
                     used.setdefault(n.lower(), {"name": n, "scripts": set()})["scripts"].add("%s/%s" % (d, fn))
+    # B-028/O-009: Zerstoerungsanimationen der Typ-25-Akteure (interactive.json destructibles params.anim_file,
+    # Leser hd2.exe 0x5B5AF0) mit exportieren
+    for d in sorted(os.listdir(CACHE)):
+        ip = os.path.join(CACHE, d, "interactive.json")
+        if not os.path.isfile(ip):
+            continue
+        try:
+            jd = json.load(open(ip, encoding="utf-8"))
+        except Exception:
+            continue
+        for e in jd.get("destructibles", []):
+            n = norm(str(e.get("params", {}).get("anim_file", "")))
+            if n:
+                used.setdefault(n.lower(), {"name": n, "scripts": set()})["scripts"].add("%s/interactive:%s" % (d, e.get("name", "")))
     arcs = []
     for a in ("patch.dta", "MODELS.DTA"):
         arc = dta_extract.Archive(os.path.join(ORIG, a))

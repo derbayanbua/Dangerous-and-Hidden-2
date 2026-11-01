@@ -194,19 +194,7 @@ func explode(by: Node = null) -> void:
 	Effects.explosion(pos, r * 0.7, snd)
 	Events.emit_noise(pos, 300.0, by, team, &"explosion")
 	var space := get_world_3d().direct_space_state
-	for n in get_tree().get_nodes_in_group("soldiers"):
-		var s := n as Soldier
-		if s == null or not s.alive:
-			continue
-		var target := s.global_position + Vector3.UP * 0.5
-		var d := pos.distance_to(target)
-		if d > r:
-			continue
-		var q := PhysicsRayQueryParameters3D.create(pos, target, 1)
-		if not space.intersect_ray(q).is_empty():
-			continue
-		s.apply_hit(WeaponDB.explosion_damage(dmg_strength, r, d), &"torso", by, (target - pos).normalized())
-	OrigInteractive.damage_objects(get_tree(), pos, r, dmg_strength, by)
+	WeaponDB.apply_blast(get_tree(), space, pos, r, dmg_strength, by)   # G-021
 	queue_free()
 
 

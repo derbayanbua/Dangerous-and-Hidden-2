@@ -13,13 +13,15 @@ const PORT := 11001
 const PORT_MIN := 1024
 const PORT_MAX := 65530
 const DISCOVERY_PORT := 27101
-const PROTOCOL := "DH2-LAN-4"         ## 4: B-022 Zustand/Aktionen nur an den Server, Weitergabe geprüft (30.10.2026)
+const PROTOCOL := "DH2-LAN-5"         ## 4: B-022 Zustand/Aktionen nur an den Server, Weitergabe geprüft (30.10.2026); 5: B-037 Gore-Bitmaske in _killed/_corpse_pose (31.10.2026)
 const QUERY_TAG := "DH2-QUERY"
 const SYNC_INTERVAL := 0.05
 ## Spielstile des Originals (docs/re_notes_multiplayer.md): DEATHMATCH (2891), BESETZUNG (2892),
 ## HD2-AUFGABEN (2893); Team-Deathmatch ist eine Ergänzung für die Arena-Karten.
-enum Mode { DEATHMATCH, TEAM_DEATHMATCH, OCCUPATION, OBJECTIVES }
-const MODE_NAMES := ["DEATHMATCH", "TEAM-DEATHMATCH", "BESETZUNG", "HD2-AUFGABEN"]
+## B-029: KOOPERATIV (Original-Stil 3, Datadisk „Sabre Squadron“): Spieler gemeinsam gegen die KI einer
+## Kampagnenkarte (Arena-Karten), Skripte der Originalmission laufen auf dem Server (src/autoload/net_coop.gd).
+enum Mode { DEATHMATCH, TEAM_DEATHMATCH, OCCUPATION, OBJECTIVES, COOP }
+const MODE_NAMES := ["DEATHMATCH", "TEAM-DEATHMATCH", "BESETZUNG", "HD2-AUFGABEN", "KOOPERATIV"]
 ## Punkte laut Original: Abschuss +1, Selbsttötung −1, Teamkill −10 (3 Teamkills = Rauswurf);
 ## Besetzung: +2 je Anwesendem beim Neutralisieren, +5 beim Einnehmen, Team +0,0125/s je Zone
 const PTS_KILL := 1
@@ -50,13 +52,17 @@ const RULE_KEYS := {
 	# B-011 (Ergänzung): Unterstützung per Funkgerät (SupportStrike): 0 aus, 1 Artillerie, 2 Luftangriff, 3 beide;
 	# Intervall in Minuten; KI-Soldaten dürfen das Funkgerät nutzen
 	"support_strike": "supportstrike", "support_interval_min": "supportinterval", "support_bots": "supportbots",
+	# B-029 Coop-Regeln (Server-Config Felder 17–21, re_notes_multiplayer §2.1/§7): Schwierigkeit 1–4, Leben (−1 =
+	# unbegrenzt), Fadenkreuz (im Original wirkungslos, nur Serverinfo), Respawn beim Neustart [P, nur Anzeige], Team-Leben
+	"coop_difficulty": "coopdifficulty", "coop_lives": "cooplives", "allow_crosshair": "allowcrosshair",
+	"spawn_on_start": "spawnonstart", "team_lives": "teamlives",
 }
 ## Wertebereiche: Menü (0x629EE0) bzw. Konsole; bots = Ergänzung (KI-Soldaten je Team); 0 = „No limit“ (T2010)
 const RULE_RANGE := {
 	"max_players": [2, 32], "score_limit": [0, 999], "time_limit_min": [0, 99], "round_count": [1, 999],
 	"warmup_s": [0, 99], "respawn_s": [3, 99], "spawn_protect_s": [0, 15], "inverse_damage": [0, 999],
 	"bots_per_team": [0, 16], "max_ping": [0, 9999], "max_freq": [0, 100], "max_inactivity": [0, 3600],
-	"support_strike": [0, 3], "support_interval_min": [1, 60],
+	"support_strike": [0, 3], "support_interval_min": [1, 60], "coop_difficulty": [1, 4], "coop_lives": [-1, 99],
 }
 ## B-011: Unterstützung standardmäßig aus (nur wenn in den Servereinstellungen erlaubt)
 const SUPPORT_DEFAULTS := {"support_strike": 0, "support_interval_min": 5, "support_bots": false}
@@ -68,6 +74,23 @@ const PING_KICK_GRACE_S := 10.0
 const FLOOD_MSGS := 4
 const FLOOD_WINDOW_S := 3.0
 const FLOOD_MUTE_S := 10.0
+## B-023 M-004: Admin-Login-Bremse [D]: ADMIN_FAIL_MAX Fehlversuche → ADMIN_LOCK_S gesperrt; ADMIN_LOCKS_KICK Sperren → Rauswurf
+const ADMIN_FAIL_MAX := 3
+const ADMIN_LOCK_S := 30.0
+const ADMIN_LOCKS_KICK := 2
+var _admin_fail := {}         ## Quell-IP (bzw. "peer:<id>") -> {n Fehlversuche, until ms, locks}
+
+
+func _peer_ip(id: int) -> String:
+	if _peer and id > 1:
+		var pp := _peer.get_peer(id)
+		if pp:
+			return pp.get_remote_address()
+	return "peer:%d" % id
+## B-023 M-007: exec aus dem Netz nur für Dateien in diesem Ordner neben der Programmdatei, Rekursion begrenzt
+const EXEC_DIR := "config"
+const EXEC_MAX_DEPTH := 4
+var _exec_depth := 0
 ## Wiedereinstieg (Original 0x59FEC6: Client fordert nach respawntime + 3 s neu an): nach Ablauf der Respawn-Zeit
 ## „FEUER DRÜCKEN FÜR RESPAWN“ (T7406), Feuer = sofort, sonst automatisch nach weiteren 3 s
 const RESPAWN_AUTO_S := 3.0
@@ -84,13 +107,22 @@ const STYLE_DEFAULTS := [
 	{"max_players": 32, "score_limit": 0, "time_limit_min": 5, "round_count": 3, "warmup_s": 10, "respawn_s": 0,
 		"allow_respawn": false, "friendly_fire": true, "team_balance": true, "third_person": false, "spawn_protect_s": 5,
 		"inverse_damage": 100, "falling_damage": true, "flood_protect": true, "allow_vehicles": true},
+	# Coop (Tabelle +0x308): 6 Spieler, kein Zeitlimit, Respawn 5 s, Friendly Fire, 30 Leben
+	{"max_players": 6, "score_limit": 0, "time_limit_min": 0, "round_count": 3, "warmup_s": 10, "respawn_s": 5,
+		"allow_respawn": true, "friendly_fire": true, "team_balance": false, "third_person": false, "spawn_protect_s": 5,
+		"inverse_damage": 100, "falling_damage": true, "flood_protect": true, "allow_vehicles": true, "coop_lives": 30},
 ]
+## B-029: Coop-Felder in allen Stil-Tabellen (§2.2): Schwierigkeit 3, Leben −1 (Coop 30), Fadenkreuz an, Team-Leben an
+const COOP_DEFAULTS := {"coop_difficulty": 3, "coop_lives": -1, "allow_crosshair": true, "spawn_on_start": false,
+	"team_lives": true}
+const COOP_NOLIVES_S := 5.0          ## T20310 „Keine verbleibenden Leben“ 5 s (0x53BE10)
 
 
 ## Standardwerte für einen Spielstil (Team-Deathmatch wie Deathmatch, Arena-Ergänzung)
 static func style_defaults(m: int) -> Dictionary:
-	var col := 0 if m in [Mode.DEATHMATCH, Mode.TEAM_DEATHMATCH] else (1 if m == Mode.OCCUPATION else 2)
+	var col := 0 if m in [Mode.DEATHMATCH, Mode.TEAM_DEATHMATCH] else (1 if m == Mode.OCCUPATION else (3 if m == Mode.COOP else 2))
 	var d := (STYLE_DEFAULTS[col] as Dictionary).duplicate()
+	d.merge(COOP_DEFAULTS)
 	d.merge(LIMIT_DEFAULTS)
 	d.merge(FEEDBACK_DEFAULTS)
 	d.merge(SUPPORT_DEFAULTS)
@@ -147,6 +179,7 @@ var respawn_at := 0           ## Client: Zeitpunkt (ms) des eigenen Wiedereinsti
 var _warm_t := 0.0
 var _info_t := 0.0
 var voice: VoiceChat
+var coop: NetCoop             ## B-029: Coop-KI der Originalmission (src/autoload/net_coop.gd)
 var chat_focus := false       ## Chat-/Konsolen-Eingabe offen (Push-to-talk und Steuerung ruhen)
 
 var _peer: ENetMultiplayerPeer
@@ -179,6 +212,9 @@ func _ready() -> void:
 	voice = VoiceChat.new()
 	voice.name = "Voice"
 	add_child(voice)
+	coop = NetCoop.new()          # B-029: KI-Abgleich im Coop (Pfad /root/Net/Coop auf allen Rechnern gleich)
+	coop.name = "Coop"
+	add_child(coop)
 	Events.soldier_damaged.connect(_on_soldier_damaged)      # Trefferfeedback (nur Server wertet aus)
 	_check_dedicated_cli()
 
@@ -216,8 +252,11 @@ func host(cfg: Dictionary) -> bool:
 	if ml.is_empty() or not ml.has(String(settings["map"])):
 		ml = [String(settings["map"])] + ml
 	settings["map_list"] = ml
+	if mode() == Mode.COOP and not coop_map_ok(String(settings["map"]), Mode.COOP):
+		settings["mode"] = Mode.DEATHMATCH          # B-029: Coop nur auf Kampagnenkarten
 	round_no = 1
 	team_wins = [0, 0]
+	coop_team_spawns = 0
 	var my_team: int = local_team if local_team in [Soldier.TEAM_ALLIED, Soldier.TEAM_AXIS] and mode() != Mode.DEATHMATCH else _pick_team()
 	players = {} if dedicated else {1: _new_player(local_name, my_team, local_class)}
 	if not dedicated:
@@ -296,6 +335,8 @@ func _new_player(n: String, team: int, cls := 2) -> Dictionary:
 func _pick_team() -> int:
 	if mode() == Mode.DEATHMATCH:
 		return 10 + players.size()
+	if mode() == Mode.COOP:
+		return Soldier.TEAM_ALLIED      # B-029: alle Spieler gemeinsam gegen die Missions-KI (Achse)
 	# Original (0x727800/0x7301C0): Verhältnis aus BALANCED der Karte (z. B. Africa1 60/40 Alliierte/Achse)
 	var na := _team_humans(Soldier.TEAM_ALLIED)
 	var nx := _team_humans(Soldier.TEAM_AXIS)
@@ -335,6 +376,50 @@ func team_mode() -> bool:
 	return mode() != Mode.DEATHMATCH
 
 
+# --- B-029 Coop: Leben, Schwierigkeit ------------------------------------------------------------
+## Spawns je Spieler bzw. Team in der laufenden Runde (Original 0x69D780: +1 je Spawn; Spielersatz +0xB0 bzw. Spiel +0x84)
+var coop_team_spawns := 0
+
+
+## Wiedereinstieg erlaubt (Original 0x7305A0 [B]): außerhalb Coop = allowrespawn. Coop: cooplives −1 = unbegrenzt;
+## teamlives = 0 → Spawns des Spielers < cooplives, sonst gemeinsamer Teamzähler < cooplives.
+func _can_respawn(pid: int) -> bool:
+	if mode() != Mode.COOP:
+		return bool(rule("allow_respawn"))
+	var lives := int(rule("coop_lives"))
+	if lives < 0 or pid < 0:
+		return true             # KI-Soldaten (Ergänzung) zählen nicht als Leben
+	if bool(rule("team_lives")):
+		return coop_team_spawns < lives
+	return int(players.get(pid, {}).get("lives_used", 0)) < lives
+
+
+## Verbleibende Leben (Anzeige; −1 = unbegrenzt)
+func coop_lives_left(pid: int) -> int:
+	var lives := int(rule("coop_lives"))
+	if mode() != Mode.COOP or lives < 0:
+		return -1
+	var used := coop_team_spawns if bool(rule("team_lives")) else int(players.get(pid, {}).get("lives_used", 0))
+	return maxi(lives - used, 0)
+
+
+## Gegner-Schwierigkeit (Original 0x6B6700 [B]): Einzelspieler = Profil, Coop = coopdifficulty, übrige MP-Stile fest 3
+func difficulty_level() -> int:
+	if not is_online:
+		return Game.difficulty()
+	if mode() == Mode.COOP:
+		return clampi(int(rule("coop_difficulty")), 1, 4)
+	return 3
+
+
+## Spawn zählen (nicht im Aufwärmen; Original zählt je Spawn)
+func _count_spawn(id: int) -> void:
+	if mode() != Mode.COOP or game_state == State.WARMUP or not players.has(id) or id < 0:
+		return
+	players[id]["lives_used"] = int(players[id].get("lives_used", 0)) + 1
+	coop_team_spawns += 1
+
+
 ## Freund-Feind-Schaden (Server-Option, Standard aus): Treffer von Teamkameraden wirken nicht
 func friendly_fire() -> bool:
 	return not team_mode() or bool(rule("friendly_fire"))
@@ -362,6 +447,8 @@ func fall_damage(s: Soldier, amount: float) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _fall_req(amount: float) -> void:
+	if _guest("fall"):
+		return
 	var s: Soldier = _soldiers.get(multiplayer.get_remote_sender_id())
 	if multiplayer.is_server() and is_instance_valid(s) and s.alive and bool(rule("falling_damage")):
 		hit_source = "fall"
@@ -412,6 +499,12 @@ func _relax_timeout(id: int) -> void:
 
 func _on_peer_connected(id: int) -> void:
 	_relax_timeout(id)
+	# B-023 M-003: Peers ohne Anmeldung nach GUEST_TIMEOUT_S trennen
+	if multiplayer.is_server():
+		get_tree().create_timer(GUEST_TIMEOUT_S).timeout.connect(func():
+			if _peer and multiplayer.is_server() and not players.has(id) and multiplayer.get_peers().has(id):
+				_reject_log(id, "peer", "keine Anmeldung nach %d s -> getrennt" % int(GUEST_TIMEOUT_S))
+				_peer.disconnect_peer(id))
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -421,7 +514,7 @@ func _on_peer_disconnected(id: int) -> void:
 	if players.has(id):
 		Events.say("%s hat das Spiel verlassen." % players[id]["name"], 3.0)
 	players.erase(id)
-	for d in [_active_ms, _ready_peers, _ping_over, _chat_times, _muted_until, _last_st_ms, ping_override]:
+	for d in [_active_ms, _ready_peers, _ping_over, _chat_times, _muted_until, _last_st_ms, ping_override, _guest_rejects]:
 		(d as Dictionary).erase(id)
 	_remove_player.rpc(id)
 	_players.rpc(players)
@@ -458,13 +551,14 @@ func _register(pname: String, password: String, proto: String, cls: int = 2, tea
 		get_tree().create_timer(1.0).timeout.connect(func(): if _peer: _peer.disconnect_peer(id))
 		return
 	players[id] = _new_player(pname.substr(0, 24), _pick_team(), cls)
-	if team_pref in [Soldier.TEAM_ALLIED, Soldier.TEAM_AXIS] and team_mode():
+	if team_pref in [Soldier.TEAM_ALLIED, Soldier.TEAM_AXIS] and team_mode() and mode() != Mode.COOP:
 		var auto_team := int(players[id]["team"])
 		players[id]["team"] = -1
 		players[id]["team"] = team_pref if not _server_set_team_check(team_pref) else auto_team
 	# HD2-Aufgaben: kein Wiedereinstieg; wer nach 30 s beitritt, schaut zu (Original)
 	# (Original 0x69E340: Rundenzeit > 30 s und kein „Respawn erlauben“ → Zuschauer, Text 20311)
-	players[id]["spectator"] = not bool(rule("allow_respawn")) and game_state != State.WARMUP and _match_t > OBJ_LATE_JOIN_S
+	# B-029 Coop: Leben statt allowrespawn (_can_respawn, 0x7305A0)
+	players[id]["spectator"] = not _can_respawn(id) and game_state != State.WARMUP and _match_t > OBJ_LATE_JOIN_S
 	print("NET: Spieler ", id, " angemeldet: ", pname)
 	_players.rpc(players)
 	Events.say("%s ist beigetreten." % pname, 3.0)
@@ -527,6 +621,8 @@ func send_chat(text: String, team_only := false) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _chat_req(text: String, team_only: bool) -> void:
+	if _guest("chat"):
+		return
 	if multiplayer.is_server():
 		_touch(multiplayer.get_remote_sender_id())
 		_server_chat(multiplayer.get_remote_sender_id(), text.substr(0, CHAT_MAX), team_only)
@@ -535,11 +631,13 @@ func _chat_req(text: String, team_only: bool) -> void:
 func _server_chat(from: int, text: String, team_only: bool) -> void:
 	if not players.has(from) and from != 0:
 		return
+	# B-023 M-004: Flood-Schutz vor der Befehlsauswertung (vorher umgingen „/“-Befehle ihn); angemeldete Admins
+	# dürfen Befehle ohne Drossel absetzen (Konfigurationsfolgen), ihr normaler Chat bleibt gedrosselt
+	if not (text.begins_with("/") and _is_admin(from)) and _flooding(from):
+		_tell(from, "%s: Nachricht nicht gesendet." % tx(8922, "floodprotect"))
+		return
 	if text.begins_with("/"):
 		_chat_command(from, text.substr(1))
-		return
-	if _flooding(from):
-		_tell(from, "%s: Nachricht nicht gesendet." % tx(8922, "floodprotect"))
 		return
 	var nm := String(players[from]["name"]) if players.has(from) else "ADMIN"     # Original „ADMIN: %s“
 	var team := int(players[from]["team"]) if players.has(from) else -1
@@ -609,9 +707,16 @@ func console_command(line: String) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _console_req(line: String) -> void:
+	if _guest("console"):
+		return
 	if multiplayer.is_server():
-		_touch(multiplayer.get_remote_sender_id())
-		_chat_command(multiplayer.get_remote_sender_id(), line.substr(0, 200))
+		var sid := multiplayer.get_remote_sender_id()
+		_touch(sid)
+		# B-023 M-004: Flood-Schutz auch für Konsolenzeilen
+		if not _is_admin(sid) and _flooding(sid):
+			_tell(sid, "%s: Befehl nicht ausgeführt." % tx(8922, "floodprotect"))
+			return
+		_chat_command(sid, line.substr(0, 200))
 
 
 ## Teamwahl (Server prüft; Teamausgleich: kein Wechsel ins größere Team)
@@ -648,6 +753,8 @@ func request_loadout(inv: Dictionary) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _loadout_req(inv: Dictionary) -> void:
+	if _guest("loadout"):
+		return
 	if multiplayer.is_server():
 		_touch(multiplayer.get_remote_sender_id())
 		_server_set_loadout(multiplayer.get_remote_sender_id(), inv)
@@ -702,6 +809,8 @@ func request_zone(zone: int) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _zone_req(zone: int) -> void:
+	if _guest("zone"):
+		return
 	var id := multiplayer.get_remote_sender_id()
 	if multiplayer.is_server() and players.has(id):
 		players[id]["zone"] = zone
@@ -709,12 +818,16 @@ func _zone_req(zone: int) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _team_req(team: int) -> void:
+	if _guest("team"):
+		return
 	if multiplayer.is_server():
 		_server_set_team(multiplayer.get_remote_sender_id(), team)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func _class_req(cls: int) -> void:
+	if _guest("class"):
+		return
 	if multiplayer.is_server():
 		_server_set_class(multiplayer.get_remote_sender_id(), cls)
 
@@ -722,6 +835,9 @@ func _class_req(cls: int) -> void:
 ## Ergebnis: true = gewechselt
 func _server_set_team(id: int, team: int) -> bool:
 	if not players.has(id) or not team_mode() or not team in [Soldier.TEAM_ALLIED, Soldier.TEAM_AXIS]:
+		return false
+	if mode() == Mode.COOP and team != Soldier.TEAM_ALLIED:
+		_reject_log(id, "team", "Coop: nur die Spielerseite")     # B-029: Achse = Missions-KI
 		return false
 	var cur := int(players[id].get("next_team", players[id]["team"]))
 	if cur == team:
@@ -773,7 +889,7 @@ const VOTE_RULES := {"maxclients": 8910, "pointlimit": 8911, "roundlimit": 8912,
 	"3rdpersonview": 8920, "inversedamage": 8921, "floodprotect": 8922, "fallingdmg": 8923}
 const VOTE_TIME_S := 30.0       ## Annahme (Originaldauer nicht dekodiert)
 const STYLE_WORDS := {"deathmatch": Mode.DEATHMATCH, "teamdeathmatch": Mode.TEAM_DEATHMATCH,
-	"occupation": Mode.OCCUPATION, "objectives": Mode.OBJECTIVES}
+	"occupation": Mode.OCCUPATION, "objectives": Mode.OBJECTIVES, "cooperative": Mode.COOP}
 var _cfg_pending := {}          ## Konsole vor dem Start („server“): Einstellungen
 var _vote := {}
 
@@ -814,10 +930,11 @@ func server_command(line: String, from := 0) -> String:
 			return _status_text(kw == "status")
 		"listmaps":
 			var out: PackedStringArray = []
-			for m in [Mode.DEATHMATCH, Mode.OCCUPATION, Mode.OBJECTIVES]:
-				out.append(["Deathmatch maps:", "", "Occupation maps:", "Objectives maps:"][m])
+			for m in [Mode.DEATHMATCH, Mode.OCCUPATION, Mode.OBJECTIVES, Mode.COOP]:
+				out.append(["Deathmatch maps:", "", "Occupation maps:", "Objectives maps:", "Cooperative maps:"][m])
 				for id in Game.MP_MAPS:
-					if Game.MISSIONS[id].get("mp_mode", Mode.DEATHMATCH) == m or (m == Mode.DEATHMATCH and Game.MISSIONS[id].get("mp_mode") == null):
+					var fixed = Game.MISSIONS[id].get("mp_mode")
+					if (fixed != null and int(fixed) == m) or (m in [Mode.DEATHMATCH, Mode.COOP] and fixed == null and coop_map_ok(id, m)):
 						out.append("  %s  (%s)" % [id, Game.MISSIONS[id]["title"]])
 			return "\n".join(out)
 		"vote":
@@ -826,14 +943,33 @@ func server_command(line: String, from := 0) -> String:
 			return vote_yes(from)
 		"adminlogin":
 			if from != 0:
+				# B-023 M-004: Sperre nach Fehlversuchen (ADMIN_FAIL_MAX → ADMIN_LOCK_S), wiederholt → Rauswurf
+				var fkey := _peer_ip(from)            # je Quell-IP (Neuverbinden setzt die Sperre nicht zurück)
+				var lk: Dictionary = _admin_fail.get(fkey, {"n": 0, "until": 0, "locks": 0})
+				var now_ms := Time.get_ticks_msec()
+				if now_ms < int(lk["until"]):
+					_reject_log(from, "adminlogin", "gesperrt")
+					return "Too many failed logins. Wait %d s." % ceili((int(lk["until"]) - now_ms) / 1000.0)
 				var parts := arg.split(" ", false)
 				var pw := String(parts[parts.size() - 1]) if parts.size() > 0 else ""
 				var nm := String(parts[0]) if parts.size() > 1 else String(settings.get("admin_login", ""))
 				if String(settings.get("admin_pass", "")) != "" and pw == String(settings["admin_pass"]) \
 						and nm == String(settings.get("admin_login", "")):
 					players[from]["admin"] = true
+					_admin_fail.erase(fkey)
 					print("NET: Admin-Rechte für ", players[from]["name"])
 					return "Admin rights granted!"
+				lk["n"] = int(lk["n"]) + 1
+				_reject_log(from, "adminlogin", "falsches Passwort (%d)" % int(lk["n"]))
+				if int(lk["n"]) >= ADMIN_FAIL_MAX:
+					lk["n"] = 0
+					lk["locks"] = int(lk["locks"]) + 1
+					lk["until"] = now_ms + int(ADMIN_LOCK_S * 1000.0)
+					if int(lk["locks"]) >= ADMIN_LOCKS_KICK and players.has(from):
+						_admin_fail[fkey] = lk
+						kick(from, "Zu viele falsche Admin-Passwörter.", "%s: zu viele falsche Admin-Passwörter.")
+						return ""
+				_admin_fail[fkey] = lk
 				return "Incorrect admin password!"
 		"svcmd":
 			return server_command(arg, from)
@@ -872,8 +1008,7 @@ func server_command(line: String, from := 0) -> String:
 			return "domain: %s" % arg
 		"style", "deathmatch", "occupation", "objectives", "teamdeathmatch", "cooperative":
 			var w := arg if kw == "style" else kw
-			if w == "cooperative":
-				return "Coop mode is not supported by original server."
+			# B-029: Coop wird unterstützt (Original-HD2DS: „Coop mode is not supported by original server.“)
 			if not STYLE_WORDS.has(w):
 				return "invalid parameters"
 			c["mode"] = int(STYLE_WORDS[w])
@@ -931,13 +1066,25 @@ func server_command(line: String, from := 0) -> String:
 		"botdebug":
 			return BotDebug.toggle(arg)       # Debug-Ansicht der KI-Soldaten (Ziele/Pfade, nur auf dem Server)
 		"quit":
-			if from != 0:
-				_tell(from, "Closing game. Wait please.")
+			# B-023 M-008: nur über die Konsole des dedizierten Servers (stdin/exec dort); Netz-Admins: restart/nextmap
+			if from != 0 or not dedicated:
+				_reject_log(from, "quit", "nur auf dem dedizierten Server (Server-Konsole)")
+				return "quit is only allowed on the dedicated server console."
 			print("Closing game. Wait please.")
 			leave(false)
 			get_tree().quit.call_deferred()
 			return "Closing game. Wait please."
 	return "unknown command"
+
+
+## B-029: Karte für den Stil zulässig? Coop nur auf Kampagnenkarten (Arena: Originalmission mit KI und Skripten);
+## Coop-Karten des Originals (gr_mp_coopmaps) fehlen in der Installation. Übrige Stile: jede Arena-Karte.
+static func coop_map_ok(id: String, m: int) -> bool:
+	var e: Dictionary = Game.MISSIONS.get(id, {})
+	if m != Mode.COOP:
+		return true
+	return e.get("mp_mode") == null and String(e.get("orig", "")) != "" \
+		and String(e.get("script", "")).ends_with("mp_arena.gd")
 
 
 ## Regel setzen (Bereiche RULE_RANGE; Ja/Nein als 0/1); Spieler-/Bot-Zahl und Karten wirken ab der nächsten Runde
@@ -969,7 +1116,7 @@ func _status_text(full: bool) -> String:
 	var out: PackedStringArray = []
 	if full:
 		out.append("%s  |  %s  |  %s  |  Runde %d/%d  |  Port %d%s" % [String(settings.get("name", "")), String(settings.get("map", "")),
-			MODE_NAMES[clampi(mode(), 0, 3)], round_no, int(rule("round_count")), int(settings.get("port", PORT)),
+			MODE_NAMES[clampi(mode(), 0, MODE_NAMES.size() - 1)], round_no, int(rule("round_count")), int(settings.get("port", PORT)),
 			"  |  öffentl. IP %s" % public_ip if public_ip != "" else ""])
 	out.append("%s %d / %d" % [tx(2306, "SPIELER"), humans(), int(rule("max_players"))])
 	var ids := players.keys()
@@ -1143,17 +1290,38 @@ var rank_log: Array = []      ## Tests/Anzeige: [Peer-ID, Rang, befördert]
 
 
 ## Konfigurationsdatei im Original-ServerLauncher-Stil (eine Konsolenzeile je Zeile) ausführen
+## B-023 M-007: Aus dem Netz (from != 0) nur Dateinamen im Ordner EXEC_DIR neben der Programmdatei (kein Pfad, kein
+## „..“); Server-Konsole wie bisher frei. Verschachteltes exec höchstens EXEC_MAX_DEPTH tief (vorher Stapelüberlauf).
 func exec_file(path: String, from := 0) -> String:
-	if not FileAccess.file_exists(path) and path.is_relative_path():
+	if _exec_depth >= EXEC_MAX_DEPTH:
+		_reject_log(from, "exec", "Verschachtelung > %d" % EXEC_MAX_DEPTH)
+		return "exec: nesting too deep."
+	if from != 0:
+		var fn := path.strip_edges()
+		if fn == "" or fn.contains("/") or fn.contains("\\") or fn.contains("..") or fn.contains(":") or not fn.is_valid_filename():
+			_reject_log(from, "exec", "unzulässiger Pfad „%s“" % fn.substr(0, 60))
+			return "exec: only file names from the %s folder are allowed." % EXEC_DIR
+		path = exec_dir().path_join(fn)
+	elif not FileAccess.file_exists(path) and path.is_relative_path():
 		path = OS.get_executable_path().get_base_dir().path_join(path)       # neben der Programmdatei
 	if not FileAccess.file_exists(path):
 		return "Can not find config file."
 	var out: PackedStringArray = []
+	_exec_depth += 1
 	for l in FileAccess.get_file_as_string(path).split("\n"):
 		var r := server_command(l.strip_edges(), from)
 		if r != "":
 			out.append(r)
+	_exec_depth -= 1
 	return "\n".join(out)
+
+
+## Konfigurationsordner für exec aus dem Netz (neben der Programmdatei; Tests können ihn umlenken)
+var exec_dir_override := ""
+
+
+func exec_dir() -> String:
+	return exec_dir_override if exec_dir_override != "" else OS.get_executable_path().get_base_dir().path_join(EXEC_DIR)
 
 
 ## „server“: mit den bisher gesetzten Konsolenwerten starten (Stil-Standards für fehlende Regeln)
@@ -1262,6 +1430,11 @@ func _begin_match() -> void:
 	_match_t = 0.0
 	team_score = [0.0, 0.0]
 	zone_owner.clear()
+	zone_locked.clear()
+	_slot_next.clear()
+	coop_team_spawns = 0
+	if coop:
+		coop.reset()
 	obj_done.clear()
 	_wave_t = 0.0
 	_bot_groups.clear()
@@ -1275,6 +1448,7 @@ func _begin_match() -> void:
 		p["teamkills"] = 0
 		p["spectator"] = false
 		p["rank"] = 0
+		p["lives_used"] = 0
 	_soldiers.clear()
 	_respawn.clear()
 	_vip.clear()
@@ -1307,9 +1481,14 @@ func mission_ready(_m: Node) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _client_ready() -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _guest("client_ready"):
 		return
 	var id := multiplayer.get_remote_sender_id()
+	# B-023 M-002: nur einmal je Beitritt bzw. Kartenladen (_ready_peers wird beim Neuladen geleert); vorher löste
+	# jeder Aufruf _server_spawn aus (Heilung/Teleport/Respawn-Zeit umgangen)
+	if _ready_peers.has(id):
+		_reject_log(id, "client_ready", "wiederholt")
+		return
 	_ready_peers[id] = true
 	_touch(id)
 	for pid in _soldiers:
@@ -1325,11 +1504,15 @@ func _client_ready() -> void:
 				c.global_position, c.look_yaw, int(_gen.get(pid, 0)), players.get(pid, {}).get("kit", []))
 			var cp: Dictionary = _corpse_poses.get(pid, {})
 			var pose: PackedFloat32Array = cp.get("pose", PackedFloat32Array()) if int(cp.get("gen", -1)) == int(_gen.get(pid, 0)) else PackedFloat32Array()
-			_corpse_pose.rpc_id(id, pid, int(_gen.get(pid, 0)), pose, c.global_position)
+			_corpse_pose.rpc_id(id, pid, int(_gen.get(pid, 0)), pose, c.global_position, int(c.get_meta("gore_mask", 0)))
 	_players.rpc_id(id, players)
 	_obj_states.rpc_id(id, _object_states())      # Türen: aktueller Stand für Spät-Beitretende
 	if is_instance_valid(support):
 		support.sync_to(id)                        # B-011: Funkgerät liegt/getragen
+	if not zone_locked.is_empty():
+		_zone_lock.rpc_id(id, zone_locked)         # B-029: erschöpfte Zonen
+	if mode() == Mode.COOP:
+		coop.sync_to(id)                           # B-029: gefallene Missions-KI für Spät-Beitretende
 	_server_spawn(id)
 
 
@@ -1339,7 +1522,7 @@ func _client_ready() -> void:
 ## dadurch kleiner wird; Meldung an alle (T2372 + Seite). Das Original prüft nachweislich nur bei Teamwahl/Beitritt
 ## (0x727800 Fall 5, kein weiterer Aufrufer); das Umsetzen beim Respawn ist [D] [A].
 func _auto_balance(id: int) -> void:
-	if id < 0 or not team_mode() or not bool(rule("team_balance")) or bool(players[id].get("bot", false)):
+	if id < 0 or not team_mode() or mode() == Mode.COOP or not bool(rule("team_balance")) or bool(players[id].get("bot", false)):
 		return
 	var t := int(players[id]["team"])
 	if not t in [Soldier.TEAM_ALLIED, Soldier.TEAM_AXIS]:
@@ -1398,7 +1581,8 @@ func _server_spawn(id: int) -> void:
 			zone_owner = zs.map(func(z): return int(z["owner"]))
 		var own: Array = []
 		for i in zs.size():
-			if i < zone_owner.size() and zone_owner[i] == team and not (zs[i]["slots"] as Array).is_empty():
+			if i < zone_owner.size() and zone_owner[i] == team and not (zs[i]["slots"] as Array).is_empty() \
+					and not zone_locked.has(i):
 				own.append(i)
 		if not own.is_empty():
 			own.sort_custom(func(a, b): return _front_dist(zs, a, team) < _front_dist(zs, b, team))
@@ -1406,6 +1590,11 @@ func _server_spawn(id: int) -> void:
 			var want := int(players[id].get("zone", -1))
 			var zi: int = want if own.has(want) else int(own[0])
 			pts = (zs[zi]["slots"] as Array).map(func(s): return {"pos": s["pos"], "yaw": s["yaw"], "team": team})
+			if not bool(rule("allow_respawn")) and game_state != State.WARMUP:
+				# B-029 M-010 (0x5ED700 [B]): ohne Respawn jeder Platz der Zone nur einmal, der letzte sperrt die Zone
+				var si := take_zone_slot(zi)
+				if si >= 0:
+					pts = [pts[si]]
 	var cand: Array = pts.filter(func(p): return mode() == Mode.DEATHMATCH or int(p.get("team", -1)) in [-1, team])
 	if cand.is_empty():
 		cand = pts
@@ -1429,6 +1618,12 @@ func _server_spawn(id: int) -> void:
 		var c: Dictionary = cand[randi() % cand.size()]      # Original: zufälliger freier Spawnpunkt
 		pos = c["pos"]
 		yaw = float(c.get("yaw", 0.0))
+	if mode() == Mode.COOP and not cand.is_empty():
+		# B-029: Kommando-Startplätze der Originalmission reihum (freien Platz vorziehen, bis 32 Versuche wie 0x69D6A0)
+		var c2: Dictionary = cand[coop.next_spawn(cand, _soldiers, id)]
+		pos = c2["pos"]
+		yaw = float(c2.get("yaw", 0.0))
+	_count_spawn(id)
 	_gen[id] = int(_gen.get(id, 0)) + 1
 	print("NET: Spawn für ", id, " bei ", pos)
 	var kit: Array = bot_kit(team, int(players[id].get("role", 0)), bool(players[id].get("hero", false))) if id < 0 else []
@@ -1509,6 +1704,8 @@ func _spawn(id: int, pname: String, team: int, pos: Vector3, yaw: float, gen: in
 	_hp_sent[id] = s.health
 	if multiplayer.is_server():
 		_mv_reset(s, pos)                  # B-022 F-003: Respawn ist ein erlaubter Sprung
+		if mode() == Mode.COOP:
+			coop.register_player(m, s, id)   # B-029: Skripte der Originalmission sehen die Spieler als commando1–4
 	if id < 0 and multiplayer.is_server():
 		_make_bot(s, id)
 	elif id < 0:
@@ -1572,7 +1769,7 @@ func _physics_process(delta: float) -> void:
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func _st(pos: Vector3, vel: Vector3, yaw: float, pitch: float, stance: int, slot: int, aiming: bool) -> void:
 	# B-022: nur der Server nimmt Zustände von Clients an (vorher an alle Peers, ungeprüft)
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _guest("st"):
 		return
 	var sid := multiplayer.get_remote_sender_id()
 	var s: Soldier = _soldiers.get(sid)
@@ -1620,7 +1817,7 @@ func _local_action(kind: String, a: Vector3, b: Vector3, wid: String) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _act(kind: String, a: Vector3, b: Vector3, wid: String) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _guest("act"):
 		return
 	var sid := multiplayer.get_remote_sender_id()
 	_touch(sid)
@@ -1727,7 +1924,7 @@ func used_interactable(it: Node) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _use(pid: String) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _guest("use"):
 		return
 	var sid := multiplayer.get_remote_sender_id()
 	var s: Soldier = _soldiers.get(sid)
@@ -1815,10 +2012,15 @@ func inventory_request(op: Dictionary) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _inv_req(op: Dictionary) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _guest("inv_req"):
 		return
 	var sid := multiplayer.get_remote_sender_id()
 	_touch(sid)
+	# B-023 M-001: vom Client gemeldeten Stand verwerfen; der Server führt Munition und Inventar selbst
+	if op.has("me"):
+		_reject_log(sid, "inv_req", "Client-Inventarstand „me“ ignoriert")
+		op = op.duplicate()
+		op.erase("me")
 	FieldInventory.server_execute(_soldiers.get(sid), op)
 
 
@@ -1860,7 +2062,7 @@ func _sync_vehicle(me: Soldier) -> void:
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func _veh(path: String, xf: Transform3D, vel: Vector3) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _guest("veh"):
 		return
 	var sid := multiplayer.get_remote_sender_id()
 	var v := get_node_or_null(path) as Vehicle
@@ -1904,7 +2106,7 @@ func _bveh(path: String, xf: Transform3D, vel: Vector3) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _seat(path: String, seat: int) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _guest("seat"):
 		return
 	var sid := multiplayer.get_remote_sender_id()
 	var s: Soldier = _soldiers.get(sid)
@@ -2001,6 +2203,25 @@ func _reject_log(sid: int, kind: String, why: String) -> void:
 	rejects.append({"peer": sid, "kind": kind, "why": why})
 	if rejects.size() > 200:
 		rejects.pop_front()
+
+
+## B-023 M-003: allgemeine Wache für alle any_peer-RPCs außer _register. true = Absender ist (auf dem Server) nicht
+## angemeldet → Aufrufer verwirft. Auf Clients immer false (die Handler prüfen dort is_server selbst).
+func _guest(kind: String) -> bool:
+	if not multiplayer.is_server():
+		return false
+	var sid := multiplayer.get_remote_sender_id()
+	if players.has(sid):
+		return false
+	var n := int(_guest_rejects.get(sid, 0)) + 1
+	_guest_rejects[sid] = n
+	if n <= 20:                       # Protokoll je Peer begrenzen (Flut unangemeldeter Pakete)
+		_reject_log(sid, kind, "nicht angemeldet")
+	return true
+
+
+var _guest_rejects := {}           ## Peer-ID -> Zahl verworfener RPCs vor der Anmeldung
+const GUEST_TIMEOUT_S := 10.0      ## Peers ohne Anmeldung werden danach getrennt (M-003)
 
 
 ## Server: an alle bereiten Peers außer dem Absender (und außer sich selbst) weitergeben
@@ -2196,6 +2417,8 @@ func _server_tick(delta: float) -> void:
 	if Game.current_mission() == null:
 		return                  # Karte lädt (Hintergrundladen): Spielzeit, Aufwärmen und Wiedereinstiege ruhen
 	_limits_tick(delta)
+	if mode() == Mode.COOP:
+		coop.server_tick(delta)        # B-029: Lage der Missions-KI an die Clients
 	_info_t -= delta
 	if _info_t <= 0.0:
 		_info_t = 0.5
@@ -2242,6 +2465,17 @@ func _server_tick(delta: float) -> void:
 					and (mode() == Mode.OBJECTIVES or not zone_owner.has(t)) and not _respawn_pending(t):
 				_server_end("%s ausgeschaltet" % ["Alliierte", "Achsenmächte"][t], 1 - t)
 				return
+	if mode() == Mode.COOP and _match_t > 5.0:
+		# B-029: kein Spieler mehr am Leben und keiner kann wieder einsteigen → Einsatz gescheitert (Missions-KI gewinnt)
+		var t0 := Soldier.TEAM_ALLIED
+		if _team_players(t0) > 0 and _team_alive(t0) == 0 and _respawn.is_empty():
+			_server_end(tx(20310, "Keine verbleibenden Leben").get_slice(" - ", 0), Soldier.TEAM_AXIS)
+			return
+		# Missionen ohne Zielliste: alle Gegner ausgeschaltet = Einsatz erfüllt [D]
+		var cm = Game.current_mission()
+		if cm and (cm.get("orig_objectives") as Dictionary).is_empty() and coop.had_enemies() and coop.alive_count() == 0:
+			coop_mission_end(true, "Alle Gegner ausgeschaltet")
+			return
 	var tl := float(rule("time_limit_min")) * 60.0
 	if tl > 0.0 and _match_t >= tl:
 		_server_end("Zeit abgelaufen", _time_winner())
@@ -2249,7 +2483,7 @@ func _server_tick(delta: float) -> void:
 
 ## Team wartet noch auf Wiedereinstieg (dann nicht „ausgeschaltet“)
 func _respawn_pending(t: int) -> bool:
-	if not bool(rule("allow_respawn")):
+	if not bool(rule("allow_respawn")) and mode() != Mode.COOP:
 		return false
 	for id in _respawn:
 		if int(players.get(id, {}).get("team", -9)) == t:
@@ -2293,11 +2527,20 @@ func _warmup_finished() -> void:
 	_match_t = 0.0
 	team_score = [0.0, 0.0]
 	for p in players.values():
-		for k in ["kills", "deaths", "score", "teamkills", "rank"]:
+		for k in ["kills", "deaths", "score", "teamkills", "rank", "lives_used"]:
 			p[k] = 0
 		p["spectator"] = false
 	_respawn.clear()
 	_vip.clear()
+	coop_team_spawns = 0             # B-029: Leben zählen ab Rundenbeginn (Aufwärmen frei)
+	_slot_next.clear()               # Spawnplätze ohne Respawn: erst ab Rundenbeginn verbraucht
+	if not zone_locked.is_empty():
+		var mz = Game.current_mission()
+		if mz and mz.has_method("mp_zones"):
+			zone_owner = mz.mp_zones().map(func(z): return int(z["owner"]))
+		zone_locked.clear()
+		_zone_lock.rpc(zone_locked)
+		_zones.rpc(zone_owner, zone_progress)
 	for id in players.keys():
 		players[id].erase("vip")
 		players[id].erase("vip_model")
@@ -2328,7 +2571,7 @@ func _set_map(id: String) -> void:
 	var fixed = Game.MISSIONS.get(id, {}).get("mp_mode")
 	if fixed != null:
 		settings["mode"] = int(fixed)
-	elif mode() > Mode.TEAM_DEATHMATCH:
+	elif mode() in [Mode.OCCUPATION, Mode.OBJECTIVES] or not coop_map_ok(id, mode()):
 		settings["mode"] = Mode.DEATHMATCH
 
 
@@ -2362,7 +2605,7 @@ func _hud_snapshot() -> Dictionary:
 	return {"st": game_state, "t": _match_t, "tl": float(rule("time_limit_min")) * 60.0, "wl": _warm_t,
 		"rn": round_no, "rc": int(rule("round_count")), "w": team_wins, "wave": _wave_t if mode() == Mode.OCCUPATION else -1.0,
 		"alive": [_team_alive(Soldier.TEAM_ALLIED), _team_alive(Soldier.TEAM_AXIS)], "vote": vote, "obj": obj_done,
-		"over": match_over, "pg": _pings()}
+		"over": match_over, "pg": _pings(), "cts": coop_team_spawns}
 
 
 func _pings() -> Dictionary:
@@ -2376,6 +2619,7 @@ func _pings() -> Dictionary:
 @rpc("authority", "call_local", "unreliable_ordered")
 func _info(d: Dictionary) -> void:
 	hud_info = d
+	coop_team_spawns = int(d.get("cts", coop_team_spawns))
 	game_state = int(d.get("st", 0))
 	round_no = int(d.get("rn", 1))
 	team_wins = d.get("w", [0, 0])
@@ -2401,6 +2645,9 @@ func _hp(id: int, hp: float) -> void:
 
 ## Vom Server aufgerufen (Events.soldier_died der Mission)
 func on_soldier_died(s: Node, attacker: Node) -> void:
+	if is_online and multiplayer.is_server() and mode() == Mode.COOP and s.has_meta("coop_ai"):
+		coop.on_ai_died(s, attacker)          # B-029: Missions-KI gefallen (Punkte, Abgleich)
+		return
 	if not is_online or not multiplayer.is_server() or match_over or not s.has_meta("net_peer"):
 		return
 	var victim := int(s.get_meta("net_peer"))
@@ -2412,15 +2659,18 @@ func on_soldier_died(s: Node, attacker: Node) -> void:
 	var resp := -1.0
 	if warm:
 		resp = 3.0
-	elif bool(rule("allow_respawn")):
+	elif _can_respawn(victim):
 		resp = 0.0 if mode() == Mode.OCCUPATION else float(rule("respawn_s"))
+	# B-029: im Coop ohne Leben T20310 (5 s) statt T20312
+	var nolives := resp < 0.0 and not warm and mode() == Mode.COOP
 	# Menschen außerhalb des Aufwärmens: nach der Respawn-Zeit „FEUER DRÜCKEN FÜR RESPAWN“ (T7406), sonst nach 3 s
 	var press := resp > 0.0 and not warm and victim > 0
 	# Kill-Feed: Ursache (Waffen-ID bzw. „fall“) aus dem letzten Treffer, Teamkill vom Server bestimmt
 	var tk := killer != 0 and killer != victim and team_mode() and players.has(killer) \
 		and int(players[killer]["team"]) == int(players.get(victim, {}).get("team", -1))
+	var by_ai := attacker != null and is_instance_valid(attacker) and attacker.has_meta("coop_ai")
 	_killed.rpc(victim, killer, resp, String(s.get_meta("last_zone", "")) == "head", press,
-		String(s.get_meta("last_cause", "")), tk, s.global_position)
+		String(s.get_meta("last_cause", "")), tk, s.global_position, nolives, int(s.get_meta("gore_mask", 0)))
 	if resp < 0.0 and players.has(victim) and victim > 0:
 		players[victim]["spectator"] = true         # Original 20312: schaltet zum Zuschauermodus
 	elif resp == 0.0:
@@ -2450,7 +2700,7 @@ func on_soldier_died(s: Node, attacker: Node) -> void:
 					tx(8874, "Die Verbindung zu %s wurde aufgrund von Teamkilling beendet."))
 		if mode() == Mode.TEAM_DEATHMATCH and int(players[killer]["team"]) in [0, 1]:
 			team_score[int(players[killer]["team"])] += pts
-	elif players.has(victim):
+	elif players.has(victim) and not by_ai:          # B-029: Tod durch die Missions-KI ist keine Selbsttötung
 		players[victim]["score"] += PTS_SUICIDE
 	_update_ranks()
 	_players.rpc(players)
@@ -2473,8 +2723,10 @@ func on_soldier_died(s: Node, attacker: Node) -> void:
 ## press: nach resp s Feuer drücken bzw. automatisch nach weiteren RESPAWN_AUTO_S s)
 @rpc("authority", "call_local", "reliable")
 func _killed(victim: int, killer: int, resp := -1.0, head := false, press := false, cause := "", tk := false,
-		pos := Vector3.INF) -> void:
+		pos := Vector3.INF, nolives := false, gore := 0) -> void:
 	var s: Soldier = _soldiers.get(victim)
+	if is_instance_valid(s) and not multiplayer.is_server():
+		s.set_meta("_gore_net", Gore.sanitize_mask(gore))   # B-037: Abtrennung vom Server (Bitmaske, nur Anzeige)
 	if is_instance_valid(s) and s.alive and not multiplayer.is_server():
 		# Leiche an der Server-Lage: Netzfiguren folgen dem Zustand nur, solange sie leben und ihre Physik läuft (vor
 		# nav_ready ruht sie) – sonst bliebe die Leiche z. B. am Spawnpunkt liegen und Durchsuchen schiene „außer Reichweite“
@@ -2509,6 +2761,11 @@ func _killed(victim: int, killer: int, resp := -1.0, head := false, press := fal
 			respawn_at = Time.get_ticks_msec() + int(resp * 1000.0)
 		elif resp == 0.0:
 			respawn_at = -1          # nächste Welle (HUD: hud_info.wave)
+		elif nolives:
+			respawn_at = 0
+			# B-029 (0x53BE10 [B]): Coop ohne Leben → T20310 für 5 s
+			last_nolives_ms = Time.get_ticks_msec()
+			Events.say(tx(20310, "Keine verbleibenden Leben - schaltet zum Zuschauermodus"), COOP_NOLIVES_S)
 		else:
 			respawn_at = 0
 			Events.say(tx(20312, "Wartet auf Respawn - schaltet zum Zuschauermodus"), 4.0)
@@ -2535,15 +2792,20 @@ func corpse_settled(s: Node, pose: PackedFloat32Array) -> void:
 ## Client: Leiche festlegen. Lebt die Figur hier noch (Spät-Beitritt), wird sie ohne Todesablauf zur Leiche;
 ## leere Pose = Server simuliert noch (Original-Todesbild bis zur Endpose) bzw. ohne Ragdoll.
 @rpc("authority", "call_remote", "reliable")
-func _corpse_pose(pid: int, gen: int, pose: PackedFloat32Array, origin := Vector3.INF) -> void:
+func _corpse_pose(pid: int, gen: int, pose: PackedFloat32Array, origin := Vector3.INF, gore := -1) -> void:
 	var s: Soldier = _soldiers.get(pid)
 	if not is_instance_valid(s) or int(s.get_meta("net_gen", gen)) != gen:
 		return
+	var late := s.alive
 	if s.alive:
 		if origin.is_finite():
 			s.global_position = origin
 			s.net_target = origin
 		s.become_corpse()
+	# B-037: Spät-Beitritt – abgetrennte Teile als Stümpfe (gore < 0 = keine Angabe, z. B. corpse_settled)
+	if late and gore > 0:
+		s.set_meta("gore_mask", Gore.sanitize_mask(gore))
+		Gore.apply(s, Gore.sanitize_mask(gore), Vector3.ZERO, false)
 	if not pose.is_empty() and s.model and s.model.apply_corpse_pose(pose):
 		corpse_pose_log.append(pid)
 	elif origin.is_finite():
@@ -2551,6 +2813,7 @@ func _corpse_pose(pid: int, gen: int, pose: PackedFloat32Array, origin := Vector
 
 
 var corpse_pose_log: Array = []      ## Client: empfangene Endposen (Tests)
+var last_nolives_ms := 0             ## B-029: Zeitpunkt der letzten Meldung T20310 (Tests/HUD)
 
 
 var kill_feed: Array = []        ## Einträge (Dictionary, s. _killed), neueste hinten
@@ -2638,6 +2901,8 @@ func request_respawn() -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _respawn_req() -> void:
+	if _guest("respawn"):
+		return
 	if multiplayer.is_server():
 		_server_respawn_req(multiplayer.get_remote_sender_id())
 
@@ -2667,6 +2932,14 @@ static func fmt_s(t: String, args: Array) -> String:
 			break
 		t = t.substr(0, i) + str(a) + t.substr(i + 2)
 	return t
+
+
+## B-029 Coop: Originalmission erfüllt (alle Pflichtziele) bzw. gescheitert → Rundenende, Sieger Spieler bzw. KI
+func coop_mission_end(success: bool, reason: String) -> void:
+	if not is_online or not multiplayer.is_server() or mode() != Mode.COOP or game_state == State.WARMUP:
+		return
+	_server_end(("Einsatz erfüllt: " if success else "Einsatz gescheitert: ") + reason,
+		Soldier.TEAM_ALLIED if success else Soldier.TEAM_AXIS)
 
 
 ## Rundenende; winner = Soldier-Team (−1 keins). Siegmeldung 7403/7404 + Siege 8935/8936 (Original 0x699590).
@@ -2710,7 +2983,7 @@ func _process(_delta: float) -> void:
 
 
 func board_text() -> String:
-	var lines: PackedStringArray = ["%s – %s" % [MODE_NAMES[clampi(mode(), 0, 3)], String(settings.get("name", ""))]]
+	var lines: PackedStringArray = ["%s – %s" % [MODE_NAMES[clampi(mode(), 0, MODE_NAMES.size() - 1)], String(settings.get("name", ""))]]
 	lines.append("%s %d / %d" % [tx(2585, "Rundenzahl:"), round_no, int(rule("round_count"))])
 	if team_mode():
 		lines.append("Alliierte %d : %d Achsenmächte" % [int(team_score[0]), int(team_score[1])])
@@ -2795,7 +3068,10 @@ func server_info() -> Dictionary:
 			"spawn_protect_s": int(rule("spawn_protect_s")), "kill_cam": bool(rule("kill_cam")),
 			"show_names": bool(rule("show_names")), "hit_indicator": bool(rule("hit_indicator")),
 			"hurt_indicator": bool(rule("hurt_indicator")), "support_strike": int(rule("support_strike")),
-			"support_interval_min": int(rule("support_interval_min")), "support_bots": bool(rule("support_bots"))},
+			"support_interval_min": int(rule("support_interval_min")), "support_bots": bool(rule("support_bots")),
+			# B-029 Coop-Regeln (Fadenkreuz wie im Original nur Anzeige, 0x730810)
+			"coop_difficulty": int(rule("coop_difficulty")), "coop_lives": int(rule("coop_lives")),
+			"team_lives": bool(rule("team_lives")), "allow_crosshair": bool(rule("allow_crosshair"))},
 		# Spiel-Info (gameinfo.4ds): Version (Filter „Selbe Version“ T2579), Team-/Spieler-Status, Runde
 		"ver": String(ProjectSettings.get_setting("application/config/version")), "ts": [int(team_score[0]), int(team_score[1])],
 		"w": team_wins, "rn": round_no, "st": game_state, "plist": _info_players()}
@@ -2826,15 +3102,71 @@ func _poll_discovery(delta: float) -> void:
 func _poll_query() -> void:
 	if _query == null:
 		return
-	while _query.get_available_packet_count() > 0:
-		var pkt := _query.get_packet().get_string_from_utf8()
+	var n := 0
+	while _query.get_available_packet_count() > 0 and n < 64:      # je Bild höchstens 64 Pakete (Rest im nächsten)
+		n += 1
+		var raw := _query.get_packet()
 		var ip := _query.get_packet_ip()
 		var pt := _query.get_packet_port()
-		if pkt.begins_with(QUERY_TAG):
-			var info := server_info()
-			info["qid"] = pkt.substr(QUERY_TAG.length()).strip_edges()
-			_query.set_dest_address(ip, pt)
-			_query.put_packet(JSON.stringify(info).to_utf8_buffer())
+		var pkt := raw.get_string_from_utf8() if raw.size() <= 2048 else ""
+		if not pkt.begins_with(QUERY_TAG):
+			continue
+		# B-023 M-005: je Quell-IP höchstens QUERY_BURST Antworten, Nachfüllen QUERY_RATE/s (Token-Bucket)
+		if not _query_rate_ok(ip):
+			query_dropped += 1
+			continue
+		var out := query_reply(pkt.substr(QUERY_TAG.length()).strip_edges(), raw.size())
+		if out.is_empty():
+			continue
+		_query.set_dest_address(ip, pt)
+		_query.put_packet(out)
+
+
+## B-023 M-005: Antwort auf eine Abfrage – nie größer als QUERY_AMP × Anfragegröße (kein UDP-Verstärker). Die
+## volle Serverinfo (Spielerliste) nur, wenn die Anfrage groß genug ist (eigene Clients füllen auf QUERY_PAD auf);
+## sonst ohne Spielerliste/Teams, notfalls nur Kernfelder. qid höchstens QUERY_QID_MAX Zeichen.
+func query_reply(qid: String, req_bytes: int) -> PackedByteArray:
+	var limit := req_bytes * QUERY_AMP
+	var info := server_info()
+	info["qid"] = qid.substr(0, QUERY_QID_MAX)
+	var out := JSON.stringify(info).to_utf8_buffer()
+	if out.size() > limit:
+		for k in ["plist", "ts"]:
+			info.erase(k)
+		out = JSON.stringify(info).to_utf8_buffer()
+	if out.size() > limit:
+		var core := {"qid": info["qid"]}
+		for k in ["tag", "name", "map", "mode", "players", "max", "port", "ver", "pw", "ded", "inet", "bots", "map_title"]:
+			if info.has(k):
+				core[k] = info[k]
+		out = JSON.stringify(core).to_utf8_buffer()
+		if out.size() > limit:
+			out = JSON.stringify({"tag": info.get("tag", ""), "qid": info["qid"]}).to_utf8_buffer()
+		if out.size() > limit:
+			return PackedByteArray()          # Anfrage zu klein für jede Antwort → keine Antwort
+	return out
+
+
+const QUERY_RATE := 2.0          ## Antworten/s je Quell-IP [D]
+const QUERY_BURST := 4.0
+const QUERY_AMP := 3             ## Antwort ≤ 3 × Anfrage
+const QUERY_PAD := 1000          ## eigene Abfragen werden auf diese Größe aufgefüllt (volle Info passt hinein)
+const QUERY_QID_MAX := 96
+var _query_bucket := {}          ## IP -> [Tokens, letzte ms]
+var query_dropped := 0           ## Tests: wegen Ratenbegrenzung verworfene Abfragen
+
+
+func _query_rate_ok(ip: String) -> bool:
+	var now := Time.get_ticks_msec()
+	if _query_bucket.size() > 1024:
+		_query_bucket.clear()       # Speicher begrenzen (gefälschte Quell-IPs)
+	var b: Array = _query_bucket.get(ip, [QUERY_BURST, now])
+	var tok := minf(QUERY_BURST, float(b[0]) + (now - int(b[1])) / 1000.0 * QUERY_RATE)
+	if tok < 1.0:
+		_query_bucket[ip] = [tok, now]
+		return false
+	_query_bucket[ip] = [tok - 1.0, now]
+	return true
 
 
 var _query: PacketPeerUDP
@@ -2882,7 +3214,9 @@ func query_server(host_addr: String, port: int) -> void:
 	if ip == "":
 		return
 	_qsock.set_dest_address(ip, port + 1)
-	_qsock.put_packet(("%s %d|%s:%d" % [QUERY_TAG, Time.get_ticks_msec(), host_addr, port]).to_utf8_buffer())
+	# B-023 M-005: auf QUERY_PAD Byte auffüllen (Leerzeichen) – der Server antwortet höchstens QUERY_AMP × Anfragegröße
+	var q := ("%s %d|%s:%d" % [QUERY_TAG, Time.get_ticks_msec(), host_addr, port])
+	_qsock.put_packet((q + " ".repeat(maxi(0, QUERY_PAD - q.length()))).to_utf8_buffer())
 
 
 func _process_browse() -> void:
@@ -3433,7 +3767,7 @@ func _zones_tick(delta: float) -> void:
 	var may_capture := _match_t >= ZONE_START_DELAY_S     # Original: erst nach Aufwärmzeit + 5 s
 	for i in zs.size():
 		var z: Dictionary = zs[i]
-		if not z["capturable"] or not may_capture:
+		if not z["capturable"] or not may_capture or zone_locked.has(i):
 			continue
 		var cnt := [0, 0]
 		var present := [[], []]
@@ -3491,6 +3825,42 @@ func _zones_tick(delta: float) -> void:
 
 
 var _zone_sync_t := 0.0
+## B-029 M-010: nächster Spawnplatz je Zone (Original MPZone +0x100) und ohne Respawn erschöpfte, gesperrte Zonen
+var _slot_next := {}
+var zone_locked: Array = []
+
+
+## Spawnplatz einer Zone (Original 0x5ED700 [B]): Index läuft weiter; mit allowrespawn reihum (modulo), ohne Respawn
+## ist jeder Platz einmal nutzbar – nach dem letzten wird die Zone Besitzer 2 (neutral/gesperrt, 0x5ED320).
+## Rückgabe Platzindex bzw. −1 (Zone schon erschöpft).
+func take_zone_slot(zi: int) -> int:
+	var m = Game.current_mission()
+	if m == null or not m.has_method("mp_zones") or zi < 0 or zi >= m.mp_zones().size():
+		return -1
+	var n: int = (m.mp_zones()[zi]["slots"] as Array).size()
+	var k := int(_slot_next.get(zi, 0))
+	if n <= 0:
+		return -1
+	if bool(rule("allow_respawn")):
+		_slot_next[zi] = k + 1
+		return k % n
+	if k >= n:
+		return -1
+	_slot_next[zi] = k + 1
+	if k + 1 >= n and not zone_locked.has(zi):
+		zone_locked.append(zi)
+		if zi < zone_owner.size():
+			zone_owner[zi] = -1
+		if is_online and multiplayer.is_server():
+			_zone_lock.rpc(zone_locked)
+			_zones.rpc(zone_owner, zone_progress)
+	return k
+
+
+## Gesperrte (erschöpfte) Zonen an alle (Spawnzonen-Karte: zone_disabledN)
+@rpc("authority", "call_remote", "reliable")
+func _zone_lock(locked: Array) -> void:
+	zone_locked = locked
 
 
 @rpc("authority", "call_local", "unreliable_ordered")
@@ -3699,7 +4069,7 @@ func request_figure(fig: String) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _figure_req(fig: String) -> void:
-	if not multiplayer.is_server():
+	if not multiplayer.is_server() or _guest("figure"):
 		return
 	var id := multiplayer.get_remote_sender_id()
 	if players.has(id) and (fig == "" or figure_ids().has(fig)):
@@ -3717,7 +4087,7 @@ func _add_bots() -> void:
 		if int(k) < 0:
 			next_id = mini(next_id, int(k) - 1)
 	var teams: Array = [Soldier.TEAM_ALLIED, Soldier.TEAM_AXIS]
-	for ti in 2:
+	for ti in (1 if mode() == Mode.COOP else 2):     # B-029: Coop – KI-Soldaten nur auf der Spielerseite
 		for i in n:
 			var side := "allied" if teams[ti] == Soldier.TEAM_ALLIED else "axis"
 			var team: int = teams[ti] if team_mode() else 10 + players.size()
@@ -4232,13 +4602,15 @@ func _sup_radio(state: int, kind: int, pos: Vector3, who: int) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func _sup_req_pickup() -> void:
+	if _guest("sup_pickup"):
+		return
 	if multiplayer.is_server() and is_instance_valid(support):
 		support.server_pickup(multiplayer.get_remote_sender_id())
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func _sup_req_call(kind: int, pos: Vector3) -> void:
-	if not multiplayer.is_server() or not is_instance_valid(support):
+	if not multiplayer.is_server() or not is_instance_valid(support) or _guest("sup_call"):
 		return
 	var id := multiplayer.get_remote_sender_id()
 	var err: String = support.server_call(id, kind, pos)

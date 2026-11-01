@@ -59,20 +59,28 @@ Dieses Projekt steht in keiner Verbindung zu ihnen und wird von ihnen weder unte
 
 - [Godot 4.7.1](https://godotengine.org/) (Standard-Version, kein .NET nötig)
 - Eine Installation von *Hidden & Dangerous 2* (z. B. von GOG)
-- Python 3 mit Pillow und numpy für die Konvertierung (Skripte in `pipeline/`)
+- Python 3 mit Pillow, numpy, pefile und capstone für die Konvertierung (Skripte in `pipeline/`)
 
 ## Installation / Spieldaten exportieren / Texturen hochskalieren
 
 Für Spieler gibt es ein einfaches Konsolen-Menü – keine Programmierkenntnisse nötig:
 
-1. Paket entpacken bzw. Repository herunterladen und **`HD2-Werkzeuge.cmd` doppelklicken**.
+1. Paket entpacken bzw. Repository herunterladen und **`HD2-Werkzeuge.cmd` doppelklicken**. Das Paket enthält
+   `DangerousHidden2.exe` **und** `DangerousHidden2.pck` (Spieldaten) sowie `version.txt`; alle drei gehören
+   zusammen und müssen im selben Ordner liegen. Bei einem Update alle drei gemeinsam ersetzen (`orig_cache\`
+   bleibt). Passt die `.pck` nicht zur EXE, meldet das Spiel beim Start einen Versionskonflikt.
 2. **1) Original-Installation suchen** – findet *Hidden & Dangerous 2* über Registry, GOG, Steam oder übliche
    Ordner; alternativ den Ordner mit `hd2.exe` selbst eingeben. Die Installation wird nur gelesen, nie verändert.
 3. **2) Werkzeuge einrichten** – legt eine eigene Python-Umgebung im Ordner `werkzeuge\` neben dem Spiel an
    (nichts wird ohne Rückfrage systemweit installiert) und auf Wunsch ffmpeg für die Filme.
 4. **3) Spieldaten exportieren** – Missionen, Mehrspielerkarten, Figuren, Waffen, Klänge, Musik, Menüs, HUD,
-   Texte und Animationen landen in `orig_cache\`. Dauert je nach PC etwa 30–90 Minuten, ist jederzeit
-   abbrechbar und setzt beim nächsten Start fort. Protokolle stehen in `werkzeuge\protokolle\`.
+   Texte, Originalschriften und Animationen landen in `orig_cache\`. Dauert je nach PC etwa 30–90 Minuten, ist
+   jederzeit abbrechbar und setzt beim nächsten Start fort; gescheiterte Einzelschritte werden dabei wiederholt
+   (`-Probelauf` listet die offenen Schritte). Jede Sprachfassung (Deutsch, Englisch, Französisch, Italienisch,
+   Spanisch, Tschechisch) wird unterstützt; Steam-/GOG-Fassungen des Grundspiels ebenso. Wird die Erweiterung
+   *Courage Under Fire / Sabre Squadron* am Inhalt erkannt, erscheint ein Hinweis. Protokolle stehen in
+   `werkzeuge\protokolle\`. Wer die Werkzeuge vor diesem Stand eingerichtet hat: Menüpunkt 2 erneut ausführen
+   (neues Paket `capstone` für die Schriften).
 5. **4) Filme konvertieren** (optional, benötigt ffmpeg).
 6. **5) Texturen hochskalieren** (optional) – KI-Hochskalierung auf HD bzw. 4K. Lädt nach Rückfrage PyTorch
    und die Real-ESRGAN-Modelle; auf der CPU dauert das viele Stunden, mit NVIDIA-GPU deutlich weniger.

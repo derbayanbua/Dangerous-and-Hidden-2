@@ -796,13 +796,38 @@ func _hits(m: Node, bots: Array) -> void:
 	var h2: Hitbox = hb_by_zone.get(&"head")
 	await seconds(1.5)          # Trefferreaktion abklingen lassen (Zonen folgen der Animation)
 	if h2:
+		# Deterministisch: Zielpunkt so wählen, dass der Strahl von vorn nach Original-Reihenfolge (Körper → Kopf …) die
+		# Kopfzone ergibt. Vorher zielte der Test auf die Kopfmitte; je nach Ruhe-Animation lag die Rumpfkiste dort mit
+		# drin → `_priority_zone` wertete Rumpf (48,8 < 100, sporadisch rot). Schaden/Formel unverändert.
+		var sp2 := shooter.get_world_3d().direct_space_state
 		var c2: Vector3 = (h2.get_child(0) as Node3D).global_position
-		var o2 := c2 - Vector3(0, 0, 30)
+		var aim2 := c2
+		var found := false
+		for cand in zl:
+			var ch := cand as Hitbox
+			if ch.zone != &"head" or ch.collision_layer == 0:
+				continue
+			var cc: Vector3 = (ch.get_child(0) as Node3D).global_position
+			for up in [0.0, 0.03, 0.06, 0.09, -0.03]:
+				var p := cc + Vector3.UP * float(up)
+				var cq := PhysicsRayQueryParameters3D.create(p - Vector3(0, 0, 3), p + Vector3(0, 0, 0.3), Hitbox.LAYER, shooter.exclude_rids())
+				cq.collide_with_areas = true
+				cq.collide_with_bodies = false
+				var chit := sp2.intersect_ray(cq)
+				if not chit.is_empty() and chit.collider is Hitbox and (chit.collider as Hitbox).soldier == tgt \
+						and Ballistics._priority_zone(sp2, chit.collider, chit.position, Vector3(0, 0, 1)).zone == &"head":
+					aim2 = p
+					found = true
+					break
+			if found:
+				break
+		var o2 := aim2 - Vector3(0, 0, 30)
 		shooter.global_position = Vector3(o2.x, 600.1, o2.z)
 		await frames(2)
-		Ballistics.fire(shooter, o2, (c2 - o2).normalized(), WeaponDB.get_weapon(&"kar98k"), shooter.exclude_rids(), shooter.team)
+		Ballistics.fire(shooter, o2, (aim2 - o2).normalized(), WeaponDB.get_weapon(&"kar98k"), shooter.exclude_rids(), shooter.team)
 		await frames(40)
-		check(not tgt.alive, "Kopftreffer K98k auf 30 m tötet (48,8 × 5 = 244 > 100)")
+		check(not tgt.alive, "Kopftreffer K98k auf 30 m tötet (48,8 × 5 = 244 > 100)",
+			"Kopfpunkt frei %s, LP %.1f" % [found, tgt.health])
 	plat.queue_free()
 
 

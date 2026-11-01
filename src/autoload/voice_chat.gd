@@ -141,8 +141,44 @@ func send_frame(pcm: PackedFloat32Array) -> void:
 
 @rpc("any_peer", "call_remote", "unreliable_ordered")
 func _vf(data: PackedByteArray) -> void:
-	if multiplayer.is_server() and data.size() <= 1024:
-		_relay(multiplayer.get_remote_sender_id(), data)
+	if not multiplayer.is_server():
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	var why := vf_reject_reason(sid, data.size())
+	if why != "":
+		dropped += 1
+		if dropped <= 20 or dropped % 50 == 1:          # Protokoll gedrosselt (Flut)
+			Net._reject_log(sid, "voice", why)
+		return
+	_relay(sid, data)
+
+
+## B-023 M-006: Server-Prüfung eines Sprachpakets ("" = annehmen): nur angemeldete, nicht stumm geschaltete Spieler,
+## Voice am Server an (Codec > 0), Größe ≤ ein 40-ms-Rahmen des Codecs (+8 Byte Rundung), höchstens VF_RATE Pakete/s.
+func vf_reject_reason(sid: int, size: int) -> String:
+	if not Net.players.has(sid):
+		return "nicht angemeldet"
+	var rate := codec_rate()
+	if rate <= 0:
+		return "Voice am Server aus"
+	if Time.get_ticks_msec() < int(Net._muted_until.get(sid, 0)):
+		return "stumm (Flood)"
+	if size <= 0 or size > int(rate * FRAME_S) + 8:
+		return "Größe %d" % size
+	var now := Time.get_ticks_msec()
+	var b: Array = _vf_bucket.get(sid, [VF_BURST, now])
+	var tok := minf(VF_BURST, float(b[0]) + (now - int(b[1])) / 1000.0 * VF_RATE)
+	if tok < 1.0:
+		_vf_bucket[sid] = [tok, now]
+		return "Rate"
+	_vf_bucket[sid] = [tok - 1.0, now]
+	return ""
+
+
+const VF_RATE := 30.0             ## Pakete/s je Sprecher (40-ms-Rahmen = 25/s + Spielraum)
+const VF_BURST := 10.0
+var _vf_bucket := {}
+var dropped := 0                  ## Server: verworfene Sprachpakete (Tests)
 
 
 func _relay(from: int, data: PackedByteArray) -> void:

@@ -34,6 +34,11 @@ var _support: OptionButton           ## B-011: Artillerie/Luftangriff (supportst
 var _support_min: SpinBox
 var _support_bots: CheckBox
 var _hurts: CheckBox               ## Ergänzung: Treffer-Richtungsanzeige beim Getroffenen (hurtindicator)
+## B-029 Coop (T20210–20213): Schwierigkeit, Team-Leben, Fadenkreuz (nur Anzeige wie im Original), Respawn-Anzahl
+var _coop_diff: OptionButton
+var _coop_lives: SpinBox
+var _team_lives: CheckBox
+var _crosshair: CheckBox
 var _port: SpinBox
 var _voice: OptionButton
 var _maplist_mode: OptionButton
@@ -57,11 +62,13 @@ var _ded_pid := 0
 func _sync_mode() -> void:
 	var id := String(_map.get_item_metadata(_map.selected)) if _map.item_count > 0 else ""
 	var fixed = Game.MISSIONS.get(id, {}).get("mp_mode")
+	# B-029: Kampagnenkarten (Arena) zusätzlich KOOPERATIV
+	var coop_ok := fixed == null and Net.coop_map_ok(id, Net.Mode.COOP)
 	for i in _mode.item_count:
-		_mode.set_item_disabled(i, fixed != null and i != int(fixed) or fixed == null and i > 1)
+		_mode.set_item_disabled(i, fixed != null and i != int(fixed) or fixed == null and i > 1 and not (i == Net.Mode.COOP and coop_ok))
 	if fixed != null:
 		_mode.select(int(fixed))
-	elif _mode.selected > 1:
+	elif _mode.selected > 1 and not (_mode.selected == Net.Mode.COOP and coop_ok):
 		_mode.select(0)
 	if _mode.selected != _last_mode:
 		_apply_style_defaults()
@@ -95,6 +102,10 @@ func _apply_style_defaults() -> void:
 	_support.select(int(d["support_strike"]))
 	_support_min.value = d["support_interval_min"]
 	_support_bots.button_pressed = d["support_bots"]
+	_coop_diff.select(clampi(int(d["coop_difficulty"]), 1, 4) - 1)
+	_coop_lives.value = d["coop_lives"]
+	_team_lives.button_pressed = d["team_lives"]
+	_crosshair.button_pressed = d["allow_crosshair"]
 	_fill_map_choice()
 
 
@@ -108,7 +119,8 @@ func _style_maps() -> Array:
 	var m := _mode.selected
 	for id in Game.MP_MAPS:
 		var st = Game.MISSIONS[id].get("mp_mode")
-		if (st == null and m <= Net.Mode.TEAM_DEATHMATCH) or (st != null and int(st) == m):
+		if (st == null and m <= Net.Mode.TEAM_DEATHMATCH) or (st != null and int(st) == m) \
+				or (st == null and m == Net.Mode.COOP and Net.coop_map_ok(id, m)):
 			out.append(id)
 	return out
 
@@ -287,6 +299,16 @@ func open() -> void:
 	_ded.name = "DedicatedServer"
 	_ded.text = SAS.text(2382, "DEDIZIERTER SERVER")
 	srv.add_child(_ded)
+	# B-029 Coop-Regeln (Original-Texte 20210–20213), ganz unten, damit die übrigen Felder ihre Lage behalten
+	_coop_diff = _option(g, SAS.text(20210, "SCHWIERIGKEITSGRAD"))
+	for i in 4:
+		_coop_diff.add_item(SAS.text(20220 + i, ["LEICHT", "NORMAL", "SCHWER", "SEHR SCHWER"][i]), i + 1)
+	_coop_diff.select(2)
+	_coop_diff.tooltip_text = "Coop: Gegnerwerte wie Einzelspieler-Stufe (coopdifficulty); andere Stile fest SCHWER"
+	_team_lives = _check(g, SAS.text(20211, "TEAM-LEBEN"), true)
+	_crosshair = _check(g, SAS.text(20212, "FADENKREUZ ZULASSEN"), true)
+	_crosshair.tooltip_text = "Wie im Original nur Serverinfo, ohne Wirkung (allowcrosshair)"
+	_coop_lives = _spin(g, SAS.text(20213, "RESPAWN-ANZAHL") + " (-1 = ∞)", -1, 99, -1)
 	_map_choice = ItemList.new()
 	_map_choice.name = "MapChoice"
 	_map_choice.select_mode = ItemList.SELECT_MULTI
@@ -526,7 +548,7 @@ func _refresh() -> void:
 			txt = "%s   –   (keine Antwort)" % s["name"]
 		else:
 			txt = "%s   –   %s   –   %s   %s   %d/%d%s%s%s%s   (%s:%d)" % [s.get("name", "?"), s.get("map_title", s.get("map", "")),
-				Net.MODE_NAMES[clampi(int(s.get("mode", 0)), 0, 3)], "%d ms" % int(s["ping"]) if int(s.get("ping", -1)) >= 0 else "– ms",
+				Net.MODE_NAMES[clampi(int(s.get("mode", 0)), 0, Net.MODE_NAMES.size() - 1)], "%d ms" % int(s["ping"]) if int(s.get("ping", -1)) >= 0 else "– ms",
 				int(s.get("players", 0)), int(s.get("max", 8)), " +%d KI" % nb if nb > 0 else "", "  🔒" if s.get("pw", false) else "",
 				"  [DED]" if s.get("ded", false) else "", "  [VOICE]" if int(s.get("voice", 0)) > 0 else "", s.get("ip", ""),
 				int(s.get("port", Net.PORT))]
@@ -599,14 +621,16 @@ func server_settings() -> Dictionary:
 		"voice_codec": _voice.get_selected_id(), "map_list": map_rotation(), "internet": _inet.button_pressed,
 		"dedicated": _ded.button_pressed, "admin_login": _admin_login.text.strip_edges(), "admin_pass": _admin_pass.text,
 		"max_ping": int(_max_ping.value), "max_freq": int(_max_freq.value), "max_inactivity": int(_max_idle.value),
-		"autorestart": _autorestart.button_pressed}
+		"autorestart": _autorestart.button_pressed,
+		"coop_difficulty": _coop_diff.get_selected_id(), "coop_lives": int(_coop_lives.value),
+		"team_lives": _team_lives.button_pressed, "allow_crosshair": _crosshair.button_pressed}
 
 
 ## Konfigurationsdatei im Original-ServerLauncher-Stil (Konsolenzeilen) für den dedizierten Server
 static func config_text(c: Dictionary) -> String:
 	var lines: PackedStringArray = ["// Dangerous Hidden 2 – dedizierter Server (Schlüsselwörter wie HD2DS)",
 		"sessionname \"%s\"" % String(c.get("name", "")),
-		"style %s" % ["deathmatch", "teamdeathmatch", "occupation", "objectives"][clampi(int(c.get("mode", 0)), 0, 3)]]
+		"style %s" % ["deathmatch", "teamdeathmatch", "occupation", "objectives", "cooperative"][clampi(int(c.get("mode", 0)), 0, 4)]]
 	for m in c.get("map_list", [c.get("map", "")]):
 		lines.append("mapname %s" % m)
 	lines.append("domain %s" % ("internet" if bool(c.get("internet", false)) else "local"))

@@ -13,6 +13,8 @@
 #   -Missionen A,B        nur diese Missionen/Kartenordner exportieren (Export)
 #   -Schritte A,B         nur diese Schrittgruppen: Tabellen, Missionen, Mehrspieler, Allgemein (Export)
 #   -Neu                  bereits erledigte Schritte erneut ausführen (Export, Filme)
+#   -Probelauf            Export: nur die offenen Schritte auflisten, nichts ausführen
+#   Export-Status je Schritt in <Ziel>\.dh2_export_status.txt: fehlgeschlagene Schritte wiederholt der nächste Lauf
 #   -Stufe hd|4k          Hochskalieren: Stufe (Standard hd)
 #   -Geraet cpu|cuda      Hochskalieren: Rechengerät (Standard cpu)
 #   -Ordner <Ordner>      Hochskalieren/Installieren: nur diesen Texturordner bearbeiten
@@ -25,7 +27,7 @@ param(
   [string]$Orig = "", [string]$Ziel = "", [string]$Werkzeuge = "", [string]$Python = "",
   [string[]]$Missionen = @(), [string[]]$Schritte = @(), [switch]$Neu,
   [ValidateSet("hd", "4k")][string]$Stufe = "hd", [ValidateSet("cpu", "cuda")][string]$Geraet = "cpu",
-  [string]$Ordner = "", [int]$Threads = 0, [switch]$Ja
+  [string]$Ordner = "", [int]$Threads = 0, [switch]$Ja, [switch]$Probelauf
 )
 # "Continue": Meldungen externer Programme auf stderr (pip, torch, ffmpeg) sollen PS 5.1 nicht abbrechen;
 # Fehler werden über Exitcodes bzw. -ErrorAction Stop an den kritischen Stellen erkannt.
@@ -63,6 +65,7 @@ $MODELS = @(
   @{ Name = "realesr-general-x4v3.pth"; MB = 5; Sha = "8DC7EDB9AC80CCDC30C3A5DCA6616509367F05FBC184AD95B731F05BECE96292"
      Url = "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth" })
 $PY_EMBED_VER = "3.12.10"
+$PY_MODS = "numpy, PIL, pefile, capstone"   # capstone: fmt_fonts.py (B-024/O-003)
 
 # --- Ausgabe-Helfer -----------------------------------------------------------------------------------------------
 function Say([string]$t, [string]$c = "Gray") { Write-Host $t -ForegroundColor $c }
@@ -164,6 +167,19 @@ function Find-Installations {
   return $found
 }
 
+function Get-Edition([string]$p) {
+  # liest nur die Archivverzeichnisse; ohne Python/Skript keine Aussage (dann keine Warnung)
+  $py = Get-Py
+  $sp = Join-Path $Pipeline "hd2_edition.py"
+  if (-not $py -or -not (Test-Path $sp)) { return $null }
+  try {
+    $env:PYTHONIOENCODING = "utf-8"
+    $out = & $py -I $sp $p 2>$null | Select-Object -Last 1
+    if ($LASTEXITCODE -eq 0 -and $out) { return ($out | ConvertFrom-Json) }
+  } catch { }
+  return $null
+}
+
 function Test-Installation([string]$p, [switch]$Quiet) {
   $res = [pscustomobject]@{ Ok = $false; Fehlt = @(); Warnungen = @(); Version = "" }
   if (-not $p -or -not (Test-Path $p)) { $res.Fehlt = @("Ordner"); if (-not $Quiet) { Err "Ordner nicht gefunden: $p" }; return $res }
@@ -173,10 +189,13 @@ function Test-Installation([string]$p, [switch]$Quiet) {
   if (Test-Path $exe) {
     $len = (Get-Item $exe).Length
     if ($len -eq $DEV_EXE_SIZE) { $res.Version = "Original-CD-Version mit Patch (wie Entwicklungsstand)" }
-    else { $res.Version = "abweichende hd2.exe ($len Byte)"; $res.Warnungen += "Andere Spielversion als beim Entwickeln – einzelne Daten können fehlen oder abweichen." }
+    else { $res.Version = "abweichende hd2.exe ($len Byte)"; $res.Warnungen += "Andere hd2.exe als beim Entwickeln (z. B. Steam/GOG oder anderer Patch) – einzelne Daten können abweichen." }
   }
-  if ($p -match "(?i)courage|sabre|steamapps|gog") {
-    $res.Warnungen += "Vermutlich 'Courage Under Fire' / 'Sabre Squadron' (Steam/GOG). Entwickelt wurde mit der Original-CD-Version – Export wird versucht, Abweichungen sind möglich."
+  # B-024/O-004: Courage Under Fire / Sabre Squadron am Inhalt erkennen (zusätzliche Missionsordner in den
+  # Archiven, hd2_edition.py), nicht am Pfad – Steam/GOG-Installationen des Grundspiels bekommen keine Warnung.
+  $ed = Get-Edition $p
+  if ($ed -and $ed.edition -eq "cuf") {
+    $res.Warnungen += "Erweiterung erkannt ('Courage Under Fire' / 'Sabre Squadron', zusätzliche Missionen: $(@($ed.extra_missions) -join ', ')). Entwickelt wurde mit dem Grundspiel – der Export übernimmt dessen Missionen, Abweichungen sind möglich."
   }
   if (-not (Test-Path (Join-Path $p "patch.dta"))) { $res.Warnungen += "patch.dta fehlt – ohne offiziellen Patch fehlen Mehrspielerkarten/neuere Daten." }
   $res.Ok = $res.Fehlt.Count -eq 0
@@ -263,7 +282,7 @@ function Install-Requirements([string]$py, [string]$file, [string[]]$extra = @()
 }
 function Setup-Python {
   $py = Get-Py
-  if ($py -and (Test-PyModules $py "numpy, PIL, pefile")) { Ok "Python-Umgebung bereit: $py"; return $py }
+  if ($py -and (Test-PyModules $py $PY_MODS)) { Ok "Python-Umgebung bereit: $py"; return $py }
   if (-not $py) {
     Say "  Für den Export wird Python 3.10–3.13 benötigt. Es wird eine eigene Umgebung in $Werkzeuge angelegt."
     $sys = Find-SystemPython
@@ -305,7 +324,7 @@ function Setup-Python {
     }
   }
   Install-Requirements $py (Join-Path $PSScriptRoot "requirements.txt")
-  if (-not (Test-PyModules $py "numpy, PIL, pefile")) { throw "Pakete fehlen nach der Installation." }
+  if (-not (Test-PyModules $py $PY_MODS)) { throw "Pakete fehlen nach der Installation." }
   $Cfg.Python = $py; Save-Config
   Ok "Python-Umgebung bereit: $py"
   return $py
@@ -411,7 +430,8 @@ function General-Steps {
     @{ K = "hud"; T = "HUD"; S = "export_hud.py"; A = @() },
     @{ K = "menu"; T = "Menüs"; S = "_menu_export.py"; A = @() },
     @{ K = "menu_inv"; T = "Inventar-Bildschirm"; S = "_menu_export_ingame_inv.py"; A = @() },
-    @{ K = "menu_spec"; T = "Menü-Texte/Ablauf"; S = "_menu_spec.py"; A = @() })
+    @{ K = "menu_spec"; T = "Menü-Texte/Ablauf"; S = "_menu_spec.py"; A = @() },
+    @{ K = "fonts"; T = "Originalschriften"; S = "fmt_fonts.py"; A = @($Cfg.Orig, "$c\ui\fonts") })   # B-024/O-003
   if (Test-Path (Join-Path $Cfg.Orig "PlayersProfiles")) {
     $s += @{ K = "profiles"; T = "Spielerprofile (Übernahme)"; S = "fmt_profile.py"; A = @((Join-Path $Cfg.Orig "PlayersProfiles"), "$c\profiles_import.json") }
   }
@@ -422,11 +442,15 @@ function Action-Export {
   Title "Spieldaten exportieren"
   if (-not (Require-Orig)) { return }
   $script:Py = Get-Py
-  if (-not $script:Py -or -not (Test-PyModules $script:Py "numpy, PIL, pefile")) {
+  if (-not $script:Py -or -not (Test-PyModules $script:Py $PY_MODS)) {
     Warn "Python-Umgebung fehlt oder ist unvollständig."
     if (Ask "Jetzt einrichten (Menüpunkt 2)?" $true) { try { $script:Py = Setup-Python } catch { Err $_.Exception.Message; return } }
     if (-not $script:Py) { return }
   }
+  # Die Original-Installation wird nie beschrieben: Ziel darf nicht in ihr liegen
+  $oFull = [IO.Path]::GetFullPath($Cfg.Orig).TrimEnd('\') + '\'
+  $zFull = [IO.Path]::GetFullPath($Cfg.Ziel).TrimEnd('\') + '\'
+  if ($zFull.StartsWith($oFull, [StringComparison]::OrdinalIgnoreCase)) { Err "Ziel liegt in der Original-Installation ($($Cfg.Ziel)) – bitte einen anderen Ordner wählen (-Ziel)."; return }
   New-Item -ItemType Directory -Force $Cfg.Ziel, $LogDir | Out-Null
   $script:ExportLog = Join-Path $LogDir ("export_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
   $script:State = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -436,6 +460,7 @@ function Action-Export {
   $env:DH2_CACHE = $Cfg.Ziel
   $env:DH2_WAV_TABLES = Join-Path $Werkzeuge "wav_tables.json"
   $env:PYTHONIOENCODING = "utf-8"
+  $env:PYTHONUTF8 = "1"        # O-024: Pfade mit Umlauten/Leerzeichen
   Say "  Quelle (nur lesen): $($Cfg.Orig)"
   Say "  Ziel:               $($Cfg.Ziel)"
   Say "  Protokoll:          $script:ExportLog"
@@ -454,21 +479,36 @@ function Action-Export {
   foreach ($m in ($miss + $mp)) { $jobs.Add(@{ K = "mission:$m"; T = "Mission $m"; Steps = (Mission-Steps $m); M = $m }) }
   if ($gruppen -contains "Allgemein") { foreach ($g in General-Steps) { $jobs.Add(@{ K = "global:$($g.K)"; T = $g.T; Steps = @($g) }) } }
 
+  # O-023: fehlende Konverter vorab melden (statt nur "!! fehlt" im Protokoll)
+  $fehlt = @($jobs | ForEach-Object { $_.Steps } | ForEach-Object { $_.S } | Sort-Object -Unique | Where-Object { -not (Test-Path (Join-Path $Pipeline $_)) })
+  if ($fehlt.Count) { Warn "Konverter fehlen in ${Pipeline}: $($fehlt -join ', ') – diese Schritte scheitern und werden beim nächsten Lauf wiederholt." }
+  if ($Probelauf) {
+    Say "  PROBELAUF – es wird nichts ausgeführt. Offene Schritte:"
+    foreach ($j in $jobs) {
+      if (State-Has $j.K) { continue }
+      $n = 0
+      foreach ($st in $j.Steps) { $n++; if (-not (State-Has "$($j.K)#$($n):$($st.S)")) { Say ("    {0,-28} {1} {2}" -f $j.T, $st.S, (($st.A | ForEach-Object { "`"$_`"" }) -join ' ')) DarkGray } }
+    }
+    return
+  }
   $fehler = @(); $i = 0; $t0 = Get-Date
   foreach ($j in $jobs) {
     $i++
     $pct = [int](100 * ($i - 1) / [Math]::Max(1, $jobs.Count))
     Write-Progress -Activity "Spieldaten exportieren" -Status ("[{0}/{1}] {2}" -f $i, $jobs.Count, $j.T) -PercentComplete $pct
     if (State-Has $j.K) { Say ("  [{0,3}/{1}] {2,-34} bereits erledigt" -f $i, $jobs.Count, $j.T) DarkGray; continue }
-    $ts = Get-Date; $ok = $true; $bad = @()
+    $ts = Get-Date; $ok = $true; $bad = @(); $n = 0
     foreach ($st in $j.Steps) {
-      if (-not (Run-Py $j.T $st.S $st.A)) { $ok = $false; $bad += $st.S }
+      # B-024/O-001: Status je Schritt ("<job>#<nr>:<skript>"); erfolgreiche Schritte werden beim nächsten Lauf
+      # übersprungen, fehlgeschlagene wiederholt. Der Job selbst gilt erst als erledigt, wenn ALLE Schritte liefen.
+      $n++; $sk = "$($j.K)#$($n):$($st.S)"
+      if (State-Has $sk) { continue }
+      if (Run-Py $j.T $st.S $st.A) { State-Add $sk } else { $ok = $false; $bad += $st.S }
     }
-    # Mission gilt als exportiert, wenn das Level selbst (scene.glb) entstanden ist; Teilfehler werden gemeldet
     if ($j.M) { $okLevel = Test-Path (Join-Path $Cfg.Ziel "$($j.M.ToLower())\scene.glb") } else { $okLevel = $ok }
     $dt = [int]((Get-Date) - $ts).TotalSeconds
     if ($ok) { Say ("  [{0,3}/{1}] {2,-34} OK ({3} s)" -f $i, $jobs.Count, $j.T, $dt) Green; State-Add $j.K }
-    elseif ($okLevel) { Say ("  [{0,3}/{1}] {2,-34} teilweise ({3})" -f $i, $jobs.Count, $j.T, ($bad -join ', ')) Yellow; State-Add $j.K; $fehler += "$($j.T): $($bad -join ', ')" }
+    elseif ($okLevel) { Say ("  [{0,3}/{1}] {2,-34} teilweise ({3})" -f $i, $jobs.Count, $j.T, ($bad -join ', ')) Yellow; $fehler += "$($j.T): $($bad -join ', ')" }
     else { Say ("  [{0,3}/{1}] {2,-34} FEHLER ({3})" -f $i, $jobs.Count, $j.T, ($bad -join ', ')) Red; $fehler += "$($j.T): $($bad -join ', ')" }
   }
   Write-Progress -Activity "Spieldaten exportieren" -Completed
@@ -639,7 +679,7 @@ function Action-Status {
   if (Test-Path (Join-Path $Pipeline "convert_mission.py")) { Ok "Konverter: $Pipeline ($(@(Get-ChildItem $Pipeline -Filter *.py).Count) Skripte)" } else { Err "Konverter fehlen: $Pipeline" }
   $py = Get-Py
   if ($py) {
-    if (Test-PyModules $py "numpy, PIL, pefile") { Ok "Python (Export): $py" } else { Warn "Python vorhanden, Pakete fehlen: $py" }
+    if (Test-PyModules $py $PY_MODS) { Ok "Python (Export): $py" } else { Warn "Python vorhanden, Pakete fehlen: $py" }
     if (Test-PyModules $py "torch, spandrel") { Ok "Hochskalieren: PyTorch vorhanden" } else { Say "  [--]     Hochskalieren: PyTorch nicht installiert" DarkGray }
   } else { Warn "Python-Umgebung fehlt (Menüpunkt 2)." }
   $ff = Find-Ffmpeg
@@ -663,7 +703,11 @@ function Action-Status {
     $s = Dir-Stats (Join-Path $c $x[1])
     & $line $x[0] ($s.N -gt 0) ("{0,6} Dateien  {1}" -f $s.N, (Fmt-Size $s.B))
   }
-  foreach ($f in @("texts_german.json", "items.json", "sounds.json", "commands.json", "mp_maps.json", "missions_db.json", "roster.json")) {
+  # B-024/O-002: jede Sprachinstallation – mindestens eine texts_<sprache>.json
+  $tx = @(Get-ChildItem $c -Filter "texts_*.json" -File -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName.Substring(6) })
+  & $line "Originaltexte" ($tx.Count -gt 0) ($(if ($tx.Count) { $tx -join ', ' } else { "keine texts_*.json" }))
+  & $line "Originalschriften" (Test-Path (Join-Path $c "ui\fonts\fonts.json")) "ui\fonts\fonts.json"
+  foreach ($f in @("items.json", "sounds.json", "commands.json", "mp_maps.json", "missions_db.json", "roster.json")) {
     & $line $f (Test-Path (Join-Path $c $f)) ""
   }
   if ($Cfg.Orig -and (Test-Path (Join-Path $Cfg.Orig "Gamemovie"))) {
@@ -681,6 +725,16 @@ function Action-Status {
 function Action-Starten {
   $exe = @((Join-Path $Root "DangerousHidden2.exe"), (Join-Path $Root "build\DangerousHidden2.exe")) | Where-Object { Test-Path $_ } | Select-Object -First 1
   if (-not $exe) { Err "DangerousHidden2.exe nicht gefunden (erwartet in $Root)."; return }
+  # B-038: Spieldaten liegen als DangerousHidden2.pck neben der EXE (ältere Pakete: in der EXE eingebettet)
+  $dir = Split-Path $exe
+  $pck = Join-Path $dir "DangerousHidden2.pck"
+  $ver = Join-Path $dir "version.txt"
+  if (-not (Test-Path $pck)) {
+    if (Test-Path $ver) { Err "DangerousHidden2.pck fehlt neben der EXE ($dir) – EXE und .pck aus demselben Paket kopieren."; return }
+    Warn "Keine DangerousHidden2.pck gefunden – nur ältere Pakete mit eingebetteten Spieldaten starten so."
+  } elseif (Test-Path $ver) {
+    Say "  Version $((Get-Content $ver -TotalCount 1).Trim()) (EXE + .pck; das Spiel prüft beim Start, ob beide zusammenpassen)."
+  }
   if (-not (Test-Path (Join-Path $Cfg.Ziel "textures"))) { Warn "Es wurden noch keine Spieldaten exportiert – Originalinhalte fehlen dann." }
   Say "  Starte $exe …"
   Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe)

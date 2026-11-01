@@ -268,6 +268,8 @@ func _end_heal_anim() -> void:
 ## getarnten Soldaten auf Distanz nicht, solange er nicht kürzlich geschossen hat.
 var disguised := false
 var last_shot_time := -100.0
+## AP-6: Tarnwert 0…100 wie hd2.exe Mensch+0x16C (OrigDisguise, nur Originalmissionen offline). Anziehen → 100 [B 0x59D100].
+var disguise_value := 0.0
 
 
 ## figure: Original-Figur der neuen Uniform (z. B. OrigLevel.character_instance("ge01a")). Trägt der Soldat schon
@@ -275,6 +277,7 @@ var last_shot_time := -100.0
 ## alte samt Kamerapunkten, Hand-Dummy und Waffe); ohne neue Figur bleibt die bisherige Original-Figur.
 func put_on_uniform(color: Color, helmet: String, figure: Node3D = null) -> void:
 	disguised = true
+	disguise_value = 100.0
 	uniform_color = color
 	helmet_style = helmet
 	if model and is_instance_valid(model.orig_figure):
@@ -1591,6 +1594,8 @@ func apply_hit(amount: float, zone: StringName, attacker: Node, direction: Vecto
 	health -= amount
 	last_attacker = attacker
 	set_meta("_rd_amount", amount)       # B-016: Ragdoll-Impuls nach Schaden
+	set_meta("_gore_zone", String(zone)) # B-037: Zone des letzten Treffers (Gore.decide)
+	set_meta("_gore_ms", Time.get_ticks_msec())
 	damaged.emit(amount, zone)
 	Events.soldier_damaged.emit(self, amount, zone, attacker)
 	if health <= 0.0:
@@ -1626,6 +1631,11 @@ func die(attacker: Node = null, direction := Vector3.ZERO) -> void:
 	if direction.length() < 0.01 and attacker is Node3D and is_instance_valid(attacker) and attacker != self:
 		direction = global_position - (attacker as Node3D).global_position
 	model.play_death(direction)
+	# B-037 EXTRA GORE: Abtrennung entscheidet, wer Schaden rechnet (SP/Server); Clients erhalten die Maske über Net._killed
+	var gmask := Gore.decide(self, direction) if (not Net.is_online or Net.is_authority()) else int(get_meta("_gore_net", 0))
+	set_meta("gore_mask", gmask)
+	if gmask != 0:
+		Gore.apply(self, gmask, direction, true)
 	# Todesschrei (speech.set Ereignis 115 „Death“) und Körperfall (Kat. 0/44 „Uni Bodyfall“, nach 0,7 s = Annahme)
 	set_meta("_speech_until", -1.0)
 	OrigAudio.speak_event(self, OrigAudio.EV_DEATH)
@@ -1683,6 +1693,8 @@ func serialize() -> Dictionary:
 		var cp: PackedFloat32Array = model.corpse_pose()
 		if not cp.is_empty():
 			d["corpse_pose"] = Array(cp)       # B-016: Ragdoll-Endpose
+	if not alive and int(get_meta("gore_mask", 0)) != 0:
+		d["gore"] = int(get_meta("gore_mask", 0))   # B-037: abgetrennte Teile (Stümpfe beim Laden)
 	return d
 
 
@@ -1692,6 +1704,7 @@ func _serialize_base(ws: Array) -> Dictionary:
 		"yaw": look_yaw, "health": health, "stamina": stamina, "stance": stance,
 		"alive": alive, "slot": current_slot, "weapons": ws, "medkits": medkits,
 		"disguised": disguised, "uniform": uniform_color.to_html(), "helmet": helmet_style,
+		"disguise_value": disguise_value,
 	}
 
 
@@ -1704,6 +1717,7 @@ func deserialize(d: Dictionary) -> void:
 	medkits = int(d.get("medkits", medkits))
 	if d.get("disguised", false):
 		put_on_uniform(Color.html(d.get("uniform", "5a5e54")), d.get("helmet", "stahlhelm"))
+		disguise_value = float(d.get("disguise_value", 100.0))
 	weapons.clear()
 	for wd in d["weapons"]:
 		weapons.append(Weapon.deserialize(wd) if wd != null else null)
@@ -1722,3 +1736,6 @@ func deserialize(d: Dictionary) -> void:
 		model.set_dead_instant()
 		if d.has("corpse_pose") and model.has_method("apply_corpse_pose"):
 			model.apply_corpse_pose(PackedFloat32Array(d["corpse_pose"]))
+		if int(d.get("gore", 0)) != 0:
+			set_meta("gore_mask", int(d["gore"]))
+			Gore.apply(self, int(d["gore"]), Vector3.ZERO, false)   # B-037: nur Stümpfe, keine losen Teile

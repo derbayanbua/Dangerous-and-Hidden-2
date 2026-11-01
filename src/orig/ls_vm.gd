@@ -34,6 +34,12 @@ var whenever_active := {}
 var events: Array[String] = []
 var trace := false
 var paused := false             ## Akteur hat sich ergeben/ist gefangen: Skript ruht (bis OnDeath)
+## Prüftakt je Whenever (SetWheneverTime, AP-5): Name -> ms; fehlend = jeder Tick [E], vorhanden (auch 0) = 500-ms-Raster
+## (_check_whenevers); Spielstand (AP-1) sichert alle drei Felder bereits (Original 0x4147D0: je Whenever Periode, verstrichene Zeit, an/aus).
+var whenever_interval_ms := {}
+var whenever_elapsed_ms := {}   ## Name -> seit der letzten Prüfung verstrichene Zeit (ms) (AP-5; Original 0x4147D0)
+var whenever_tick_ms := 0       ## VM-weiter Whenever-Takt (ms, 0 = jeder Tick), Original 0x4147D0 [B] (AP-5)
+var block_pc := -1              ## Index des blockierenden Befehls (wait_until) – Spielstand: nach dem Laden neu anstoßen
 
 
 func _init(compiled: LsCompiler, owner: Node3D, runtime, script_name := "") -> void:
@@ -98,11 +104,7 @@ func tick(delta: float) -> void:
 	if not atomic and not events.is_empty():
 		_enter(code.handlers[events.pop_front()])
 	elif not atomic and not whenevers_disabled and not death_revived:
-		for w in code.whenevers:
-			if whenever_active.get(w, false) and _truthy(_eval(code.whenevers[w]["cond"])):
-				whenever_active[w] = false
-				_enter(code.whenevers[w]["pc"])
-				break
+		_check_whenevers(delta)
 	if wait > 0.0:
 		wait -= delta
 		if wait > 0.0:
@@ -116,6 +118,93 @@ func tick(delta: float) -> void:
 	if ended:
 		return
 	_run()
+
+
+## Whenever-Takt (AP-5, hd2.exe 0x4167B0 [B]): VM-Akku `whenever_tick_ms` += dt; solange > 500: für jede aktive Whenever
+## (von hinten nach vorn) elapsed += 500, erst bei elapsed > Periode: elapsed −= Periode und Bedingung prüfen; trifft sie
+## zu → Sprung, Whenever deaktiviert sich (nur SetWhenever aktiviert wieder), laufendes Delay wird abgebrochen (_enter).
+## Standardperiode beim Anlegen im Original offen [E]: Whenever OHNE SetWheneverTime (kein Eintrag in
+## whenever_interval_ms) werden wie bisher jeden Tick geprüft – erhält das Verhalten der 24 Teile. Mit SetWheneverTime
+## (auch 0) gilt das 500-ms-Raster. Pro Tick löst höchstens eine Whenever aus (bisheriges Verhalten).
+const WHENEVER_SLICE_MS := 500.0
+
+
+## B-039: Raster für ALLE Whenever (Original-Schleife 0x4167B0 prüft nur in 500-ms-Scheiben [B]); ohne SetWheneverTime
+## gilt Periode 0 = jede Scheibe [E: Standardperiode offen]. Nur mit `--whenever_raster=1` (Messung/Option); Standard
+## bleibt die AP-5-Festlegung „ohne SetWheneverTime jeden Tick“ (Abstimmung Koordinator 31.10.2026).
+static var raster_all := -1
+
+
+func _check_whenevers(delta: float) -> void:
+	if raster_all < 0:
+		# Standard AUS (AP-5-Festlegung [E], test_orig_cmds): nur mit --whenever_raster=1 alle Whenever im Raster
+		raster_all = 1 if PerfTuning.b039() and String(Game.cli.get("whenever_raster", "0")) == "1" else 0
+	if raster_all == 1:
+		_check_whenevers_raster(delta)
+		return
+	var fired := ""
+	if not whenever_interval_ms.is_empty():
+		whenever_tick_ms += int(round(delta * 1000.0))
+		var keys: Array = code.whenevers.keys()
+		while whenever_tick_ms > WHENEVER_SLICE_MS:
+			whenever_tick_ms -= int(WHENEVER_SLICE_MS)
+			if fired != "":
+				continue
+			for i in range(keys.size() - 1, -1, -1):
+				var w: String = keys[i]
+				if not whenever_interval_ms.has(w) or not whenever_active.get(w, false):
+					continue
+				var el: float = float(whenever_elapsed_ms.get(w, 0.0)) + WHENEVER_SLICE_MS
+				var per := float(whenever_interval_ms[w])
+				if el > per:
+					el -= per
+					whenever_elapsed_ms[w] = el
+					if _truthy(_eval(code.whenevers[w]["cond"])):
+						fired = w
+						break
+				else:
+					whenever_elapsed_ms[w] = el
+	if fired == "":
+		for w in code.whenevers:
+			if whenever_interval_ms.has(w):
+				continue
+			if whenever_active.get(w, false) and _truthy(_eval(code.whenevers[w]["cond"])):
+				fired = w
+				break
+	if fired != "":
+		whenever_active[fired] = false
+		_enter(code.whenevers[fired]["pc"])
+
+
+func _check_whenevers_raster(delta: float) -> void:
+	if code.whenevers.is_empty():
+		return
+	whenever_tick_ms += int(round(delta * 1000.0))
+	if whenever_tick_ms <= WHENEVER_SLICE_MS:
+		return
+	var fired := ""
+	var keys: Array = code.whenevers.keys()
+	while whenever_tick_ms > WHENEVER_SLICE_MS:
+		whenever_tick_ms -= int(WHENEVER_SLICE_MS)
+		if fired != "":
+			continue
+		for i in range(keys.size() - 1, -1, -1):
+			var w: String = keys[i]
+			if not whenever_active.get(w, false):
+				continue
+			var el: float = float(whenever_elapsed_ms.get(w, 0.0)) + WHENEVER_SLICE_MS
+			var per := float(whenever_interval_ms.get(w, 0))
+			if el > per:
+				el -= per
+				whenever_elapsed_ms[w] = el
+				if _truthy(_eval(code.whenevers[w]["cond"])):
+					fired = w
+					break
+			else:
+				whenever_elapsed_ms[w] = el
+	if fired != "":
+		whenever_active[fired] = false
+		_enter(code.whenevers[fired]["pc"])
 
 
 func _enter(target_pc: int) -> void:
@@ -219,6 +308,7 @@ func _call(fname: String, args: Array) -> void:
 			wait = r["wait"]
 		if r.has("wait_until"):
 			wait_until = r["wait_until"]
+			block_pc = pc - 1     # _call kommt nur aus der Anweisung "call" (pc zeigt schon dahinter)
 			wait_timeout = r.get("timeout", 60.0)
 
 
@@ -287,6 +377,81 @@ static func _truthy(v) -> bool:
 	if v is bool:
 		return v
 	return v != null
+
+
+# --- Spielstand (B-030/AP-1) ------------------------------------------------------------
+## Zustand als JSON-taugliches Dictionary. `enc` wandelt Skriptwerte (Frames!) um (LsRuntime.save_value).
+## Ein blockierender Befehl (HUMAN_Move …, wait_until = Callable) ist nicht speicherbar: gespeichert wird sein
+## Anweisungsindex, nach dem Laden wird er erneut ausgeführt (AP-1 Punkt 4).
+func save_state(enc: Callable) -> Dictionary:
+	var v := {}
+	for k in vars:
+		v[k] = enc.call(vars[k])
+	var st: Array = []
+	for s in stack:
+		st.append([s[0], s[1], (s[2] as Callable).is_valid() if s[2] is Callable else false, s[3], s[4] if s.size() > 4 else 0.0])
+	return {
+		"script": name, "pc": pc, "started": _started, "ended": ended, "terminated": terminated,
+		"death_revived": death_revived, "atomic": atomic, "paused": paused,
+		"wait": wait, "blocking": wait_until.is_valid(), "block_pc": block_pc, "wait_timeout": wait_timeout,
+		"gosub": Array(gosub_stack), "stack": st, "events": Array(events), "vars": v,
+		"signals": signals.keys().filter(func(k): return signals[k]), "signals_disabled": signals_disabled,
+		"disabled_signal_ids": disabled_signal_ids.keys(), "whenevers_disabled": whenevers_disabled,
+		"whenever_active": whenever_active.duplicate(),
+		"whenever_interval_ms": whenever_interval_ms.duplicate(), "whenever_elapsed_ms": whenever_elapsed_ms.duplicate(),
+		"whenever_tick_ms": whenever_tick_ms,
+	}
+
+
+func load_state(d: Dictionary, dec: Callable) -> void:
+	vars.clear()
+	var v: Dictionary = d.get("vars", {})
+	for k in v:
+		vars[String(k)] = dec.call(v[k])
+	pc = int(d.get("pc", 0))
+	_started = bool(d.get("started", true))
+	ended = bool(d.get("ended", false))
+	terminated = bool(d.get("terminated", false))
+	death_revived = bool(d.get("death_revived", false))
+	atomic = bool(d.get("atomic", false))
+	paused = bool(d.get("paused", false))
+	wait = float(d.get("wait", 0.0))
+	wait_timeout = float(d.get("wait_timeout", 0.0))
+	wait_until = Callable()
+	block_pc = int(d.get("block_pc", -1))
+	if bool(d.get("blocking", false)) and block_pc >= 0:
+		pc = block_pc      # blockierenden Befehl erneut ausführen (Ziel/Argumente stehen im Skript)
+		wait = 0.0
+	gosub_stack.clear()
+	for g in d.get("gosub", []):
+		gosub_stack.append(int(g))
+	stack.clear()
+	for s in d.get("stack", []):
+		# Rücksprung mit blockierendem Befehl: ohne Callable fortsetzen (Stapel wird derzeit nirgends befüllt)
+		stack.append([int(s[0]), float(s[1]), Callable(), bool(s[3]), float(s[4])])
+	events.clear()
+	for e in d.get("events", []):
+		events.append(String(e))
+	signals.clear()
+	for n in d.get("signals", []):
+		signals[int(n)] = true
+	signals_disabled = bool(d.get("signals_disabled", false))
+	disabled_signal_ids.clear()
+	for n in d.get("disabled_signal_ids", []):
+		disabled_signal_ids[int(n)] = true
+	whenevers_disabled = bool(d.get("whenevers_disabled", false))
+	var wa: Dictionary = d.get("whenever_active", {})
+	for w in wa:
+		whenever_active[String(w)] = bool(wa[w])
+	whenever_interval_ms.clear()
+	var wi: Dictionary = d.get("whenever_interval_ms", {})
+	for w in wi:
+		whenever_interval_ms[String(w)] = int(wi[w])
+	whenever_elapsed_ms.clear()
+	var wn: Dictionary = d.get("whenever_elapsed_ms", {})
+	for w in wn:
+		whenever_elapsed_ms[String(w)] = float(wn[w])
+	whenever_tick_ms = int(d.get("whenever_tick_ms", 0))
 
 
 static func _same(a, b) -> bool:

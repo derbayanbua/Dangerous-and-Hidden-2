@@ -201,6 +201,7 @@ func _build() -> bool:
 		build_dev = maxf(build_dev, pb.global_position.distance_to(sk.global_transform * sk.get_bone_global_rest(sk.find_bone(bn)).origin))
 	_restore_local_poses(saved)
 	sk.force_update_all_bone_transforms()
+	Gore.after_ragdoll_build(self)        # B-037: Gore-Maske hinter den Simulator, abgetrennte Körper ohne Kollision
 	return bodies.size() >= 6
 
 
@@ -221,7 +222,7 @@ func _restore_local_poses(saved: Array) -> void:
 ## Andere Skelett-Modifier (Anschlag, IK, Stellungs-IK) abschalten – die Animation läuft weiter (Führungsphase)
 func _quiet_modifiers() -> void:
 	for c in sk.get_children():
-		if c is SkeletonModifier3D and c != sim:
+		if c is SkeletonModifier3D and c != sim and not c.has_meta("gore"):
 			(c as SkeletonModifier3D).active = false
 
 
@@ -235,7 +236,7 @@ func _quiet_skeleton() -> void:
 		for ap in model.find_children("*", "AnimationPlayer", true, false):
 			(ap as AnimationPlayer).active = false
 	for c in sk.get_children():
-		if c is SkeletonModifier3D and c != sim:
+		if c is SkeletonModifier3D and c != sim and not c.has_meta("gore"):   # B-037: Gore-Maske bleibt aktiv
 			(c as SkeletonModifier3D).active = false
 
 

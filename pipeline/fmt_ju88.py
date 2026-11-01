@@ -333,7 +333,8 @@ def actor_params(inter):
 
 def main():
     out_path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(MDIR, "ju88.json")
-    texts = json.load(open(os.path.join(CACHE, "texts_german.json"), encoding="utf-8"))
+    import hd2_texts  # B-024/O-002: vorhandene Sprache statt fest texts_german.json
+    texts = hd2_texts.load_texts(CACHE)
     items = json.load(open(os.path.join(CACHE, "items.json"), encoding="utf-8"))
     weapons = {w["id"]: w for w in items.get("weapons", [])}
     inter = json.load(open(os.path.join(MDIR, "interactive.json"), encoding="utf-8"))

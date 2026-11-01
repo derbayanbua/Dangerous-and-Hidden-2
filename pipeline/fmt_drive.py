@@ -157,6 +157,8 @@ def build(mission):
         },
         "sections": len(secs),
         "vehicle": network_json(secs[1]) if len(secs) > 1 else None,
+        # B-033: Abschnitt 1 = Fußwegenetz (Welt+0x54 = Checkpoint-Netz, CheckpointJoin/Separate) als Grundkanten
+        "walk": network_json(secs[0]) if secs else None,
     }
     return res
 

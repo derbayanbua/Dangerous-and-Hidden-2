@@ -223,6 +223,8 @@ func _run() -> void:
 	else:
 		check(true, "(kein Fahrzeug in der Mission – Fahrzeugfall übersprungen)")
 
+	await _gore_checks(m, s, es, fwd, side)
+
 	# --- Obergrenze gleichzeitig simulierter Ragdolls ---
 	var rest: Array = []
 	for i in Ragdoll.MAX_ACTIVE + 2:
@@ -246,6 +248,96 @@ func _run() -> void:
 
 
 var _tpl: Node3D
+
+
+## B-037 EXTRA GORE (src/combat/gore.gd) an der Ragdoll: Kopfschuss trennt den Kopf ab (loses Teil, Stumpf, Helm),
+## Gliedtreffer, Pistole trennt nichts, Explosion mehrere Teile, Spielstand, Obergrenze, Einfrieren, Stufe MEHR ohne Gore.
+func _gore_checks(_m: Mission, s: Soldier, es: Array, fwd: Vector3, _side: Vector3) -> void:
+	var keep_lv: int = Settings.blood_level
+	check(keep_lv == 2, "Blutstufe MEHR ist Standard (EXTRA GORE aus)", str(keep_lv))
+	Settings.blood_level = Settings.BLOOD_GORE
+	check(Settings.blood_level == 3 and Settings.BLOOD_NAMES[3] == "EXTRA GORE", "Blutstufe EXTRA GORE wählbar")
+	check(Gore.sanitize_mask(Gore.bit("h") | Gore.bit("i") | (1 << 20)) == Gore.bit("h"), "Netzmaske geprüft (ganzer Arm schließt Unterarm ein, fremde Bits weg)")
+	Gore.force_roll = 0.0
+	# Kopfschuss Gewehr → Kopf ab
+	var e6: Soldier = es[6]
+	var had_helmet := Helmet.head_item(e6) >= 0
+	e6.health = 1.0
+	var zf := _zone(e6, "f")
+	var tgt: Vector3 = zf.global_position if zf else e6.global_position + Vector3.UP * 1.6
+	var org := tgt - fwd * 6.0
+	var p0 := Gore.stats["pieces"] as int
+	Ballistics.fire(s, org, (tgt - org).normalized(), WeaponDB.get_weapon(&"kar98k"), [] as Array[RID], s.team)
+	await frames(4)
+	check(not e6.alive and String(e6.get_meta("_gore_zone", "")) == "head", "Kopfschuss tötet", String(e6.get_meta("_gore_zone", "")))
+	check(int(e6.get_meta("gore_mask", 0)) == Gore.bit("f"), "Gewehr-Kopfschuss trennt den Kopf ab", str(e6.get_meta("gore_mask", 0)))
+	var sk6: Skeleton3D = e6.model.ragdoll.sk
+	var gm := Gore.mask_node(sk6)
+	check(gm != null and gm.bones.has(sk6.find_bone("f")), "Kopf an der Figur ausgeblendet (GoreMask)")
+	check(int(Gore.stats["pieces"]) > p0 and Gore.piece_count() >= 1, "Kopf als loses Teil (RigidBody)")
+	var piece: RigidBody3D = Gore.pieces().back() if Gore.piece_count() > 0 else null
+	var piece_ok := piece != null and piece.find_child("PieceSkeleton", true, false) != null \
+		and not piece.find_children("*", "MeshInstance3D", true, false).is_empty()
+	check(piece_ok, "Loses Teil mit Skelettkopie und Figurenmesh")
+	check(sk6.find_child("GoreCap", true, false) != null, "Stumpf mit Wundkappe")
+	if had_helmet:
+		check(Helmet.head_item(e6) < 0, "Helm fällt bei abgetrenntem Kopf ab")
+	var pp0: Vector3 = piece.global_position if piece else Vector3.ZERO
+	await seconds(0.6)
+	check(piece != null and is_instance_valid(piece) and piece.global_position.distance_to(pp0) > 0.2, "Loses Teil fliegt (Impuls)")
+	var rbf: PhysicalBone3D = e6.model.ragdoll.bodies.get("f")
+	check(rbf == null or rbf.collision_layer == 0, "Ragdoll-Körper des Kopfs ohne Kollision")
+	check(sk6.get_bone_global_pose(sk6.find_bone("f")).basis.get_scale().length() < 0.01, "Kopfknochen nach Ragdoll-Schritten skaliert ~0")
+	# Gliedtreffer (Metas wie Ballistik) → Unterschenkel
+	var e7: Soldier = es[7]
+	e7.set_meta("_gore_zone", "leg")
+	e7.set_meta("_gore_ms", Time.get_ticks_msec())
+	e7.set_meta("_rd_hit", [e7.global_position, "p"])
+	e7.set_meta("_rd_hit_ms", Time.get_ticks_msec())
+	e7.set_meta("_gore_w", WeaponDB.get_weapon(&"kar98k"))
+	e7.set_meta("_rd_amount", 16.0)
+	e7.die(s, fwd)
+	await frames(2)
+	check(int(e7.get_meta("gore_mask", 0)) == Gore.bit("p"), "Starker Beintreffer trennt den Unterschenkel ab", str(e7.get_meta("gore_mask", 0)))
+	# Pistole am Kopf: nichts
+	var e8: Soldier = es[8]
+	e8.set_meta("_gore_zone", "head")
+	e8.set_meta("_gore_ms", Time.get_ticks_msec())
+	e8.set_meta("_rd_hit_ms", Time.get_ticks_msec())
+	e8.set_meta("_gore_w", WeaponDB.get_weapon(&"colt"))
+	check(Gore.decide(e8) == 0, "Pistolen-Kopftreffer trennt nichts ab")
+	# Explosion nah → mehrere Teile
+	var boom := e8.global_position + Vector3.UP * 0.5 - fwd * 0.6
+	e8.remove_meta("_rd_hit_ms")
+	Effects.explosion(boom, 6.0)
+	e8.apply_hit(500.0, &"torso", s, fwd)
+	await frames(3)
+	var em := int(e8.get_meta("gore_mask", 0))
+	check(Gore.mask_bones(em).size() >= 2, "Explosion aus der Nähe trennt mehrere Teile ab", str(Gore.mask_bones(em)))
+	Gore.force_roll = -1.0
+	check(Gore.piece_count() <= Gore.MAX_PIECES, "Höchstens %d lose Teile" % Gore.MAX_PIECES, str(Gore.piece_count()))
+	for i in Gore.MAX_PIECES + 3:
+		Gore._spawn_piece(e6, sk6, sk6.find_bone("i"), fwd)
+	check(Gore.piece_count() <= Gore.MAX_PIECES, "Obergrenze: älteste Teile verschwinden", "%d, entfernt %d" % [Gore.piece_count(), Gore.stats["removed"]])
+	# Spielstand: Maske gespeichert, beim Laden nur Stümpfe
+	var e9: Soldier = es[9]
+	var save := e6.serialize()
+	check(int(save.get("gore", 0)) == Gore.bit("f"), "Spielstand enthält abgetrennte Teile")
+	var pc := int(Gore.stats["pieces"])
+	e9.deserialize(save)
+	await frames(2)
+	var gm9 := Gore.mask_node(e9.model.ragdoll.sk)
+	check(gm9 != null and gm9.bones.has(e9.model.ragdoll.sk.find_bone("f")) and int(Gore.stats["pieces"]) == pc,
+		"Laden: Kopf konsistent abgetrennt (ohne neue lose Teile)")
+	await seconds(Gore.FREEZE_S)
+	check(piece == null or not is_instance_valid(piece) or piece.freeze, "Lose Teile frieren nach Ablauf ein")
+	# Stufe MEHR: keine Darstellung
+	Settings.blood_level = 2
+	var e4: Soldier = es[4]
+	Gore.apply(e4, Gore.bit("h"), fwd, true)
+	check(Gore.mask_node(e4.model.ragdoll.sk) == null, "Stufe MEHR: keine Abtrennung sichtbar")
+	print("Gore-Statistik: ", Gore.stats)
+	Settings.blood_level = keep_lv
 
 
 func _ground(p: Vector3) -> Vector3:

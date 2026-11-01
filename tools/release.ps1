@@ -25,6 +25,11 @@ Get-ChildItem $tools -File -Filter *.py | Where-Object { -not $_.Name.StartsWith
 # Menue-/HUD-Export wird vom Nutzer-Werkzeug (tools\user\hd2_menu.ps1) gebraucht – diese _menu_*-Skripte mitnehmen
 $menuPy = @("_menu_4ds.py", "_menu_layout.py", "_menu_export.py", "_menu_export_ingame_inv.py", "_menu_spec.py")
 foreach ($f in $menuPy) { Copy-Item (Join-Path $tools $f) $pipe -Force }
+# B-024: vom Nutzer-Export zusätzlich gebraucht (Originalschriften, Sprachwahl der Texte, Ausgabe-Erkennung) –
+# werden über die *.py-Regel oben kopiert; hier sichergestellt, dass sie nicht fehlen
+foreach ($f in @("fmt_fonts.py", "hd2_texts.py", "hd2_edition.py")) {
+  if (-not (Test-Path (Join-Path $pipe $f))) { throw "Pipeline unvollständig: $f fehlt in $tools" }
+}
 
 # Version in project.godot
 $pg = [IO.File]::ReadAllText("$proj\project.godot")

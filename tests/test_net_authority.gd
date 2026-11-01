@@ -78,6 +78,7 @@ func _run() -> void:
 	var host_hp := me.health
 	var slot0 := puppet.current_slot
 	var pp0 := puppet.global_position
+	var gen0 := int(Net._gen.get(cid, 0))
 	check(await _wait(func(): return _chat("MANIP_DONE"), 300.0), "Client meldet: Manipulationen gesendet")
 	await get_tree().create_timer(1.0).timeout
 	var kinds := {}
@@ -110,6 +111,7 @@ func _run() -> void:
 	check(is_instance_valid(puppet) and puppet.current_slot == slot0 and puppet.current_slot >= 0, "F-009 negativer Waffenplatz ignoriert")
 	check(has_why.call("register", "doppelte"), "F-007 doppelte Anmeldung verworfen")
 	check(Net.players.size() == 2 and String(Net.players[cid]["name"]) == "Gast", "F-007 Spielerdaten unverändert", str(Net.players.get(cid)))
+	await _b023_checks(cid, puppet, gen0, has_why)
 	# Ergebnisse des Clients
 	t0 = Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t0 < 120000 and not FileAccess.file_exists(RESULT_A):
@@ -121,6 +123,71 @@ func _run() -> void:
 	car.leave(me)
 	Net.leave(false)
 	_finish()
+
+
+## B-023 / M-028: Negativfälle M-001…M-008 (Client-Manipulationen aus test_net_authority_client + Serverbefehle direkt)
+func _b023_checks(cid: int, puppet: Soldier, gen0: int, has_why: Callable) -> void:
+	# M-001
+	check(has_why.call("inv_req", "ignoriert"), "M-001 Client-Munitionsstand in _inv_req verworfen")
+	var pumped := false
+	if is_instance_valid(puppet):
+		for w in puppet.weapons:
+			if w and (w.in_mag >= 999 or w.reserve >= 999):
+				pumped = true
+	check(not pumped, "M-001 Server-Munition nicht vom Client aufgefüllt")
+	check(is_instance_valid(puppet) and puppet.medkits < 99, "M-001 Verbandskästen nicht übernommen")
+	# M-002
+	check(has_why.call("client_ready", "wiederholt"), "M-002 wiederholtes _client_ready verworfen")
+	check(int(Net._gen.get(cid, 0)) == gen0 and Net._soldiers.get(cid) == puppet, "M-002 kein Neu-Spawn (Generation unverändert)",
+		"%d -> %d" % [gen0, int(Net._gen.get(cid, 0))])
+	# M-003 (zweite Verbindung des Client-Prozesses ohne Anmeldung)
+	var guest := func(kind: String, part: String) -> bool:
+		return Net.rejects.any(func(r): return int(r["peer"]) != cid and int(r["peer"]) > 1 and String(r["kind"]) == kind \
+			and String(r["why"]).contains(part))
+	check(guest.call("client_ready", "nicht angemeldet"), "M-003 _client_ready ohne Anmeldung verworfen")
+	check(guest.call("chat", "nicht angemeldet"), "M-003 Chat ohne Anmeldung verworfen")
+	check(guest.call("peer", "getrennt"), "M-003 Peer ohne Anmeldung nach Zeitlimit getrennt")
+	check(not _chat_any("GAST_OHNE_ANMELDUNG"), "M-003 Chat des Gastes nicht verteilt")
+	check(Net.players.size() == 2, "M-003 kein Spieler für den Gast angelegt", str(Net.players.keys()))
+	# M-004
+	check(has_why.call("adminlogin", "falsches Passwort"), "M-004 Fehlversuche protokolliert (NET-AUTH)")
+	check(has_why.call("adminlogin", "gesperrt"), "M-004 Admin-Login nach Fehlversuchen gesperrt")
+	check(not bool(Net.players[cid].get("admin", false)), "M-004 kein Admin-Recht erlangt")
+	# M-006
+	check(has_why.call("voice", "Größe") or has_why.call("voice", "Voice am Server aus"), "M-006 übergroßes Sprachpaket verworfen")
+	check(has_why.call("voice", "Rate") or has_why.call("voice", "Voice am Server aus"), "M-006 Sprachpaket-Flut gedrosselt",
+		"verworfen %d" % Net.voice.dropped)
+	# M-005 (Serverseite)
+	check(Net.query_dropped > 0, "M-005 Abfrage-Flut serverseitig verworfen", str(Net.query_dropped))
+	check(Net.query_reply("x", 13).size() <= 39, "M-005 Antwort auf 13-Byte-Anfrage ≤ 39 Byte")
+	check(Net.query_reply("q".repeat(500), 2000).size() <= 6000 and String(JSON.parse_string(
+		Net.query_reply("q".repeat(500), 2000).get_string_from_utf8()).get("qid", "")).length() <= Net.QUERY_QID_MAX, "M-005 qid gekürzt")
+	# M-007/M-008: Admin aus dem Netz (Recht testweise gesetzt): exec nur im Konfigurationsordner, Rekursion begrenzt, kein quit
+	var dir := ProjectSettings.globalize_path("user://test_b023_exec")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var f := FileAccess.open(dir.path_join("self.cfg"), FileAccess.WRITE)
+	f.store_string("exec self.cfg\n")
+	f.close()
+	Net.exec_dir_override = dir
+	Net.players[cid]["admin"] = true
+	var r1 := Net.server_command("exec ../../project.godot", cid)
+	check(r1.contains("only file names") and has_why.call("exec", "unzulässiger Pfad"), "M-007 exec mit Pfad/„..“ abgelehnt", r1)
+	var r2 := Net.server_command("exec " + ProjectSettings.globalize_path("res://project.godot"), cid)
+	check(r2.contains("only file names"), "M-007 exec mit absolutem Pfad abgelehnt", r2.substr(0, 80))
+	var r3 := Net.server_command("exec self.cfg", cid)
+	check(has_why.call("exec", "Verschachtelung") and Net._exec_depth == 0, "M-007 rekursives exec begrenzt (kein Absturz)", r3.substr(0, 80))
+	var r4 := Net.server_command("quit", cid)
+	check(r4.contains("only allowed") and Net.is_online, "M-008 quit eines Netz-Admins abgelehnt", r4)
+	var r5 := Net.server_command("quit", 1)
+	check(r5.contains("only allowed") and Net.is_online, "M-008 quit auf nicht dediziertem Host abgelehnt", r5)
+	Net.players[cid]["admin"] = false
+	Net.exec_dir_override = ""
+	# Bots/Host weiter im Spiel
+	check(Net.is_online and Game.current_mission() != null, "Server läuft nach allen Negativfällen weiter")
+
+
+func _chat_any(text: String) -> bool:
+	return Net.chat_log.any(func(e): return String(e["text"]) == text)
 
 
 func _chat(text: String) -> bool:

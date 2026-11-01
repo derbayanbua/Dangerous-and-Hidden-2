@@ -124,6 +124,31 @@ func reset_animation(target: Node3D, channel: int) -> void:
 	_release_if_idle(target)
 
 
+## B-028/O-008: Länge einer Animation in Sekunden (letztes Bild / 25 Bilder/s), -1 = unbekannt
+func anim_length(anim_name: String) -> float:
+	var d = load_anim(anim_name)
+	return float(d.get("last_frame", 0)) / FPS if d is Dictionary else -1.0
+
+
+## Spielstand: laufende Animationen des Ziels sofort in die Endlage (letztes Bild) setzen
+func finish_now(target: Node3D) -> void:
+	for tr in _tracks:
+		if tr["target"] == target and not tr.get("loop", false):
+			tr["t"] = float(tr["data"].get("last_frame", 0)) / FPS + 1.0
+			_apply(tr)
+
+
+## Kameraanimationen: {"active": laufende Anzahl, "remaining": längste Restzeit in s}
+func camera_state() -> Dictionary:
+	var act := 0
+	var rem := 0.0
+	for tr in _tracks:
+		if tr["camera"] and not tr["done"] and is_instance_valid(tr["target"]):
+			act += 1
+			rem = maxf(rem, float(tr["data"].get("last_frame", 0)) / FPS - float(tr["t"]))
+	return {"active": act, "remaining": rem}
+
+
 func is_playing(target: Node3D) -> bool:
 	for tr in _tracks:
 		if tr["target"] == target and not tr["done"]:
@@ -227,7 +252,17 @@ func _bind(target: Node3D, d: Dictionary) -> Array:
 	return binds
 
 
+const FAR_M := 60.0
+var _b039 := PerfTuning.b039()
+var _cam_pos := Vector3.ZERO
+var _cam_pos_ok := false
+
+
 func _process(delta: float) -> void:
+	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+	_cam_pos_ok = cam != null
+	if cam:
+		_cam_pos = cam.global_position
 	for tr in _tracks.duplicate():
 		if not is_instance_valid(tr["target"]):
 			_tracks.erase(tr)
@@ -239,6 +274,13 @@ func _process(delta: float) -> void:
 		if tr["done"]:
 			continue
 		tr["t"] = float(tr["t"]) + delta
+		# B-039 (Eingriff Takt): ferne Darsteller (> FAR_M zur Kamera, keine Kameraanimation) nur jedes 3. Bild stellen –
+		# Zeit läuft weiter, Ereignisse/Ende unverändert (höchstens 2 Bilder später). --b039=0 = jedes Bild.
+		if _b039 and not tr["camera"] and _cam_pos_ok and (tr["target"] as Node3D).global_position.distance_squared_to(_cam_pos) > FAR_M * FAR_M:
+			var k := int(tr.get("skip", 0)) + 1
+			tr["skip"] = k
+			if k % 3 != 0 and float(tr["t"]) * FPS < float(tr["data"].get("last_frame", 0)):
+				continue
 		_apply(tr)
 
 
@@ -319,6 +361,10 @@ func _event(target: Node3D, ev: String) -> void:
 
 
 func _remember(b: Dictionary) -> void:
+	# B-039 (Eingriff Takt): Ruhelage nur einmal je Bindung sichern – vorher je Bild Schlüssel-Zeichenkette + Lookup
+	if b.has("rem"):
+		return
+	b["rem"] = true
 	var key: String
 	if b.has("skel"):
 		key = "%d:%d" % [(b["skel"] as Object).get_instance_id(), int(b["bone"])]

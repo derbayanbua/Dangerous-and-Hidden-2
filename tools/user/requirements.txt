@@ -2,3 +2,5 @@
 numpy>=1.26
 pillow>=10.0
 pefile>=2023.2.7
+# fmt_fonts.py (Textstile aus hd2.exe, B-024/O-003)
+capstone>=5.0

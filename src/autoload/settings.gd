@@ -53,10 +53,12 @@ var blood := true:            ## Original „BLUTFLECKEN“ (ja/nein); spiegelt 
 		elif blood_level == 0:
 			blood_level = 2
 ## BEWUSSTE ABWEICHUNG ([D] 23.10.2026): Blut 0 = AUS, 1 = ORIGINAL, 2 = MEHR (Standard)
-const BLOOD_NAMES := ["AUS", "ORIGINAL", "MEHR"]
+## B-037 (31.10.2026): 3 = EXTRA GORE (Körperteile abtrennbar, src/combat/gore.gd; Option, Standard aus)
+const BLOOD_NAMES := ["AUS", "ORIGINAL", "MEHR", "EXTRA GORE"]
+const BLOOD_GORE := 3
 var blood_level := 2:
 	set(v):
-		blood_level = clampi(v, 0, 2)
+		blood_level = clampi(v, 0, BLOOD_NAMES.size() - 1)
 		if blood != (blood_level > 0):
 			blood = blood_level > 0
 var grass := true             ## Original „GRAS“ (Bodenvegetation der Originallevel)
@@ -158,31 +160,98 @@ func _ready() -> void:
 func load_settings() -> void:
 	if _cfg.load(PATH) != OK:
 		return
-	resolution = _cfg.get_value("display", "resolution", resolution)
-	fullscreen = _cfg.get_value("display", "fullscreen", fullscreen)
-	quality = _cfg.get_value("graphics", "quality", quality)
-	render_scale = _cfg.get_value("graphics", "render_scale", render_scale)
-	fov = _cfg.get_value("graphics", "fov", fov)
-	mouse_sensitivity = _cfg.get_value("controls", "mouse_sensitivity", mouse_sensitivity)
-	invert_y = _cfg.get_value("controls", "invert_y", invert_y)
-	master_volume = _cfg.get_value("audio", "master_volume", master_volume)
-	music_volume = _cfg.get_value("audio", "music_volume", music_volume)
-	sfx_volume = _cfg.get_value("audio", "sfx_volume", sfx_volume)
-	speech_volume = _cfg.get_value("audio", "speech_volume", speech_volume)
-	gamma = _cfg.get_value("graphics", "gamma", gamma)
-	shadows = _cfg.get_value("graphics", "shadows", shadows)
-	subtitles = _cfg.get_value("game", "subtitles", subtitles)
-	crosshair = _cfg.get_value("game", "crosshair", crosshair)
-	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"]:
-		set(k, _cfg.get_value("game", k, get(k)))
+	load_from_config(_cfg)
+
+
+## M-024: alle Werte aus einer settings.cfg typgeprüft übernehmen und danach klemmen (auch für Tests).
+func load_from_config(cfg: ConfigFile) -> void:
+	_load_key(cfg, "display", "resolution")
+	_load_key(cfg, "display", "fullscreen")
+	for k in ["quality", "render_scale", "fov", "gamma", "shadows"]:
+		_load_key(cfg, "graphics", k)
+	for k in ["mouse_sensitivity", "invert_y"]:
+		_load_key(cfg, "controls", k)
+	for k in ["master_volume", "music_volume", "sfx_volume", "speech_volume"]:
+		_load_key(cfg, "audio", k)
+	for k in ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"]:
+		_load_key(cfg, "game", k)
 	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
-		set(k, _cfg.get_value("graphics", k, get(k)))
+		_load_key(cfg, "graphics", k)
 	for k in ["vsync_mode", "max_fps", "aa_mode", "texture_quality", "anisotropy", "pause_unfocused"]:
-		set(k, _cfg.get_value("setup", k, get(k)))
-	vsync_mode = migrate_vsync(_cfg, vsync_mode)
+		_load_key(cfg, "setup", k)
+	if cfg.has_section_key("setup", "vsync_mode") and not (typeof(cfg.get_value("setup", "vsync_mode")) in [TYPE_INT, TYPE_FLOAT]):
+		cfg.erase_section_key("setup", "vsync_mode")   # ungültiger Typ → Altfeld/aktueller Wert gilt
+	vsync_mode = migrate_vsync(cfg, vsync_mode)
 	for k in PROFILE_KEYS["multiplayer"]:
-		set(k, _cfg.get_value("multiplayer", k, get(k)))
-	language = String(_cfg.get_value("setup", "language", language))
+		_load_key(cfg, "multiplayer", k)
+	_load_key(cfg, "setup", "language")
+	sanitize()
+
+
+## M-024: einen Schlüssel übernehmen, wenn er sich in den Typ der Variable wandeln lässt; sonst Wert behalten.
+func _load_key(cfg: ConfigFile, sec: String, k: String) -> void:
+	if not cfg.has_section_key(sec, k):
+		return
+	var v = coerce_value(get(k), cfg.get_value(sec, k))
+	if v == null:
+		push_warning("settings.cfg: [%s] %s ungültig (%s), Standard bleibt" % [sec, k, str(cfg.get_value(sec, k))])
+		return
+	set(k, v)
+
+
+## Wert v in den Typ von cur wandeln (int/float wechselseitig, bool aus Zahl); null = unbrauchbar.
+static func coerce_value(cur, v):
+	match typeof(cur):
+		TYPE_BOOL:
+			if typeof(v) == TYPE_BOOL:
+				return v
+			if typeof(v) in [TYPE_INT, TYPE_FLOAT]:
+				return v != 0
+		TYPE_INT:
+			if typeof(v) == TYPE_INT:
+				return v
+			if typeof(v) == TYPE_FLOAT and is_finite(v):
+				return int(v)
+		TYPE_FLOAT:
+			if typeof(v) in [TYPE_INT, TYPE_FLOAT] and is_finite(float(v)):
+				return float(v)
+		TYPE_STRING:
+			if typeof(v) in [TYPE_STRING, TYPE_STRING_NAME]:
+				return String(v)
+		TYPE_VECTOR2I:
+			if typeof(v) == TYPE_VECTOR2I:
+				return v
+			if typeof(v) == TYPE_VECTOR2:
+				return Vector2i(v)
+	return null
+
+
+## M-024: alle Werte auf gültige Bereiche begrenzen (Menüindizes, Lautstärken, Qualität, Auflösung, Sprache).
+func sanitize() -> void:
+	if resolution != Vector2i.ZERO and not RESOLUTIONS.has(resolution):
+		# Fremde, aber plausible Fenstergröße behalten; Unsinn (≤0, riesig) → Desktop
+		if resolution.x < 640 or resolution.y < 480 or resolution.x > 16384 or resolution.y > 16384:
+			resolution = Vector2i.ZERO
+	quality = clampi(quality, 0, QUALITY_NAMES.size() - 1)
+	render_scale = clampf(render_scale, 0.5, 1.0)
+	fov = clampf(fov, 50.0, 110.0)
+	mouse_sensitivity = clampf(mouse_sensitivity, 0.01, 1.0)
+	for k in ["master_volume", "music_volume", "sfx_volume", "speech_volume", "voice_volume"]:
+		set(k, clampf(float(get(k)), 0.0, 1.0))
+	gamma = clampf(gamma, 0.6, 1.6)
+	blood_level = clampi(blood_level, 0, BLOOD_NAMES.size() - 1)
+	vsync_mode = clampi(vsync_mode, 0, VSYNC_NAMES.size() - 1)
+	max_fps = clampi(max_fps, 0, 1000)
+	aa_mode = clampi(aa_mode, 0, AA_NAMES.size() - 1)
+	texture_quality = clampi(texture_quality, 0, TEXTURE_NAMES.size() - 1)
+	anisotropy = clampi(anisotropy, 0, ANISO_NAMES.size() - 1)
+	connection_type = clampi(connection_type, 0, CONNECTION_TEXTS.size() - 1)
+	var known := false
+	for l in LANGUAGES:
+		if l[0] == language:
+			known = true
+	if not known:
+		language = "german"
 
 
 ## F-017: einmalige Migration. Gibt den gültigen vsync_mode zurück und entfernt das Altfeld display/vsync.
@@ -354,7 +423,8 @@ func use_profile(path: String) -> void:
 	if pc.load(path) == OK:
 		for sec in PROFILE_KEYS:
 			for k in PROFILE_KEYS[sec]:
-				set(k, pc.get_value(sec, k, get(k)))
+				_load_key(pc, sec, k)   # M-024: typgeprüft
+		sanitize()
 	apply()
 
 

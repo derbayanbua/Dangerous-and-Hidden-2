@@ -588,7 +588,8 @@ def _load_json(path, default):
 
 
 def load_lookups():
-    texts = _load_json(os.path.join(CACHE, "texts_german.json"), {})
+    import hd2_texts  # B-024/O-002: vorhandene Sprache statt fest texts_german.json
+    texts = hd2_texts.load_texts(CACHE)
     items = {i["id"]: i for i in _load_json(os.path.join(CACHE, "items.json"), {}).get("items", [])}
     sounds = {}
     try:

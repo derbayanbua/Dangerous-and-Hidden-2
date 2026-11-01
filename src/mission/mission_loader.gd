@@ -169,6 +169,8 @@ func begin(id: String) -> void:
 	if gen != _gen:
 		return
 	Engine.max_fps = Settings.max_fps
+	if PerfTuning.b039():
+		OrigLevel.clear_hq_cache()   # B-039: HD-Bilder nur fürs Parsen; Vorlagen halten die Texturen (RAM)
 	_t_parse = Time.get_ticks_msec() - _t0
 	_phase = "build"
 	_progress(0.85, SAS.text(8904, "Mission wird geladen"))

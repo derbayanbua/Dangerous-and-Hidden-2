@@ -198,6 +198,7 @@ func _step(p: Projectile, delta: float) -> bool:
 			# B-016: Trefferpunkt + Gelenk für den Ragdoll-Impuls (src/actors/ragdoll.gd)
 			hb.soldier.set_meta("_rd_hit", [hit.position, String(hb.get_meta("bone", ""))])
 			hb.soldier.set_meta("_rd_hit_ms", Time.get_ticks_msec())
+			hb.soldier.set_meta("_gore_w", p.data)      # B-037: Waffe des letzten Treffers (Gore.decide)
 			hb.soldier.apply_hit(WeaponDB.bullet_hit_damage(base, zone, helmet, hb.soldier, p.shooter, not Net.is_online,
 				Game.difficulty()), zone, p.shooter, p.vel.normalized())
 			if hb.zone == Helmet.ZONE:

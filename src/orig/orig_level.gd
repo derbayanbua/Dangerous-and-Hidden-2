@@ -63,7 +63,201 @@ func build() -> bool:
 		_place_objects(not klz)
 	if klz:
 		_build_orig_collision()
+	_build_display_extras()
 	return true
+
+
+# --- B-035: Glows, Umhängungen, Lichtkegel, Lightmaps (tools/fmt_glows.py, tools/fmt_lightmaps.py) ---------------
+## glows.json [B scene.4ds Visual 6]: Glow-Elemente (Größe, Textur) → additive Sprite3D am Frame + kleines Licht [E].
+## lightmaps.json [B scene2.bin]: 0x4020-Umhängungen (z. B. NORMANDY majak_volum01/vol_majak01/02 → m_maj_svet01,
+## damit drehen Lichtkegel und Glows mit FRM_RotateY des Leuchtturmlichts), Lightmap-Stufen und -Gruppen.
+var lightmaps := {}            ## levels/groups/reparent/lens aus lightmaps.json
+var glow_nodes: Array = []     ## Frames mit Glow-Sprites
+var volumetric_nodes: Array = []
+var _lm_level := {}            ## Frame-Name -> aktive Skriptstufe
+const GLOW_LIGHT_RANGE := 8.0  ## m [E]
+const GLOW_LIGHT_ENERGY := 1.5 ## [E]
+
+
+func _read_json(path: String) -> Dictionary:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return {}
+	var d = JSON.parse_string(f.get_as_text())
+	return d if typeof(d) == TYPE_DICTIONARY else {}
+
+
+func _build_display_extras() -> void:
+	lightmaps = _read_json(mission_dir + "/lightmaps.json")
+	var glows := _read_json(mission_dir + "/glows.json")
+	var scripted := {}
+	var fs := _read_json(mission_dir + "/scene.json")
+	for k in fs.get("scripts", {}):
+		scripted[String(k)] = true
+	# Umhängung nur für Glow-/Lichtkegel-Frames und Kinder skriptgesteuerter Frames (statische Wände bleiben unberührt) [E]
+	var glow_names := {}
+	for g in glows.get("glows", []):
+		glow_names[String(g.get("name", ""))] = true
+	var rp: Dictionary = lightmaps.get("reparent", {})
+	for child_name in rp:
+		var par_name := String(rp[child_name])
+		var cn := String(child_name)
+		if not (glow_names.has(cn) or cn.to_lower().contains("volum") or scripted.has(par_name)):
+			continue
+		var c: Node3D = nodes.get(cn.validate_node_name(), nodes.get(cn))
+		var p: Node3D = nodes.get(par_name.validate_node_name(), nodes.get(par_name))
+		if c and p and c != p and c.get_parent() != p and not p.is_ancestor_of(c) and not c.is_ancestor_of(p):
+			c.reparent(p, true)
+			stats["reparented"] = int(stats.get("reparented", 0)) + 1
+	for n in nodes.values():
+		if n is MeshInstance3D and String(n.name).to_lower().contains("volum"):
+			_make_volumetric(n as MeshInstance3D)
+	for g in glows.get("glows", []):
+		var gn := String(g.get("name", ""))
+		var node: Node3D = nodes.get(gn.validate_node_name(), nodes.get(gn))
+		if node:
+			_add_glow(node, g.get("elements", []))
+
+
+## Lichtkegel (NORMANDY majak_volum01, Material G_F1_MAJAK, Alpha 0,25): selbstleuchtend, additiv [P]
+func _make_volumetric(mi: MeshInstance3D) -> void:
+	if mi.mesh == null:
+		return
+	for s in mi.mesh.get_surface_count():
+		var m := mi.get_active_material(s) as StandardMaterial3D
+		if m == null or m.transparency == BaseMaterial3D.TRANSPARENCY_DISABLED:
+			continue
+		var nm := m.duplicate() as StandardMaterial3D
+		nm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		nm.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		nm.cull_mode = BaseMaterial3D.CULL_DISABLED
+		nm.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		mi.set_surface_override_material(s, nm)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	volumetric_nodes.append(mi)
+
+
+func _add_glow(node: Node3D, elements: Array) -> void:
+	var col := Color(1, 0.95, 0.8)
+	for e in elements:
+		var tex_name := String(e.get("texture", "")).get_basename().to_lower()
+		var p := "%s/textures/%s.png" % [cache_root(), tex_name]
+		if tex_name == "" or not FileAccess.file_exists(p):
+			continue
+		var img := Image.load_from_file(p)
+		if img == null:
+			continue
+		var sp := Sprite3D.new()
+		sp.name = "Glow_" + tex_name
+		sp.texture = ImageTexture.create_from_image(img)
+		sp.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		sp.shaded = false
+		sp.double_sided = true
+		sp.alpha_cut = SpriteBase3D.ALPHA_CUT_DISABLED
+		sp.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# Elementgröße in Frame-Einheiten (Frame-Skalierung wirkt mit, z. B. 4,14 am Leuchtturm) [P]
+		sp.pixel_size = float(e.get("size", 1.0)) / maxf(float(img.get_width()), 1.0)
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+		mat.albedo_texture = sp.texture
+		mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+		sp.material_override = mat
+		node.add_child(sp)
+	var light := OmniLight3D.new()
+	light.name = "GlowLight"
+	light.light_color = col
+	light.omni_range = GLOW_LIGHT_RANGE
+	light.light_energy = GLOW_LIGHT_ENERGY
+	light.shadow_enabled = false
+	node.add_child(light)
+	glow_nodes.append(node)
+
+
+func lightmap_group(group: String) -> Array:
+	var g: Dictionary = lightmaps.get("groups", {})
+	if g.has(group):
+		return g[group]
+	for k in g:
+		if String(k).to_lower() == group.to_lower():
+			return g[k]
+	return []
+
+
+## Helligkeitsfaktor der Skriptstufe (Satz n+1) relativ zu Stufe 0; 1.0 ohne Daten
+func lightmap_factor(frame_name: String, level: int) -> float:
+	var lv: Dictionary = lightmaps.get("levels", {})
+	var d = lv.get(frame_name)
+	if d == null:
+		for k in lv:
+			if String(k).to_lower() == frame_name.to_lower():
+				d = lv[k]
+				break
+	if typeof(d) != TYPE_DICTIONARY:
+		return 1.0
+	var base := float(d.get("1", 0.0))
+	if base <= 0.0:
+		return 1.0
+	var key := str(level + 1)
+	if not d.has(key):
+		return _median_ratio(key)     # Satz in den Daten nicht lesbar → Median der vollständigen Frames [P]
+	return clampf(float(d[key]) / base, 0.15, 3.0)
+
+
+var _median_cache := {}
+
+
+func _median_ratio(key: String) -> float:
+	if _median_cache.has(key):
+		return _median_cache[key]
+	var r: Array = []
+	var lv: Dictionary = lightmaps.get("levels", {})
+	for k in lv:
+		var d: Dictionary = lv[k]
+		if d.has(key) and float(d.get("1", 0.0)) > 0.0:
+			r.append(float(d[key]) / float(d["1"]))
+	r.sort()
+	var v := 1.0 if r.is_empty() else clampf(float(r[r.size() / 2]), 0.15, 3.0)
+	_median_cache[key] = v
+	return v
+
+
+func lightmap_level(frame_name: String) -> int:
+	return int(_lm_level.get(frame_name.to_lower(), 0))
+
+
+## Lightmap-Stufe setzen: Albedo aller Meshes des Frames × Faktor (Ursprungsfarbe bleibt in Meta „lm_base“)
+func set_lightmap(frame: Node3D, frame_name: String, level: int) -> float:
+	_lm_level[frame_name.to_lower()] = level
+	var f := lightmap_factor(frame_name, level)
+	var meshes: Array = []
+	if frame is MeshInstance3D:
+		meshes.append(frame)
+	meshes.append_array(frame.find_children("*", "MeshInstance3D", true, false))
+	for mi in meshes:
+		var m3 := mi as MeshInstance3D
+		if m3.mesh == null:
+			continue
+		for s in m3.mesh.get_surface_count():
+			var m := m3.get_active_material(s) as BaseMaterial3D
+			if m == null:
+				continue
+			if not m.has_meta("lm_base"):
+				m = m.duplicate() as BaseMaterial3D
+				m.set_meta("lm_base", m.albedo_color)
+				m3.set_surface_override_material(s, m)
+			var b: Color = m.get_meta("lm_base")
+			m.albedo_color = Color(b.r * f, b.g * f, b.b * f, b.a)
+	return f
+
+
+## DECORATOR_SetOn: Bewuchs aus/an (Grafikoption „Gras“ bleibt Voraussetzung)
+func set_decorator(on: bool) -> void:
+	for g in grass_nodes:
+		if is_instance_valid(g):
+			g.visible = on and Settings.grass
 
 
 # --- Kollision wie im Original (tree.klz + scene2.bin, tools/fmt_klz.py → collision.json) -------------------
@@ -159,6 +353,16 @@ func _build_orig_collision() -> void:
 			_mesh_collider(mi, collide, e[1] or mi.has_meta("klz_proxy"))
 		else:
 			_mesh_collider(mi, collide, true, e[2])
+		if collide and not e[1] and not e[2] and not e[3] and not e[4]:
+			# fix_no2_panzer: sichtbarer Frame ganz ohne Klz-Link (kein Original-Kollisionskörper) und klein (≤ 8 m Grundriss,
+			# ≤ 3 m hoch: Schutt „m_trosky_*“, Kleinkram) – Figuren/Geschosse kollidieren weiter, Fahrzeuge fahren hindurch
+			# (Vehicle._passable_exceptions). NORMANDY2: Sherman blieb an m_trosky_07 (3,5 × 4,3 m, 2,6 m hoch inkl. 1,2 m
+			# unter Gelände) auf AmiiTank_2 hängen. Große Frames ohne Link (Gebäudeteile) bleiben für Fahrzeuge fest [E].
+			var wb2 := mi.global_transform * mi.get_aabb() if mi.is_inside_tree() else mi.get_aabb()
+			if wb2.size.y <= 3.0 and maxf(wb2.size.x, wb2.size.z) <= 8.0:
+				for c in mi.get_children():
+					if c is StaticBody3D:
+						c.add_to_group(&"vehicle_passable")
 		if e[5]:
 			# Klz-Bit 0x100000 (Grenze „Border - enemy filter“, Drahtgeflecht, Zeltplane): sperrt nur Bewegung, Sicht und
 			# Geschosse gehen durch (Ebene 5 wie Zäune) [P, docs/re_notes_script_anims.md §6]
@@ -249,11 +453,15 @@ static var _hq_mutex := Mutex.new()      ## Hintergrundladen in mehreren Threads
 
 static func _swap_textures(state: GLTFState) -> void:
 	var sfx: Array = Settings.texture_suffixes()
+	var comp := PerfTuning.b039("tex_compress")    # B-039 (Eingriff B-039, nur diese Funktion)
 	if sfx == [""]:
+		if comp:
+			_compress_state_images(state, {})
 		return
 	var imgs := state.get_images()
 	var js: Dictionary = state.json
 	var jimgs: Array = js.get("images", [])
+	var swapped := {}
 	for i in mini(imgs.size(), jimgs.size()):
 		var uri := String(jimgs[i].get("uri", ""))
 		if uri == "" or not (imgs[i] is ImageTexture):
@@ -272,12 +480,47 @@ static func _swap_textures(state: GLTFState) -> void:
 					hq = Image.load_from_file(p)
 					if hq:
 						hq.generate_mipmaps()
+						if comp:
+							PerfTuning.compress_image(hq)
 						_hq_mutex.lock()
 						_hq_cache[key] = hq
 						_hq_mutex.unlock()
 					break
 		if hq:
 			(imgs[i] as ImageTexture).set_image(hq)
+			swapped[i] = true
+	if comp:
+		_compress_state_images(state, swapped)
+
+
+## B-039: übrige (nicht getauschte) Bilder des glTF komprimieren; Normalenkarten (materials[].normalTexture) als BC5.
+static func _compress_state_images(state: GLTFState, skip: Dictionary) -> void:
+	var imgs := state.get_images()
+	var js: Dictionary = state.json
+	var normal_src := {}
+	var texs: Array = js.get("textures", [])
+	for m in js.get("materials", []):
+		var nt = (m as Dictionary).get("normalTexture")
+		if nt is Dictionary:
+			var ti := int(nt.get("index", -1))
+			if ti >= 0 and ti < texs.size():
+				normal_src[int((texs[ti] as Dictionary).get("source", -1))] = true
+	for i in imgs.size():
+		if skip.has(i) or not (imgs[i] is ImageTexture):
+			continue
+		var img := (imgs[i] as ImageTexture).get_image()
+		if img == null or img.is_compressed():
+			continue
+		PerfTuning.compress_image(img, normal_src.has(i))
+		if img.is_compressed():
+			(imgs[i] as ImageTexture).set_image(img)
+
+
+## B-039: Zwischenspeicher der HD-/4K-Bilder leeren (Kartenwechsel; die Vorlagen halten ihre Texturen selbst)
+static func clear_hq_cache() -> void:
+	_hq_mutex.lock()
+	_hq_cache.clear()
+	_hq_mutex.unlock()
 
 
 func _index(n: Node) -> void:
@@ -419,6 +662,11 @@ func _place_objects(collide := true) -> void:
 		n.set_meta("klz_obj", String(n.name))
 		if String(o.get("parent", "")) == "Backdrop sector":
 			n.set_meta("backdrop", true)      # Himmelskulisse (LS3D-Backdrop-Sektor): nie Kollision
+			# fix_af1_ferne: Der Backdrop-Sektor ist im Original kamerabezogen (Himmelswürfel, AFRICA1 m_oblohaaf1 = 324 m
+			# um den Ursprung, Karte reicht bis ±412 m). Weltfest stand er als vernebelte graue Wand in der Landschaft.
+			# Den Himmel stellen ProceduralSky + sky_fx (B-013) dar → Kulisse ausblenden. --backdrop=1 = alter Stand.
+			if String(Game.cli.get("backdrop", "0")) != "1":
+				n.visible = false
 		created.append([n, o])
 		if not nodes.has(String(o.get("name", ""))):
 			nodes[String(o.get("name", ""))] = n

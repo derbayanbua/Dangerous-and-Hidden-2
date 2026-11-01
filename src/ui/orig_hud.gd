@@ -225,6 +225,8 @@ func screen_rect(r: Array, group: String) -> Rect2:
 
 
 func _layout() -> void:
+	_bar_sig = [null, null, null, null, null, null]   # B-039: Truppleiste nach Neuanordnung neu aufbauen
+	_wp_sig = []
 	for nm in elements:
 		var e: Dictionary = elements[nm]
 		var rr := screen_rect(e["rect"], anchor_of(String(nm), String(e["group"])))
@@ -307,10 +309,42 @@ func _process(delta: float) -> void:
 		return
 	var sq := mission.squad
 	var active: Soldier = mission.controller.active if mission.controller else null
-	# --- Truppleiste: 6 Felder, belegt mit den Kadermitgliedern ---
+	_update_squad_bar(active)
+	_update_injury(active, delta)
+	_update_rest(active, delta)
+
+
+## B-039: Truppleiste nur bei Änderung neu aufbauen. Signatur je Feld aus allen Eingangswerten (Belegung, aktiv,
+## markiert, lebt, Leisten auf 1/512 gerundet, Tarnung, Befehl/Feuerregel, Schalldämpfer, Verband, Porträt); gleich →
+## Feld unverändert (vorher je Bild ~25 Zeichenketten/Lookups je Feld). Darstellung identisch zu vorher.
+var _bar_sig: Array = [null, null, null, null, null, null]
+var _b039 := PerfTuning.b039()
+var _wp_sig: Array = []
+
+
+func _update_squad_bar(active: Soldier) -> void:
+	var sq := mission.squad
 	for i in 6:
-		var sfx := "%02d" % i
 		var m: Soldier = sq.members[i] if i < sq.members.size() else null
+		var sig: Array
+		if m == null:
+			sig = [0]
+		else:
+			var b: SquadBrain = sq.brain_of(m)
+			var w := m.current_weapon() if m.alive else null
+			sig = [m.get_instance_id(), m == active, m.alive, sq.is_selected(m), roundi(m.health / m.max_health * 512.0),
+				roundi(m.stamina * 5.12), m.disguised, b.order if b else -1, b.roe if b else -1,
+				w.get_instance_id() if w else 0, m.heal_time_left > 0.0, m.get_meta("sas", -1)]
+		if _bar_sig[i] == sig and _b039:
+			continue
+		_bar_sig[i] = sig
+		_update_squad_slot(i, m, active)
+
+
+func _update_squad_slot(i: int, m: Soldier, active: Soldier) -> void:
+	var sq := mission.squad
+	if true:
+		var sfx := "%02d" % i
 		var used := m != null
 		_show_el("soldier" + sfx, used)
 		_show_el("photo" + sfx, used)
@@ -328,7 +362,7 @@ func _process(delta: float) -> void:
 		if not used:
 			for nm in ["health", "stamina", "disguise"]:
 				_show_el(nm + sfx, false)
-			continue
+			return
 		var crit := m.alive and m.health < m.max_health * 0.3
 		_fill("health" + sfx, m.health / m.max_health if not crit else 0.0)
 		if crit:
@@ -343,7 +377,10 @@ func _process(delta: float) -> void:
 			if photo.get("face", "") != want:
 				photo["face"] = want
 				(photo["node"] as TextureRect).texture = _load(want)
-	_update_injury(active, delta)
+
+
+func _update_rest(active: Soldier, delta: float) -> void:
+	var sq := mission.squad
 	_update_sectors(delta)
 	_update_progress(active)
 	_update_action_icon(active)
@@ -520,9 +557,10 @@ func _update_timers() -> void:
 		elif n is ChargeSite and (n as ChargeSite).armed and not (n as ChargeSite).is_destroyed:
 			list.append([(n as ChargeSite).prompt.get_slice(":", 0), (n as ChargeSite).time_left])
 	if is_inside_tree() and mission:
-		for c in mission.find_children("*", "PlacedCharge", true, false):
+		# fix_performance: Gruppe statt find_children über den ganzen Missionsbaum (~25 000 Knoten, 28 ms je Aufruf)
+		for c in get_tree().get_nodes_in_group("placed_charges"):
 			var pc := c as PlacedCharge
-			if pc.kind == "explosive" and not pc._done:
+			if pc and pc.kind == "explosive" and not pc._done and mission.is_ancestor_of(pc):
 				list.append([SAS.item_label(68) if SAS.available() else "Sprengstoff", maxf(PlacedCharge.FUSE - pc._t, 0.0)])
 	list.sort_custom(func(a, b): return float(a[1]) < float(b[1]))
 	timers_shown = list.slice(0, 10)
@@ -603,7 +641,18 @@ static func ammo_text(w: Weapon) -> String:
 
 
 func _update_weapon_panel(s: Soldier) -> void:
-	var w := s.current_weapon()
+	# B-039: nur bei geänderten Eingangswerten neu aufbauen (vorher ~0,8–1,5 ms je Bild: Gegenstandsnamen, Formatierung)
+	var w0 := s.current_weapon()
+	var sw0 := shoulder_weapon(s)
+	var g0: Weapon = s.weapons[WeaponData.Slot.GRENADE] if s.weapons.size() > WeaponData.Slot.GRENADE else null
+	var sig := [s.get_instance_id(), s.tool, s.team, s.medkits, s.explosives, s.mines,
+		w0.get_instance_id() if w0 else 0, w0.in_mag if w0 else 0, w0.reserve if w0 else 0,
+		sw0.get_instance_id() if sw0 else 0, sw0.in_mag if sw0 else 0, sw0.reserve if sw0 else 0,
+		g0.total_ammo() if g0 else 0, (ammo_labels["name"] as Label).size.x]
+	if _b039 and sig == _wp_sig:
+		return
+	_wp_sig = sig
+	var w := w0
 	var hand := -1
 	var name_txt := ""
 	var hand_txt := ""
@@ -640,6 +689,15 @@ func _update_weapon_panel(s: Soldier) -> void:
 ## Text setzen und waagerecht stauchen, wenn er breiter als das Feld ist (Original-Bitmapschrift ist breiter als die alte
 ## Schrift → „M1 Thc…“ statt „M1 Thompson“). Stauchen statt Abschneiden [D]; ab 60 % Breite wird zusätzlich abgeschnitten.
 func _fit_label(al: Label, txt: String) -> void:
+	# fix_performance: nur bei geändertem Text neu messen (Schriftbreite je Bild war ~1,8 ms)
+	if al.text == txt and String(al.get_meta("fit_txt", "\u0001")) == txt and is_equal_approx(float(al.get_meta("fit_w", -1.0)), al.size.x):
+		return
+	_fit_label_now(al, txt)
+	al.set_meta("fit_txt", txt)
+	al.set_meta("fit_w", al.size.x)
+
+
+func _fit_label_now(al: Label, txt: String) -> void:
 	al.text = txt
 	if al.scale != Vector2.ONE and al.has_meta("fit_base_w"):
 		al.size.x = float(al.get_meta("fit_base_w"))   # vorheriges Stauchen zurücknehmen
@@ -662,6 +720,18 @@ func _fit_label(al: Label, txt: String) -> void:
 func _item_icon_file(item: int) -> String:
 	if item < 0 or not SAS.available():
 		return ""
+	# B-039: Ergebnis je Gegenstand merken (vorher je Bild 2× file_exists für Hand und Schulter ≈ 1 ms)
+	if _icon_file_cache.has(item) and _b039:
+		return _icon_file_cache[item]
+	var res := _item_icon_file_now(item)
+	_icon_file_cache[item] = res
+	return res
+
+
+var _icon_file_cache := {}   ## B-039: Gegenstand -> Symboldatei
+
+
+func _item_icon_file_now(item: int) -> String:
 	var ic := String(SAS._item_data().get(item, {}).get("icon", "")).to_lower()
 	if ic == "":
 		return ""

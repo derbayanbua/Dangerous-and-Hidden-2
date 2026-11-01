@@ -70,4 +70,7 @@ func _run() -> void:
 	check(not m.finished, "Mission läuft", str(Game.last_result.get("reason", "")))
 	print("Befehle: ", rt.calls.size(), " verschiedene; nicht umgesetzt: ", rt.unimplemented)
 	print("UNIMPL ", mid, " ", JSON.stringify(rt.unimplemented.keys()))
+	# B-028/O-006: stumme Befehle zählend melden (Bericht test_output/ls_silent.txt, je Teil ein Block)
+	print("STUMM ", mid, " ", JSON.stringify(rt.stubbed))
+	rt.write_silent_report("res://test_output/ls_silent.txt", mid)
 	_finish()

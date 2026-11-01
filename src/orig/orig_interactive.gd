@@ -5,7 +5,8 @@ extends Node
 ## Funkgeräte (7), Sprengplätze (22), zerstörbare Objekte (25 „Animation“), Kisten (9), Fotoplätze (15),
 ## Dokumentplätze (23). Skriptschnittstelle: SetActorState / _ACTOR_GetState / DOOR_Lock / OnUse / OnDeath.
 ## Waffenstellungen (21): Waffe aus dem Modellnamen (ANNAHME, im Original nicht in den Parametern), Munition aus
-## dem items.dat-Inventar der Stellung. Nicht umgesetzt: Fässer (5), Zerstörungsanimationen (.i3d).
+## dem items.dat-Inventar der Stellung. Fässer sind Typ-25-Akteure (la_bar03/04, B-028):
+## Zerstörungsanimation (.i3d) + Partikeleffekt + Explosion über OrigDestructible.
 
 const TXT_OPEN := 7023
 const TXT_CLOSE := 7041
@@ -21,7 +22,7 @@ var mission: Node
 var runtime: LsRuntime
 var orig: OrigLevel
 var stats := {"world_items": 0, "emplacements": 0, "doors": 0, "ladders": 0, "switches": 0, "explosives": 0, "destructibles": 0, "crates": 0,
-	"photos": 0, "documents": 0, "radios": 0, "missing": 0}
+	"photos": 0, "documents": 0, "radios": 0, "barrels": 0, "missing": 0}
 var controls := {}        ## Name (groß) -> Steuerobjekt
 
 
@@ -48,6 +49,8 @@ func setup(m: Node, rt: LsRuntime, o: OrigLevel) -> void:
 		_destructible(e)
 	for e in d.get("crates", []):
 		_crate(e)
+	for e in d.get("barrels", []):
+		_barrel(e)
 	for e in d.get("emplacements", []):
 		_emplacement(e)
 	_world_items()
@@ -1107,6 +1110,7 @@ class OrigDestructible extends Node3D:
 		label = OrigInteractive.text(int(p.get("label_text", -1)), "")
 		global_position = OrigInteractive.world_aabb(frame).get_center()
 		frame.set_meta("actor_state", 1)
+		set_meta("orig_entry", e)
 		# Treffer an den Kollisionskörpern des Objekts werden hierher umgeleitet (Ballistik: hit_proxy)
 		for b in frame.find_children("*", "StaticBody3D", true, false):
 			b.set_meta("hit_proxy", self)
@@ -1132,16 +1136,67 @@ class OrigDestructible extends Node3D:
 		if n != 666 and not destroyed:
 			destroy()
 
+	## B-028/O-009: Zerstörung wie Original 0x5B55E0 [P]: Klang +0xA8, Partikeleffekt +0xAC (Tabelle effects.def,
+	## OrigParticles), Zerstörungsanimation anim_file (*.i3d = MODELS\<name>.5DS, LsAnim) – das Objekt bleibt als
+	## Trümmer sichtbar. Ohne Animation (fehlt im Cache) wie bisher ausblenden. Kollision aus [E].
+	## Explosive Effekte (Partikelart „explosion“, z. B. 64 „vybuch barel“ = Fässer, 53 „vybuch cisterna“): Splitter-
+	## schaden r 5 m / 120 und Kettenreaktion über OrigInteractive.damage_objects [E: Stärke im Akteur nicht belegt].
+	const BLAST_RADIUS := 5.0
+	const BLAST_DAMAGE := 120.0
+	var anim_file := ""
+	var particle_id := -1
+	var animated := false        ## Diagnose/Tests: Zerstörungsanimation gestartet
+
 	func destroy() -> void:
 		destroyed = true
-		var snd: Array = [OrigAudio.CAT_EXPLOSION, destroy_sound] if destroy_sound >= 0 else []
-		Effects.explosion(global_position, 4.0, snd)
 		frame.set_meta("actor_state", 0)
-		# Original: Zerstörungsanimation (.i3d, nicht dekodiert) – Ersatz: Original-Frame ausblenden
-		frame.visible = false
+		_load_params()
+		var snd: Array = [OrigAudio.CAT_EXPLOSION, destroy_sound] if destroy_sound >= 0 else []
+		var explosive := particle_id >= 0 and OrigParticles.kind_of(particle_id) == "explosion"
+		if particle_id >= 0:
+			host.runtime._particles(particle_id, global_position)
+			if not snd.is_empty():
+				OrigAudio.play_group(int(snd[0]), int(snd[1]), global_position)
+		else:
+			Effects.explosion(global_position, 4.0, snd)
 		for b in frame.find_children("*", "StaticBody3D", true, false):
 			(b as StaticBody3D).collision_layer = 0
+		_play_anim(false)
 		host.runtime.notify(frame, "ONDEATH")
+		if explosive:
+			# Kette verzögert (keine Rekursion im selben Bild); eigener Schaden ausgeschlossen (destroyed)
+			var pos := global_position
+			var rt = host.runtime
+			get_tree().create_timer(0.1, false).timeout.connect(func():
+				if is_instance_valid(rt):
+					Events.emit_noise(pos, 400.0, null, Soldier.TEAM_AXIS, &"explosion")
+					OrigInteractive.damage_objects(get_tree(), pos, BLAST_RADIUS, BLAST_DAMAGE)
+					_blast_soldiers(pos))
+
+	func _load_params() -> void:
+		var e: Dictionary = get_meta("orig_entry", {})
+		var p: Dictionary = e.get("params", {})
+		anim_file = String(p.get("anim_file", ""))
+		particle_id = int(p.get("particle_?", -1))
+
+	func _play_anim(to_end: bool) -> void:
+		animated = anim_file != "" and host.runtime.anim.set_animation(frame, anim_file, 0)
+		if animated:
+			frame.visible = true
+			if to_end:
+				host.runtime.anim.finish_now(frame)
+		else:
+			frame.visible = false
+
+	func _blast_soldiers(pos: Vector3) -> void:
+		var space := get_viewport().world_3d.direct_space_state
+		for n in get_tree().get_nodes_in_group("soldiers"):
+			var s := n as Soldier
+			if s and s.alive and s.global_position.distance_to(pos) < BLAST_RADIUS:
+				var q := PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 0.5, s.global_position + Vector3.UP * 0.6, 1)
+				if space.intersect_ray(q).is_empty():
+					s.apply_hit(BLAST_DAMAGE * (1.0 - s.global_position.distance_to(pos) / BLAST_RADIUS), &"torso", null,
+						(s.global_position - pos).normalized())
 
 	func serialize() -> Dictionary:
 		return {"destroyed": destroyed, "damage": damage}
@@ -1150,8 +1205,56 @@ class OrigDestructible extends Node3D:
 		damage = float(d.get("damage", 0.0))
 		if bool(d.get("destroyed", false)) and not destroyed:
 			destroyed = true
-			frame.visible = false
 			frame.set_meta("actor_state", 0)
+			for b in frame.find_children("*", "StaticBody3D", true, false):
+				(b as StaticBody3D).collision_layer = 0
+			_load_params()
+			_play_anim(true)
+
+
+# --- Fässer Typ 5 „Barrel“ (B-028/O-009) ---------------------------------------------
+## Original [B Daten, fmt_interactive.decode_barrel]: k_barelmir*/m_af3_bar* mit Deckel-Frame „dekl“ und Körper „body“,
+## Felder f_c0/f_c4/f_cc, u_134 (20/25), u_138 (CZECH3 10000), u_dc 89 – Bedeutung nicht dekodiert (Physikobjekt-
+## Fass, keine Explosion/Partikel-ID im Akteur). Explodierende Fässer sind Typ 25 (la_bar03/04, Partikel 64/93,
+## OrigDestructible). Nachbau [E]: Typ-5-Fass bleibt stehen; eine Explosion in der Nähe wirft den Deckel ab.
+func _barrel(e: Dictionary) -> void:
+	var f := _frame(e)
+	if f == null:
+		return
+	var b := OrigBarrel.new()
+	b.name = "Barrel_" + String(e["name"]).validate_node_name()
+	mission.dynamic_root.add_child(b)
+	b.init(f, e)
+	_register(e, f, b)
+	stats.barrels += 1
+
+
+class OrigBarrel extends Node3D:
+	var frame: Node3D
+	var lid: Node3D
+	var lid_off := false
+	var persistent_id := ""
+
+	func init(f: Node3D, e: Dictionary) -> void:
+		frame = f
+		add_to_group("destructibles")
+		persistent_id = "obarrel_" + String(e["name"])
+		var ln := String(e.get("params", {}).get("lid_frame_?", ""))
+		if ln != "":
+			lid = f.find_child(ln + "*", true, false) as Node3D
+		global_position = OrigInteractive.world_aabb(frame).get_center()
+
+	func on_bullet_hit(_d: float, _by: Node) -> void:
+		pass    # Kugeln: ohne Wirkung [E]
+
+	func on_explosion(d: float, _by: Node) -> void:
+		if lid_off or lid == null or d < 20.0:
+			return
+		lid_off = true
+		var tw := lid.create_tween()
+		var dir := Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)).normalized()
+		tw.tween_property(lid, "global_position", lid.global_position + dir * 1.5 + Vector3.UP * 1.2, 0.35)
+		tw.tween_property(lid, "global_position", lid.global_position + dir * 2.5, 0.4)
 
 
 # --- Kisten, Foto- und Dokumentplätze ------------------------------------------------

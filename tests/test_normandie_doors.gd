@@ -134,6 +134,7 @@ func _run() -> void:
 		Net.local_name = "Achse"
 		Net.local_team = Soldier.TEAM_AXIS
 		var mode: int = Net.Mode.TEAM_DEATHMATCH if map.begins_with("mp_arena") else Net.Mode.OCCUPATION
+		Net.move_check = false    # B-022: Testclient versetzt seine Figur direkt an die Türen – kein Spielzug
 		Net.host({"name": "Tueren", "map": map, "mode": mode, "port": Net.PORT,
 			"max_players": 8, "time_limit_min": 0, "score_limit": 0, "warmup_s": 0, "respawn_s": 5, "bots_per_team": 0,
 			"password": "", "allow_vehicles": false})

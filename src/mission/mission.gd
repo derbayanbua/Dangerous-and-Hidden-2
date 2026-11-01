@@ -260,10 +260,93 @@ func _bake_tiles(nm: NavigationMesh) -> void:
 	var box := src.get_bounds()
 	# Navigationskarte gehört zur Welt des Hauptfensters und bleibt über Kartenwechsel bestehen → immer setzen
 	NavigationServer3D.map_set_cell_size(nav_region.get_navigation_map(), nm.cell_size)
-	if (box.size.x / nm.cell_size) * (box.size.z / nm.cell_size) > NAV_MAX_COLUMNS or Game.cli.has("nav_tiles"):
+	var tiled := (box.size.x / nm.cell_size) * (box.size.z / nm.cell_size) > NAV_MAX_COLUMNS or Game.cli.has("nav_tiles")
+	# B-040: Ergebnis aus dem Navmesh-Cache (Schlüssel inkl. Kachelplan = gewählte Kacheln um die Fokuspunkte)
+	_nav_cache_key = ""
+	_nav_cache_bridges = null
+	if NavCache.enabled():
+		var plan := "whole"
+		if tiled:
+			var ids: Array = []
+			for j in _tile_jobs(nm, box):
+				ids.append("%d,%d" % [j[0], j[1]])
+			plan = "tiles:" + ";".join(ids)
+		var t0 := Time.get_ticks_msec()
+		_nav_cache_key = NavCache.make_key(self, nm, src, plan)
+		var d: Dictionary = NavCache.read(_nav_cache_key)
+		if not d.is_empty() and _nav_from_cache(nm, d, Time.get_ticks_msec() - t0):
+			return
+		print("NAV-CACHE: kein Eintrag %s – backe" % _nav_cache_key)
+	if tiled:
 		_bake_tiled(nm, src)
 		return
 	NavigationServer3D.bake_from_source_geometry_data_async(nm, src, _nav_whole_done.bind(nm, src))
+
+
+const NavCache := preload("res://src/mission/nav_cache.gd")
+var _nav_cache_key := ""
+var _nav_cache_bridges = null    ## Array aus dem Cache (statt _bridge_islands) oder null
+
+
+## Regionen/Netze aus dem Cache anlegen und denselben Abschluss wie nach dem Backen durchlaufen (_nav_tile_done:
+## Kartenabgleich abwarten, Brücken setzen, Leiter-Links, Link-Abgleich → nav_ready).
+func _nav_from_cache(nm: NavigationMesh, d: Dictionary, key_ms: int) -> bool:
+	var regs: Array = d.get("regions", [])
+	if regs.is_empty():
+		return false
+	_nav_regions.clear()
+	var jobs: Array = []
+	var polys := 0
+	for r in regs:
+		var tile := NavCache.unpack_mesh(nm, r)
+		polys += tile.get_polygon_count()
+		var reg := nav_region
+		if not r.get("main", false):
+			reg = NavigationRegion3D.new()
+			reg.name = r["name"]
+			add_child(reg)
+			reg.transform = r.get("xf", Transform3D())
+		_nav_regions.append(reg)
+		jobs.append([reg, tile])
+	_nav_cache_bridges = d.get("bridges", [])
+	print("NAV-CACHE: geladen %s (%d Regionen, %d Polygone, %d Brücken, Schlüssel %d ms)" % [_nav_cache_key, regs.size(),
+		polys, (_nav_cache_bridges as Array).size(), key_ms])
+	_nav_pending = jobs.size()
+	for j in jobs:
+		_nav_tile_done(j[0], j[1])
+	return true
+
+
+func _nav_cache_store() -> void:
+	if _nav_cache_key == "" or _nav_cache_bridges != null:
+		return
+	var regs: Array = []
+	for r in _nav_regions:
+		if is_instance_valid(r):
+			regs.append(NavCache.pack_region(r, r == nav_region))
+	var br: Array = []
+	for l in bridge_links:
+		if is_instance_valid(l):
+			br.append([String(l.name), l.start_position, l.end_position, l.has_meta("climb")])
+	var t0 := Time.get_ticks_msec()
+	NavCache.write(_nav_cache_key, {"regions": regs, "bridges": br, "bridges_done": not Game.cli.has("no_nav_bridges")})
+	print("NAV-CACHE: gespeichert %s (%d ms)" % [_nav_cache_key, Time.get_ticks_msec() - t0])
+
+
+func _restore_bridges(list: Array) -> void:
+	var n_climb := 0
+	for b in list:
+		var link := NavigationLink3D.new()
+		link.name = b[0]
+		link.bidirectional = true
+		link.start_position = b[1]
+		link.end_position = b[2]
+		if b[3]:
+			link.set_meta("climb", true)
+			n_climb += 1
+		dynamic_root.add_child(link)
+		bridge_links.append(link)
+	print("NAV: %d Inselbrücken aus dem Cache, davon %d Kletterstellen" % [bridge_links.size(), n_climb])
 
 
 const NAV_MAX_COLUMNS := 24000000.0
@@ -293,9 +376,36 @@ func _bake_tiled(nm: NavigationMesh, src: NavigationMeshSourceGeometryData3D) ->
 		nx = 2           # nur bei zu großem Höhenumfang: dennoch teilen
 	print("NAV: Kachelbake %.0f × %.0f m (Höhe %.0f m) → %d Kacheln, Zelle %.2f m" % [box.size.x, box.size.z, box.size.y,
 		nx * nz, nm.cell_size])
-	_nav_pending = nx * nz
 	_nav_regions.clear()
 	_nav_queue.clear()
+	var jobs := _tile_jobs(nm, box)
+	_nav_pending = jobs.size()
+	for j in jobs:
+		var ix: int = j[0]
+		var iz: int = j[1]
+		var reg := nav_region
+		if ix + iz > 0:
+			reg = NavigationRegion3D.new()
+			reg.name = "Nav_%d_%d" % [ix, iz]
+			add_child(reg)
+		_nav_regions.append(reg)
+		_nav_queue.append([reg, j[2]])
+	if _nav_queue.is_empty():
+		push_warning("NAV: keine Kachel im Spielbereich – kein Navigationsnetz")
+		nav_ready = true
+		return
+	print("NAV: %d von %d Kacheln im Spielbereich (≤ %.0f m um Soldaten/Spawns/Zonen/Leitern)" % [_nav_queue.size(), nx * nz,
+		NAV_FOCUS_MARGIN])
+	_nav_t0 = Time.get_ticks_msec()
+	_bake_next_tile(src)
+
+
+## Kachelplan: [ix, iz, NavigationMesh-Kachel] je Kachel im Spielbereich (auch Teil des Cache-Schlüssels, B-040)
+func _tile_jobs(nm: NavigationMesh, box: AABB) -> Array:
+	var nx := maxi(ceili(box.size.x / NAV_TILE), 1)
+	var nz := maxi(ceili(box.size.z / NAV_TILE), 1)
+	if nx * nz == 1:
+		nx = 2           # nur bei zu großem Höhenumfang: dennoch teilen
 	var focus := nav_focus_points()
 	# Kachelraster auf das Zellraster legen: Recast rundet border_size auf ganze Zellen AUF (2,0 m / 0,2 m = 10,000…02 →
 	# 11 Zellen = 2,2 m), dann fehlen zwischen den Kacheln 0,4 m und die Kanten verbinden sich nicht (AFRICA2_MP_ZONE:
@@ -307,6 +417,7 @@ func _bake_tiled(nm: NavigationMesh, src: NavigationMeshSourceGeometryData3D) ->
 	var td := ceilf((box.size.z + cs) / nz / cs) * cs
 	var ox := floorf(box.position.x / cs) * cs
 	var oz := floorf(box.position.z / cs) * cs
+	var out: Array = []
 	for ix in nx:
 		for iz in nz:
 			var tile := nm.duplicate() as NavigationMesh
@@ -315,23 +426,9 @@ func _bake_tiled(nm: NavigationMesh, src: NavigationMeshSourceGeometryData3D) ->
 			tile.filter_baking_aabb = AABB(Vector3(ox + ix * tw - border, box.position.y - 1.0, oz + iz * td - border),
 				Vector3(tw + 2.0 * border, box.size.y + 2.0, td + 2.0 * border))
 			if not focus.is_empty() and not _near_focus(tile.filter_baking_aabb, focus):
-				_nav_pending -= 1
 				continue
-			var reg := nav_region
-			if ix + iz > 0:
-				reg = NavigationRegion3D.new()
-				reg.name = "Nav_%d_%d" % [ix, iz]
-				add_child(reg)
-			_nav_regions.append(reg)
-			_nav_queue.append([reg, tile])
-	if _nav_queue.is_empty():
-		push_warning("NAV: keine Kachel im Spielbereich – kein Navigationsnetz")
-		nav_ready = true
-		return
-	print("NAV: %d von %d Kacheln im Spielbereich (≤ %.0f m um Soldaten/Spawns/Zonen/Leitern)" % [_nav_queue.size(), nx * nz,
-		NAV_FOCUS_MARGIN])
-	_nav_t0 = Time.get_ticks_msec()
-	_bake_next_tile(src)
+			out.append([ix, iz, tile])
+	return out
 
 
 ## Spielbereich für den Kachelbake sehr großer Karten (AFRICA6 5,7 × 4 km = 1395 Kacheln): nur Kacheln im Umkreis
@@ -400,9 +497,10 @@ func _nav_tile_done(reg: NavigationRegion3D, tile: NavigationMesh) -> void:
 			await get_tree().physics_frame
 			if not is_inside_tree():
 				return
-			var ok := i >= 2
 			var map := nav_region.get_navigation_map()
-			for p in probes:
+			# B-040: aus dem Cache sind die Regionen schon im ersten Bild gesetzt → vor dem ersten Kartenabgleich nicht abfragen
+			var ok := i >= 2 and NavigationServer3D.map_get_iteration_id(map) > 0
+			for p in probes if ok else []:
 				if NavigationServer3D.map_get_closest_point(map, p).distance_to(p) > 0.6:
 					ok = false
 					break
@@ -411,7 +509,9 @@ func _nav_tile_done(reg: NavigationRegion3D, tile: NavigationMesh) -> void:
 				break
 			if i == 7199:
 				push_warning("NAV: Navigationskarte nach 2 min noch nicht abgeglichen")
-		if not Game.cli.has("no_nav_bridges"):   # Inselbrücken/Kletterstellen (B-010), abschaltbar zur Messung
+		if _nav_cache_bridges != null:           # B-040: Brücken/Kletterstellen aus dem Navmesh-Cache
+			_restore_bridges(_nav_cache_bridges)
+		elif not Game.cli.has("no_nav_bridges"):   # Inselbrücken/Kletterstellen (B-010), abschaltbar zur Messung
 			await _bridge_islands()
 			if not is_inside_tree():
 				return
@@ -435,6 +535,7 @@ func _nav_tile_done(reg: NavigationRegion3D, tile: NavigationMesh) -> void:
 					print("NAV: Verbindungen wirksam nach %d Physikschritten" % i)
 					break
 		nav_ready = true
+		_nav_cache_store()
 		var polys := 0
 		for r in _nav_regions:
 			polys += r.navigation_mesh.get_polygon_count() if r.navigation_mesh else 0
@@ -913,7 +1014,18 @@ func required_done(except: StringName = &"") -> bool:
 	return true
 
 
+## Alarm. Übungseinsätze/MP: kartenweite Kaskade (eigene Regel [E], Meldung + Glocke, alle Gegner suchen).
+## Originalmissionen offline (B-031/AP-2, GAP_REA §2): im Original gibt es keine Kaskade [B 0x549AE0 ohne Rundmeldung] –
+## Alarm entsteht je Akteur über Sicht/Gehör/Skript. Hier nur Statistik + lokaler Alarm des Auslösers (HUMAN_SetAlarm),
+## der Rest erfährt es über dessen Zuruf (Hörweite) bzw. die Schüsse. Keine Meldung/Glocke (GO-025).
 func raise_alarm(pos: Vector3, by: Node) -> void:
+	if orig_alarm_rules():
+		alarm_raised = true
+		stats["alarm"] = true
+		var b: Node = by.get_node_or_null("EnemyBrain") if is_instance_valid(by) else null
+		if b and b.has_method("local_alarm"):
+			b.local_alarm(pos)
+		return
 	if alarm_raised:
 		return
 	alarm_raised = true
@@ -922,6 +1034,11 @@ func raise_alarm(pos: Vector3, by: Node) -> void:
 	Events.alarm_raised.emit(pos, by)
 	Effects.alarm_bell(alarm_bell_pos if alarm_bell_pos.is_finite() else pos)
 	_on_alarm()
+
+
+## B-031: Originalregel ohne kartenweite Alarmkaskade (Originalmission mit LsRuntime, offline)
+func orig_alarm_rules() -> bool:
+	return ls_runtime != null and not Net.is_online
 
 
 func _on_alarm() -> void:

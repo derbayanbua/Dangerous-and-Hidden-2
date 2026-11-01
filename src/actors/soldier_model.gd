@@ -320,6 +320,76 @@ func attach_orig(figure: Node3D) -> void:
 	var sks := figure.find_children("*", "Skeleton3D", true, false)
 	if not sks.is_empty() and _orig_anim:
 		ragdoll = Ragdoll.attach(self, _soldier as Node3D, sks[0] as Skeleton3D, _orig_anim)   # B-016, Körper erst beim Tod
+	if face_texture != "":
+		_apply_face()
+
+
+## --- Gesichtstextur (B-035, FRM_SwitchFaceTexture) ---------------------------------------------------------
+## Original: Figurmodelle tragen das Gesicht als eigenes Material „E_Fnnn.BMP“ (z. B. ge08: E_F019, Daten [B]);
+## die *_faceassigner-Skripte tauschen es per Name („e_f054“, „e_f073.bmp“). Nachbau: Albedo-Textur dieses Materials
+## gegen orig_cache/textures/<name>.png (tools/fmt_faces.py) tauschen; gilt auch für eine später angehängte Figur.
+static var _face_cache := {}
+var face_texture := ""
+
+
+static func face_material_name(mat_name: String) -> bool:
+	var n := mat_name.to_upper()
+	return n.begins_with("E_F") and n.length() >= 6 and (n.substr(3, 1).is_valid_int() or n.substr(3, 2) == "0W")
+
+
+static func load_face(tex_name: String) -> Texture2D:
+	var key := tex_name.get_basename().to_lower()
+	if _face_cache.has(key):
+		return _face_cache[key]
+	var p := "%s/textures/%s.png" % [OrigLevel.cache_root(), key]
+	var tex: Texture2D = null
+	if FileAccess.file_exists(p):
+		var img := Image.load_from_file(p)
+		if img:
+			img.generate_mipmaps()
+			tex = ImageTexture.create_from_image(img)
+	_face_cache[key] = tex
+	return tex
+
+
+## true = Textur vorhanden (wird an die aktuelle bzw. nächste Original-Figur gelegt)
+func set_face_texture(tex_name: String) -> bool:
+	if load_face(tex_name) == null:
+		return false
+	face_texture = tex_name.get_basename().to_lower()
+	_apply_face()
+	return true
+
+
+## Anzahl getauschter Flächen
+func _apply_face() -> int:
+	if not is_instance_valid(orig_figure) or face_texture == "":
+		return 0
+	var tex := load_face(face_texture)
+	if tex == null:
+		return 0
+	var n := 0
+	for mi in orig_figure.find_children("*", "MeshInstance3D", true, false):
+		var m := mi as MeshInstance3D
+		if m.mesh == null:
+			continue
+		for s in m.mesh.get_surface_count():
+			var mat := m.get_active_material(s) as BaseMaterial3D
+			if mat == null:
+				continue
+			var base: String = String(mat.get_meta("face_base", mat.resource_name))
+			if not face_material_name(base):
+				continue
+			var nm := mat.duplicate() as BaseMaterial3D if not mat.has_meta("face_base") else mat
+			nm.set_meta("face_base", base)
+			nm.albedo_texture = tex
+			m.set_surface_override_material(s, nm)
+			n += 1
+	return n
+
+
+func face_surfaces() -> int:
+	return _apply_face()
 
 
 ## --- Trefferzonen der Original-Figur (docs/re_notes_weapons.md §10a) ---------------------------------------

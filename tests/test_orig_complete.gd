@@ -16,11 +16,14 @@ var god := true
 var notes: Array[String] = []
 var _t0 := 0
 var _start_pos := Vector3.ZERO
+## B-036: Modus „menschlich“ (--human=1): tests/orig_complete_human.gd, keine Teleports/Zustandsschaltungen des Lösers
+var human = null
 
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	get_tree().create_timer(float(Game.cli.get("limit", "2400")), true, false, true).timeout.connect(func():
+	var lim_default := "9000" if String(Game.cli.get("human", "0")) == "1" else "2400"
+	get_tree().create_timer(float(Game.cli.get("limit", lim_default)), true, false, true).timeout.connect(func():
 		notes.append("Zeitlimit des Lösers")
 		_report())
 	_run.call_deferred()
@@ -35,7 +38,7 @@ func _physics_process(_d: float) -> void:
 			continue
 		if s.team != Soldier.TEAM_AXIS and god:
 			s.health = s.max_health
-		elif s.team == Soldier.TEAM_AXIS and stealth:
+		elif s.team == Soldier.TEAM_AXIS and stealth and human == null:
 			var per: Perception = s.get_node_or_null("Perception")
 			if per:
 				per.sight_range = 0.01
@@ -50,6 +53,19 @@ func _run() -> void:
 		if mission() and mission().squad and mission().squad.leader():
 			break
 		await get_tree().process_frame
+	# B-030: Erfüllbarkeit ab einem Spielstand (--from_save=<Slot>, z. B. orig_save_a1_final aus test_orig_save)
+	if Game.cli.has("from_save"):
+		var old := mission()
+		if not Game.load_game(String(Game.cli["from_save"])):
+			notes.append("Spielstand %s nicht ladbar" % Game.cli["from_save"])
+			_report()
+			return
+		while Time.get_ticks_msec() - _t0 < 600000:
+			if mission() and mission() != old and mission().squad and mission().squad.leader():
+				break
+			await get_tree().process_frame
+		await frames(5)
+		notes.append("ab Spielstand " + String(Game.cli["from_save"]))
 	m = mission() as OrigMission
 	mid = Game.current_mission_id
 	if m == null or m.runtime == null:
@@ -60,6 +76,9 @@ func _run() -> void:
 	rt.auto_skip = true
 	_start_pos = m.squad.leader().global_position
 	Events.mission_finished.connect(_on_mission_finished)
+	if String(Game.cli.get("human", "0")) == "1":
+		await _run_human()
+		return
 	for s in m.squad.members:
 		var sb = m.squad.brain_of(s)
 		if sb:
@@ -85,6 +104,41 @@ func _run() -> void:
 			break
 	if not finished:
 		await _follow_up()
+	_report()
+
+
+## B-036 Modus „menschlich“: nur Spielereingaben (orig_complete_human.gd). Trupp unverwundbar (--god=0 schaltet ab),
+## Gegner normal (keine Sicht-/Gehörsperre), Kameraden mit Standard-Feuerregel.
+func _run_human() -> void:
+	god = String(Game.cli.get("god", "1")) == "1"
+	stealth = false
+	human = load("res://tests/orig_complete_human.gd").new()
+	for s in m.squad.members:
+		if god:
+			s.max_health = 100000.0
+			s.health = s.max_health
+		s.died.connect(_on_squad_died)
+	Engine.time_scale = float(Game.cli.get("speed", "2"))
+	notes.append("MENSCHLICH" + ("" if god else " ohne Unverwundbarkeit"))
+	await seconds(1.0)
+	await human.run(self)
+	if not _done():
+		# Nachlauf: Skriptabläufe brauchen Zeit; weiter wie ein Spieler (Auslöser, Benutzen, Gegner)
+		for i in 3:
+			var fin: bool = await human._idle(20.0)
+			if not fin:
+				fin = await human._visit_triggers()
+			if not fin:
+				fin = await human._use_all()
+			if not fin:
+				fin = await human._hunt_enemies()
+			if fin or _done():
+				break
+	notes.append(human.summary())
+	for x in human.teleports:
+		notes.append("Skript-Teleport " + x)
+	for x in human.blockers:
+		notes.append("Blocker " + x)
 	_report()
 
 

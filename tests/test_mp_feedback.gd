@@ -216,6 +216,7 @@ func _host() -> void:
 	Net.local_name = "Host"
 	Net.local_team = Soldier.TEAM_ALLIED
 	Net.local_figure = ""
+	Net.move_check = false        # B-022: Testclient versetzt seine Figur direkt (Namensproben) – kein Spielzug
 	var ok := Net.host({"name": "MP-Feedback", "map": _map(), "mode": Net.Mode.TEAM_DEATHMATCH, "port": Net.PORT + PORT_OFS,
 		"max_players": 8, "time_limit_min": 0, "score_limit": 0, "warmup_s": 0, "respawn_s": 5, "bots_per_team": 1,
 		"password": "", "allow_vehicles": false, "kill_cam": true, "friendly_fire": false})

@@ -186,5 +186,5 @@ func _run() -> void:
 	check(dog != null and dog.alive and dog.global_position.is_finite(), "Hund lebt, Position gültig")
 
 	print("Untertitel: ", said)
-	print("Befehle ausgeführt: ", rt.calls.size(), " verschiedene; nicht umgesetzt: ", rt.unimplemented)
+	print("Befehle ausgeführt: ", rt.calls.size(), " verschiedene; nicht umgesetzt: ", rt.unimplemented, "; stumm: ", rt.stubbed)
 	_finish()

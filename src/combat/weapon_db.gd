@@ -123,6 +123,33 @@ static func explosion_damage(strength: float, radius: float, dist: float) -> flo
 	return absf((1.0 - dist / radius) * strength)
 
 
+## G-021 (B-026): gemeinsame Splitterschleife für Granate, gelegte Ladung und Sprengplatz. Jeder lebende Soldat im Radius
+## mit freier Sichtlinie (Welt-Ebene 1) vom Explosionspunkt (+ `origin_lift` m) zur Körpermitte (+0,5 m) bekommt
+## `explosion_damage` als Körpertreffer. Mit `objects` zusätzlich Fahrzeuge/Zerstörbares/Hunde (OrigInteractive.damage_objects,
+## ohne Deckungsprüfung). Gibt die Zahl getroffener Soldaten zurück.
+static func apply_blast(tree: SceneTree, space: PhysicsDirectSpaceState3D, pos: Vector3, radius: float, strength: float,
+		by: Node, origin_lift := 0.0, objects := true, vehicle_factor := 1.0) -> int:
+	var hits := 0
+	var origin := pos + Vector3.UP * origin_lift
+	var r2 := radius * radius
+	for n in tree.get_nodes_in_group("soldiers"):
+		var s := n as Soldier
+		if s == null or not s.alive:
+			continue
+		var target := s.global_position + Vector3.UP * 0.5
+		var d2 := pos.distance_squared_to(target)
+		if d2 > r2:
+			continue
+		var q := PhysicsRayQueryParameters3D.create(origin, target, 1)
+		if not space.intersect_ray(q).is_empty():
+			continue   # Deckung
+		s.apply_hit(explosion_damage(strength, radius, sqrt(d2)), &"torso", by, (target - pos).normalized())
+		hits += 1
+	if objects:
+		OrigInteractive.damage_objects(tree, pos, radius, strength, by, vehicle_factor)
+	return hits
+
+
 ## Eigene Varianten → Originalgegenstand für die Kartenfreigabe (ALLOWEDITEMS): die deutschen Schalldämpferwaffen
 ## gelten als K98k bzw. MP 40 ([D])
 const VARIANT_BASE := {&"kar98k_sd": 4, &"mp40_sd": 18}

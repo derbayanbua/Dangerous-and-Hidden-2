@@ -798,7 +798,7 @@ static func request(me: Soldier, src: Node, from: String, id: int, dst: Node, to
 	var op := {"src": key_of(src), "from": from, "id": id, "dst": key_of(dst), "to": to}
 	if Net.is_authority():
 		return server_execute(me, op)
-	op["me"] = export_state(me)
+	# B-023 M-001: kein eigener Munitionsstand mehr in der Anfrage – der Server führt Munition/Inventar selbst
 	Net.inventory_request(op)
 	return ""
 
@@ -833,8 +833,9 @@ static func node_of(key: String) -> Node:
 static func server_execute(me: Soldier, op: Dictionary) -> String:
 	if not is_instance_valid(me) or not me.alive:
 		return "?"
-	if op.has("me") and me.net_puppet:
-		import_state(me, op["me"], true)     # Munitionsstand des Spielers (seine Schüsse zählt sein Rechner)
+	# B-023 M-001: ein vom Client gemeldeter Stand („me“) wird NICHT übernommen. Der Server zählt die Munition
+	# selbst (Net._consume_ammo über _act); Aufnahmen/Leichensuche laufen ohnehin über diese Funktion.
+	# (Net._inv_req entfernt „me“ und protokolliert NET-AUTH.)
 	var src := node_of(String(op.get("src", "")))
 	var dst := node_of(String(op.get("dst", "")))
 	if src == null or dst == null or (src != me and dst != me):
@@ -908,22 +909,34 @@ static func import_state(n: Node, d: Dictionary, ammo_only := false) -> void:
 	var s := n as Soldier
 	if ammo_only:
 		for e in d.get("w", []):
+			if not (e is Array and e.size() >= 4):
+				continue
 			var i := int(e[0])
-			if i < s.weapons.size() and s.weapons[i] and String(s.weapons[i].data.id) == String(e[1]):
+			if i >= 0 and i < s.weapons.size() and s.weapons[i] and String(s.weapons[i].data.id) == String(e[1]):
 				s.weapons[i].in_mag = int(e[2])
 				s.weapons[i].reserve = int(e[3])
 		s.medkits = mini(s.medkits, int(d.get("med", s.medkits)))
 		return
 	var old_w := s.current_weapon()
+	var own_client: bool = Net.is_online and not Net.is_authority() and not s.net_puppet
 	var nw: Array = []
 	nw.resize(WeaponData.SLOT_COUNT)
 	for e in d.get("w", []):
+		if not (e is Array and e.size() >= 4) or int(e[0]) < 0:     # M-027: fehlerhafte Einträge überspringen
+			continue
 		var i := int(e[0])
 		var w: Weapon = s.weapons[i] if i < s.weapons.size() and s.weapons[i] and String(s.weapons[i].data.id) == String(e[1]) else null
-		if w == null:
-			w = Weapon.new(WeaponDB.get_weapon(StringName(e[1])), false)
-		w.in_mag = int(e[2])
-		w.reserve = int(e[3])
+		var total := int(e[2]) + int(e[3])
+		if w != null and own_client:
+			# B-023 M-001: Server zählt Magazin+Reserve als einen Vorrat (kein Nachladen-RPC); den Nachladestand des
+			# eigenen Rechners behalten, Gesamtmenge vom Server
+			w.in_mag = mini(w.in_mag, total)
+			w.reserve = total - w.in_mag
+		else:
+			if w == null:
+				w = Weapon.new(WeaponDB.get_weapon(StringName(e[1])), false)
+			w.in_mag = int(e[2])
+			w.reserve = int(e[3])
 		if i < nw.size():
 			nw[i] = w
 	s.weapons.clear()
