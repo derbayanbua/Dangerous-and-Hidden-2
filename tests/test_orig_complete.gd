@@ -18,6 +18,14 @@ var _t0 := 0
 var _start_pos := Vector3.ZERO
 ## B-036: Modus „menschlich“ (--human=1): tests/orig_complete_human.gd, keine Teleports/Zustandsschaltungen des Lösers
 var human = null
+## B-032: Kampagnenkette (--chain_in=<json> Werte des Vorgängers, über Game --game_values vorbelegt; --chain_out=<json>
+## schreibt die SaveGameValue-Werte am Ende), Zielverlauf (Fehlschläge mit Zeit), Alarme, Zeitlimits
+var _chain_in := {}
+var _obj_seen := {}            ## Originalzielindex → letzter Zustand
+var _obj_log: Array[String] = []
+var _alarms := 0
+var _first_alarm := -1.0
+var _last_step := ""           ## letzte Löseraktion (Auslöser/Platz) für Fehlschlag-Zuordnung
 
 
 func _ready() -> void:
@@ -26,17 +34,30 @@ func _ready() -> void:
 	get_tree().create_timer(float(Game.cli.get("limit", lim_default)), true, false, true).timeout.connect(func():
 		notes.append("Zeitlimit des Lösers")
 		_report())
+	var ci := String(Game.cli.get("chain_in", Game.cli.get("game_values", "")))
+	if ci != "":
+		var gv = JSON.parse_string(FileAccess.get_file_as_string(ci))
+		if gv is Dictionary:
+			_chain_in = gv
 	_run.call_deferred()
 
 
 func _physics_process(_d: float) -> void:
 	if m == null or not is_instance_valid(m):
 		return
+	# B-032: Alarm (Originalmissionen offline senden kein Events.alarm_raised, B-031) – Zeitpunkt des ersten Alarms
+	if m.alarm_raised and _first_alarm < 0.0:
+		_first_alarm = (Time.get_ticks_msec() - _t0) / 1000.0
+		_alarms += 1
+		print("LOESER Alarm bei %.0f s (letzte Aktion: %s)" % [_first_alarm, _last_step])
 	for n in get_tree().get_nodes_in_group("soldiers"):
 		var s := n as Soldier
 		if s == null or not s.alive:
 			continue
 		if s.team != Soldier.TEAM_AXIS and god:
+			# B-036 a2 Lauf 11: sas_17 fiel trotz god (Static_2) – max_health war zwischendurch wieder klein geworden
+			if human != null and s.max_health < 100000.0:
+				s.max_health = 100000.0
 			s.health = s.max_health
 		elif s.team == Soldier.TEAM_AXIS and stealth and human == null:
 			var per: Perception = s.get_node_or_null("Perception")
@@ -76,6 +97,9 @@ func _run() -> void:
 	rt.auto_skip = true
 	_start_pos = m.squad.leader().global_position
 	Events.mission_finished.connect(_on_mission_finished)
+	Events.objective_updated.connect(func(_id): _check_objectives())
+	_check_chain_in()
+	_print_static_limits()
 	if String(Game.cli.get("human", "0")) == "1":
 		await _run_human()
 		return
@@ -217,6 +241,9 @@ func _round(r: int) -> bool:
 		return true
 	if r == 0 and await _follow_guides():
 		return true
+	# B-032: Zusatzziele als eigene Aufgabe, solange die Mission läuft (nach den Pflichtzielen endet sie sofort)
+	if r < 2 and await _optional_objectives():
+		return true
 	# Strategie „kampf“ (Standard): Gegner zuerst ausschalten (verhindert z. B. ARCTIC4: Offizier läuft zum U-Boot) –
 	# außer „geschützten“ (Name in einem Skript mit Fehlschlag-Pfad); Strategie „leise“ (--strategy=leise, z. B. NORWAY
 	# „keinen Alarm auf der Tirpitz“): erst in Runde 3 töten
@@ -323,6 +350,11 @@ func _follow_new_triggers(before: Dictionary) -> bool:
 		var now := _range_snapshot()
 		var fresh: Array = []
 		for k in now:
+			# B-032: Nähe-Abfragen gegnerischer Soldaten nicht anlaufen (ALPS2 AL2_08 „turn“ _PlayerInRange(6): 30 s neben
+			# dem Offizier → Ziel 1 verfehlt; Kettenlauf 02.11.2026)
+			var own_s := now[k] as Soldier
+			if own_s and own_s.team == Soldier.TEAM_AXIS:
+				continue
 			if not before.has(k) and not fresh.has(now[k]):
 				fresh.append(now[k])
 		if not fresh.is_empty():
@@ -414,6 +446,9 @@ func _teleport_to_pos(p: Vector3) -> void:
 ## Skriptobjekte, deren Skript Spielernähe abfragt (Bereichsauslöser, Sammelpunkte, Fundorte). Fallen, die ein Ziel
 ## scheitern lassen („…fail…“-Auslöser ohne Erfolgsmeldung), werden ausgelassen.
 var _points_cache: Array = []
+var _trap_re := RegEx.create_from_string("human_kill(ex)?\\s*\\(\\s*(player|_player_|pl)\\w*\\s*\\)")
+var _failsig_re := RegEx.create_from_string("sendsignal\\s*\\([^)]*\\)\\s*;\\s*//[^\\n]*fail")
+var _avoided := {}             ## gemiedene Auslöser → Skript (Bericht)
 
 
 func _trigger_points() -> Array:
@@ -444,6 +479,14 @@ func _trigger_points() -> Array:
 		# Zielskripte (SetObjectiveStatus) bleiben Auslöser, auch wenn sie die Falle kennen (ARCTIC2 „Rückkehr zur
 		# Oberfläche“ schaltet die Falle bei Erfolg ab)
 		if traps.any(func(t): return low.contains("\"" + t + "\"")) and not low.contains("setobjectivestatus"):
+			continue
+		# B-032: Regeln wie orig_complete_human._trigger_matters – Todesfallen (Skript tötet den Spieler in Reichweite,
+		# ARCTIC3 dummy_kill_player_1) und Fehlschlag-Auslöser (SendSignal(…); // …fail…, ARCTIC1 rebel_dabing) meiden
+		if not low.contains("setobjectivestatus") and (String(own.name).to_lower().contains("kill_player") \
+				or _trap_re.search(low) != null or _failsig_re.search(low) != null):
+			if re.search(src) != null:
+				print("LOESER Auslöser %s gemieden (Falle/Fehlschlag, %s)" % [own.name, vm.name])
+				_avoided[String(own.name)] = vm.name
 			continue
 		if re.search(src) != null and not _points_cache.has(own):
 			_points_cache.append(own)
@@ -485,6 +528,7 @@ func _teleport_squad(target: Node3D) -> void:
 	if area and int(area.flags_at(target.global_position + Vector3(0, 0.3, 0))) != 0:
 		print("LOESER Auslöser an der Einsatzgebiet-Grenze ausgelassen: ", target.name)
 		return
+	_last_step = "Auslöser " + String(target.name)
 	_teleport_to_pos(target.global_position)
 
 
@@ -520,6 +564,7 @@ func _interact_all(first: bool) -> bool:
 		await frames(2)
 		if not it.can_interact(lead):
 			continue
+		_last_step = "Benutzen " + String(it.name)
 		it.interact(lead)
 		if it is OrigInteractive.OrigExplosive:
 			# Anbringen 3 s, dann Zünder verkürzen und Abstand halten
@@ -746,6 +791,161 @@ func _vehicle_tour() -> bool:
 	return false
 
 
+## B-032: Skriptquelltext (klein) je Dateiname, gecacht
+var _src_cache := {}
+
+
+func _src(fn: String) -> String:
+	if not _src_cache.has(fn):
+		var f := FileAccess.open(m.orig.mission_dir + "/scripts/" + fn, FileAccess.READ)
+		_src_cache[fn] = f.get_as_text().to_lower() if f else ""
+	return _src_cache[fn]
+
+
+## B-032 Zusatzziele: je aktivem Zusatzziel die Skripte mit SetObjectiveStatus(i, 1) suchen; deren Signalgeber
+## (Detektoren, z. B. ALPS1 detector_forhakl → obj_hakl Signal 1) anlaufen, sofern keine Falle, und die im Zielskript
+## per FRM_FindFrame genannten Gegner/Fahrzeuge ausschalten (ALPS1 Ziel 8: Halbkette „hakl“ + ge_12–15).
+func _optional_objectives() -> bool:
+	var did := false
+	for idx in m.orig_objectives:
+		var o: Objective = m.objective(m.orig_objectives[idx])
+		# auch noch inaktive Zusatzziele, die erst das Zielskript freischaltet (ALPS1 Ziel 8: SetObjectiveStatus(8, 0)
+		# unmittelbar vor (8, 1), nachdem Halbkette und Besatzung ausgeschaltet sind)
+		if o == null or not o.optional or (o.state != Objective.State.ACTIVE and o.state != Objective.State.INACTIVE):
+			continue
+		var ok_re := RegEx.create_from_string("setobjectivestatus\\s*\\(\\s*%d\\s*,\\s*1\\s*\\)" % idx)
+		var owners: Array[String] = []
+		var targets: Array[String] = []
+		for vm in rt.vms:
+			var s := _src(vm.name)
+			if ok_re.search(s) == null or not is_instance_valid(vm.me):
+				continue
+			# nur eigene Zielskripte (ein Erfolgsziel); zentrale Zielskripte (ALPS1 objectyves: Ziele 1–6) haben Dutzende
+			# Signalgeber, darunter Fluchtauslöser (opel_ujel → Einsatzgebiet verlassen, Kettenlauf 2)
+			var succ := {}
+			for mt in RegEx.create_from_string("setobjectivestatus\\s*\\(\\s*(\\d+)\\s*,\\s*1\\s*\\)").search_all(s):
+				succ[mt.get_string(1)] = true
+			if succ.size() > 1:
+				continue
+			owners.append(String(vm.me.name).to_lower())
+			for mt in RegEx.create_from_string("frm_findframe\\s*\\(\\s*\\w+\\s*,\\s*\"([^\"]+)\"").search_all(s):
+				targets.append(mt.get_string(1))
+		if owners.is_empty():
+			continue
+		print("LOESER Zusatzziel %d (%s): Zielskripte an %s" % [idx, o.text, owners])
+		# Signalgeber anlaufen
+		for vm in rt.vms:
+			if not is_instance_valid(vm.me) or vm.me is Soldier:
+				continue
+			var s := _src(vm.name)
+			if not s.contains("sendsignal") or not owners.any(func(n): return s.contains("\"" + n + "\"")):
+				continue
+			if _trap_re.search(s) != null or _failsig_re.search(s) != null:
+				continue
+			print("LOESER Zusatzziel %d: Signalgeber %s" % [idx, vm.me.name])
+			_teleport_squad(vm.me)
+			did = true
+			if await _wait(2.0):
+				return true
+		# genannte Ziele ausschalten (Gegner, Fahrzeuge)
+		var lead := _lead()
+		for t in targets:
+			var nd := m.find_child(t, true, false)
+			if nd is Soldier and (nd as Soldier).alive and (nd as Soldier).team == Soldier.TEAM_AXIS:
+				(nd as Soldier).die(lead)
+				did = true
+			elif nd is Vehicle and not (nd as Vehicle).wrecked and not m.squad.members.any(func(x): return x.vehicle == nd):
+				(nd as Vehicle).explode(lead)
+				print("LOESER Zusatzziel %d: Fahrzeug %s zerstört" % [idx, t])
+				did = true
+		if did and await _wait(6.0):
+			return true
+		print("LOESER Zusatzziel %d danach: %s" % [idx, ["aktiv", "erfüllt", "verfehlt", "inaktiv"][mini(o.state, 3)]])
+	return false
+
+
+## B-032: Zielverlauf mitschreiben (Fehlschläge mit Zeit, letzter Löserschritt, mögliche Auslöserskripte)
+func _check_objectives() -> void:
+	if not is_instance_valid(m):
+		return
+	for idx in m.orig_objectives:
+		var o: Objective = m.objective(m.orig_objectives[idx])
+		if o == null:
+			continue
+		var prev = _obj_seen.get(idx, -1)
+		if prev == o.state:
+			continue
+		_obj_seen[idx] = o.state
+		var t := (Time.get_ticks_msec() - _t0) / 1000.0
+		if o.state == Objective.State.FAILED:
+			var who: Array[String] = []
+			var re := RegEx.create_from_string("setobjectivestatus\\s*\\(\\s*%d\\s*,\\s*3\\s*\\)" % idx)
+			for vm in rt.vms:
+				if re.search(_src(vm.name)) != null and not who.has(vm.name):
+					who.append(vm.name)
+			var l := "Ziel %d verfehlt bei %.0f s nach „%s“ (Skripte mit Fehlschlag: %s)" % [idx, t, _last_step, ", ".join(who)]
+			print("LOESER " + l)
+			_obj_log.append(l)
+		elif o.state == Objective.State.DONE:
+			_obj_log.append("Ziel %d erfüllt bei %.0f s" % [idx, t])
+
+
+## B-032: Kette – vorbelegte Werte des Vorgängerteils mit der Laufzeit abgleichen, und welche geladenen Werte fehlen
+func _check_chain_in() -> void:
+	var loads := {}
+	for vm in rt.vms:
+		for mt in RegEx.create_from_string("_loadgamevalue\\s*\\(\\s*(\\d+)").search_all(_src(vm.name)):
+			loads[int(mt.get_string(1))] = true
+	var saves := {}
+	for vm in rt.vms:
+		for mt in RegEx.create_from_string("savegamevalue\\s*\\(\\s*(\\d+)").search_all(_src(vm.name)):
+			saves[int(mt.get_string(1))] = true
+	var ext: Array = loads.keys().filter(func(k): return not saves.has(k))
+	ext.sort()
+	var got: Array[String] = []
+	var miss: Array[String] = []
+	for k in ext:
+		if rt.game_values.has(int(k)):
+			got.append("%d=%s" % [k, rt.game_values[int(k)]])
+		else:
+			miss.append(str(k))
+	var bad: Array[String] = []
+	for k in _chain_in:
+		if not ext.has(int(k)):
+			continue      # Wert setzt dieser Teil selbst (Init-SaveGameValue) – keine Übergabe
+		if not rt.game_values.has(int(k)) or str(rt.game_values[int(k)]) != str(_chain_in[k]):
+			bad.append(str(k))
+	print("KETTE_EIN|%s|Übergabewerte (aus Vorgängern gelesen) %s|vorhanden %s|fehlen %s|nicht übernommen %s" % [mid,
+		ext, got, miss, bad])
+	if not _chain_in.is_empty():
+		notes.append("Kette ein %d Werte%s" % [_chain_in.size(), "" if bad.is_empty() else ", NICHT übernommen " + ", ".join(bad)])
+
+
+## B-032: Zeitlimits/Alarmpfade statisch – Skripte, die nach Delay-Schleifen bzw. OnAlarm ein Ziel scheitern lassen
+func _print_static_limits() -> void:
+	var fail_re := RegEx.create_from_string("setobjectivestatus\\s*\\(\\s*(\\d+)\\s*,\\s*3\\s*\\)")
+	for vm in rt.vms:
+		var s := _src(vm.name)
+		var fm := fail_re.search(s)
+		if fm == null:
+			continue
+		var kinds: Array[String] = []
+		if s.contains("onalarm") or s.contains("_getalarmtype") or s.contains("alarm"):
+			kinds.append("Alarm")
+		var dl := RegEx.create_from_string("delay\\s*\\(\\s*(\\d+)").search_all(s)
+		var total := 0
+		for d in dl:
+			total = maxi(total, int(d.get_string(1)))
+		if s.contains("settimer") or s.contains("setinterfacetimer") or (total >= 10000):
+			kinds.append("Zeit (Delay bis %d ms)" % total)
+		if s.contains("_playerinrange") or s.contains("_playersinrange"):
+			kinds.append("Spielernähe")
+		if s.contains("ondeath") or s.contains("_actor_getstate"):
+			kinds.append("Tod/Zustand")
+		print("FEHLSCHLAGPFAD|%s|Ziel %s|%s an %s|%s" % [mid, fm.get_string(1), vm.name,
+			vm.me.name if is_instance_valid(vm.me) else "?", ", ".join(kinds)])
+
+
 ## Ziele ohne Erfolgspfad: kein SetObjectiveStatus(i, 1) in den Skripten des Einsatzes
 func _static_success_paths() -> Dictionary:
 	var out := {}
@@ -796,6 +996,33 @@ func _report() -> void:
 				req_done += 1
 	for l in lines:
 		print(l)
+	# B-032: Zusatzziele, Zielverlauf, Alarm, gemiedene Fallen, Kettenausgabe
+	var opt_n := 0
+	var opt_done := 0
+	for o in objs:
+		if o[3] and int(o[2]) != Objective.State.INACTIVE:
+			opt_n += 1
+			if int(o[2]) == Objective.State.DONE:
+				opt_done += 1
+	if is_instance_valid(m):
+		_check_objectives()
+	notes.append("Zusatz %d/%d" % [opt_done, opt_n])
+	notes.append("Alarm " + ("ab %.0f s" % _first_alarm if _first_alarm >= 0.0 else "keiner"))
+	for l in _obj_log:
+		print("  VERLAUF " + l)
+		if l.contains("verfehlt"):
+			notes.append(l)
+	if not _avoided.is_empty():
+		notes.append("gemieden: " + ", ".join(_avoided.keys()))
+	if Game.cli.has("chain_out") and is_instance_valid(rt):
+		var gv := {}
+		for k in rt.game_values:
+			gv[str(k)] = rt.game_values[k]
+		var cf := FileAccess.open(String(Game.cli["chain_out"]), FileAccess.WRITE)
+		if cf:
+			cf.store_string(JSON.stringify(gv))
+			cf.close()
+		print("KETTE_AUS|%s|%s" % [mid, JSON.stringify(gv)])
 	# Diagnose: --dump_vms=teil1,teil2 → Zustand passender Skripte (empfangene Signale, Whenever, Variablen)
 	if Game.cli.has("dump_vms") and is_instance_valid(rt):
 		for part in String(Game.cli["dump_vms"]).to_lower().split(","):

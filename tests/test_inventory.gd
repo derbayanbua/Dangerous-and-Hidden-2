@@ -492,6 +492,9 @@ func _helmet_sp(hale: Soldier) -> void:
 	# Schuss von schräg oben auf den Helm (Strahl trifft zuerst die Helmfläche)
 	var target := hx.origin + Vector3.UP * 0.06
 	var from := target + Vector3(0.0, 0.8, 2.5)
+	# Abschluss 0.9.8: Durchschlag (30 %) tötete den Kameraden sonst zufällig → Ersatz Hale mit vollen Taschen ließ das
+	# Aufsetzen scheitern („Kein Platz“). Hohe Gesundheit hält den Ablauf deterministisch; die Helmregel prüft oben die Formel.
+	mate.health = 5000.0
 	var hp0 := mate.health
 	Ballistics.fire(hale, from, (target - from).normalized(), k98, hale.exclude_rids(), hale.team)
 	var t0 := Time.get_ticks_msec()
@@ -649,6 +652,7 @@ func _b018_sp(hale: Soldier) -> void:
 	await frames(30)
 	var t: Vector3 = mate.model.helmet_transform().origin + Vector3.UP * 0.06
 	var src := t + Vector3(0, 0.8, 2.5)
+	mate.health = 5000.0     # Abschluss 0.9.8: Durchschlag (30 %) soll den Kameraden nicht zufällig töten (Rückenwaffen-Prüfung folgt)
 	Ballistics.fire(hale, src, (t - src).normalized(), k98, hale.exclude_rids(), hale.team)
 	var t0 := Time.get_ticks_msec()
 	while Time.get_ticks_msec() - t0 < 2000 and Helmet.head_item(mate) >= 0:
@@ -889,6 +893,19 @@ func _mp() -> void:
 		if int(id) < 0 and is_instance_valid(sb) and sb.alive:
 			bot2 = sb
 	if bot2 and is_instance_valid(host) and host.alive:
+		# Abschluss 0.9.8: zufälliger Spawn neben einer MG-42-Stellung → die Stellung war das Benutzen-Ziel statt der
+		# Leiche (korrektes Spielverhalten). Host vorher von anderen Benutzbaren weg versetzen (bis 8 Versuche à 7 m).
+		Net.move_check = false
+		for _try in 8:
+			var crowded := false
+			for n in get_tree().get_nodes_in_group("interactables"):
+				if n is Node3D and (n as Node3D).global_position.distance_to(host.global_position) < 5.0:
+					crowded = true
+			if not crowded:
+				break
+			host.global_position += Vector3(7.0, 0.5, 0.0) if _try % 2 == 0 else Vector3(0.0, 0.5, 7.0)
+			host.velocity = Vector3.ZERO
+			await frames(10)
 		bot2.global_position = host.global_position + host.forward() * 1.2 + Vector3.UP * 0.2
 		await frames(10)
 		bot2.set_meta("protect_until", 0)

@@ -4,7 +4,9 @@
 # Beachtet die Test-Sperre test_output\.godot_lock (fremde Sperre < 20 min -> warten) und lässt zwischen zwei
 # Missionen 20 s Zeit, damit andere Läufe die Sperre bekommen.
 param([string[]]$Only = @(), [string]$Speed = "2", [int]$TimeoutSec = 1500, [string]$LockName = "completability",
-  [switch]$TableOnly, [string]$Strategy = "kampf", [string]$Extra = "", [switch]$Human)
+  [switch]$TableOnly, [string]$Strategy = "kampf", [string]$Extra = "", [switch]$Human, [switch]$Chain)
+# -Chain (B-032): Teile in der Reihenfolge von -Only als Kampagnenkette: jeder Teil schreibt seine SaveGameValue-Werte nach
+# test_output\chain_<id>.json (--chain_out), der nächste startet damit (--game_values). Log completability_<id>_kette.log
 # -Human (B-036): Löser-Modus „menschlich“ (--human=1, nur Spielereingaben/Navmesh-Wege, keine Teleports des Lösers);
 # Log completability_<id>_mensch.log, Zeitlimit mindestens 9000 s. Tabelle: test_output\completability_mensch.txt
 if ($Human) { $Extra = "$Extra --human=1"; if ($TimeoutSec -lt 9300) { $TimeoutSec = 9300 } }
@@ -41,7 +43,14 @@ if (-not $TableOnly) {
     $log = "$out\completability_$id$suffix.log"
     # AFRICA6 ist ein Bordschützen-Einsatz mit eigener Flugmechanik: Erfüllbarkeit über test_af6
     $script = if ($id -eq "af6_raubvoegel") { "test_af6" } else { "test_orig_complete" }
-    $args2 = "--headless -- --mission=$id --autoplay=$script --speed=$Speed --strategy=$Strategy $Extra"
+    $chainArgs = ""
+    if ($Chain) {
+      $log = "$out\completability_${id}${suffix}_kette.log"
+      $chainArgs = "--chain_out=$out\chain_$id.json"
+      if ($prevChain -and (Test-Path $prevChain)) { $chainArgs += " --game_values=$prevChain" }
+      $prevChain = "$out\chain_$id.json"
+    }
+    $args2 = "--headless -- --mission=$id --autoplay=$script --speed=$Speed --strategy=$Strategy $Extra $chainArgs"
     $p = Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"`"$proj\tools\godot.cmd`" $args2 > `"$log`" 2>&1`"" -WorkingDirectory $proj -PassThru -WindowStyle Hidden
     if (-not $p.WaitForExit($TimeoutSec * 1000)) { taskkill /PID $p.Id /T /F | Out-Null; "TIMEOUT" | Add-Content $log }
     if (((Get-Content $lock -ErrorAction SilentlyContinue) -join "") -eq $LockName) { Remove-Item $lock -Force }

@@ -101,6 +101,33 @@ func _b033_tests(rt, m) -> void:
 	if wa and wb:
 		check(rt.checkpoint_route(wa.global_position, wb).size() == 1, "Ohne genutzte Skriptkante direkter Weg (Navmesh)")
 	cp.clear()
+	# Join-Prüfung 0x5248C0 (b033_rest): ein Skriptplatz je Knoten, keine Grundverbindung, Abstand ≤ 250 m
+	cp.strict = true
+	check(cp.join("Rebel_Joinn1", "Rebel_Joinn2"), "Join Rebel_Joinn1–2 (Originalskript) zulässig")
+	check(not cp.join("Rebel_Joinn1", "swamp_1"), "Zweite Skriptkante am selben Knoten abgewiesen (Bit 0x80)")
+	check(cp.script_slot.has(cp.node_of("swamp_1")), "Abgewiesener Join: zuerst geprüfter Knoten B behält seinen Platz (0x51F280)")
+	check(cp.separate("Rebel_Joinn1", "Rebel_Joinn2") and cp.join("Rebel_Joinn1", "swamp_2"),
+		"Separate gibt den Skriptplatz frei")
+	cp.clear()
+	var nm3682 := cp.node_of("Rebel_Joinn1")
+	if nm3682 >= 0 and cp.base_adj[nm3682].size() > 0:
+		var nb: int = cp.base_adj[nm3682][0]
+		var nbname := ""
+		for k in cp.name_node:
+			if cp.name_node[k] == nb:
+				nbname = k
+		if nbname != "":
+			check(not cp.join("Rebel_Joinn1", nbname), "Join zu bereits verbundenem Grundknoten abgewiesen")
+	var far := ""
+	var pj: Vector3 = cp.base_pos[cp.node_of("swamp_2")]
+	for k in cp.name_node:
+		var ni: int = cp.name_node[k]
+		if (int(cp.base_flags[ni]) & 0x40) != 0 and (cp.base_pos[ni] as Vector3).distance_to(pj) > 250.0:
+			far = k
+			break
+	if far != "":
+		check(not cp.join("swamp_2", far), "Join über 250 m abgewiesen", far)
+	cp.clear()
 	# EnemyBrain.script_route: Zwischenpunkte nacheinander
 	var es: Soldier = null
 	for n in get_tree().get_nodes_in_group("team_%d" % Soldier.TEAM_AXIS):
@@ -201,6 +228,7 @@ func _checkpoint_tests(rt) -> void:
 	if not (cp is LsCheckpoints):
 		return
 	cp.clear()
+	cp.strict = false   # reine Kantenliste; die Join-Prüfung 0x5248C0 prüft _b033_tests
 	var vm := LsVM.new(LsCompiler.new(), null, rt)
 	rt.call_api(vm, "CHECKPOINTJOIN", [["str", "swamp_1"], ["str", "swamp_2"]])
 	rt.call_api(vm, "CHECKPOINTJOIN", [["str", "swamp_3"], ["str", "swamp_4"]])
@@ -221,6 +249,7 @@ func _checkpoint_tests(rt) -> void:
 	cp.load_state(st["checkpoints"])
 	check(cp.path("swamp_1", "swamp_4").size() == 4, "Laufzeit-Kanten per load_state zurückgesetzt")
 	cp.clear()
+	cp.strict = true
 
 
 func _misc_tests(rt, m) -> void:

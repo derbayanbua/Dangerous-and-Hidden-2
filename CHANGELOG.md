@@ -2,6 +2,36 @@
 
 Versionierung: vorerst immer 0.9.x – jeder Commit nach GitHub zählt die letzte Stelle hoch und bekommt einen Tag.
 
+## 0.9.8 (02.11.2026)
+
+**Arktis-Kampagne „menschlich“ geprüft**
+- Neuer Löser-Modus `--human=1`: spielt nur mit Spielereingaben, ohne Teleports. arctic1–4 damit durchgespielt
+  (arctic1/2 abgenommen, arctic3 von vorn alle Pflichtziele, arctic4 Ziele 1–4).
+
+**Fehlerbehebungen**
+- arctic2: Verschlossene Türen ohne Schlüssel lösen das Skript-Ereignis „Benutzen“ aus – die Skripte schließen sie
+  beim ersten Benutzen auf (vorher blieben drei Türen für immer zu).
+- Originalkarten: Kartengrenz-Deckel (ab 10 m Höhe) sind nur noch von unten fest – man kann nicht mehr auf der
+  unsichtbaren Decke über der Karte herumlaufen (arctic3).
+- Originalkarten: Unsichtbare Sichtverdecker haben keine Kollision mehr (arctic4, Normandie, czech4/5).
+- Zerstörte Fahrzeuge gelten für die Skripte als zerstört (alps1: Zusatzziel „Gepanzertes Fahrzeug zerstören“,
+  Übergabe an alps2).
+- Join-Prüfung für Skript-Wegpunkte wie im Original; Soldaten warten länger auf Menschen im Weg statt abzubrechen.
+
+**Navigation**
+- NORWAY-Stahltreppen und Treppenhaus T1 (arctic2) sind im KI-Wegenetz (KI folgt auf nw1 4/8 statt 1/8).
+- mp_normandy2 besser erreichbar (72/81 statt 64/81).
+
+**Tests**
+- Kampagnen-Löser: Ketten mit Übergabewerten zwischen Missionsteilen (`-Chain`), Zusatzziele, Fehlschlagpfade und
+  Todesfallen werden erkannt und gemieden. Stichproben alps1→alps2 und norway1 komplett.
+- Gesamttestreihe 75/77 grün (rot nur die Mess-Suiten Treppen und MP-Erreichbarkeit); `run_tests.ps1 -Exclude`.
+- Neue Screenshots im README.
+
+**Bekannt offen**
+- arctic4: Tür zur Baracke mit den Unterlagen wird nicht immer angeboten; Ziele 5/6 im Löser nicht erreicht.
+- Restliche Erreichbarkeitslücken (norway1-Oberdecks, czech2, mp_burma2, mp_alps1, mp_africa2).
+
 ## 0.9.7 (01.11.2026)
 
 **Neu**

@@ -666,6 +666,11 @@ class OrigDoor extends Interactable:
 				if _snd("locked_rattle") == null:
 					_snd("wrong_key")
 				Events.emit_noise(global_position, 6.0, s, s.team, &"door")
+				# B-036 [P]: Benutzen einer verschlossenen Tür löst OnUse trotzdem aus – Originalskripte schließen damit
+				# beim ersten Benutzen auf (ARCTIC2 1s_m_dv_m01.scr, r_arc1b_dvereodhajzlu.scr, r_arc1b_s9_sender.scr:
+				# „If (first_use) DOOR_Lock(MyFRM, false)“; r_arc1b_s4.scr: „je to na onuse ve dverich“). Ohne das blieben
+				# diese Türen ohne Schlüssel für immer zu (a2-Löser stand vor m_dv_m01).
+				host.runtime.notify(frame, "ONUSE")
 			_update_prompt()
 			return
 		set_open(not is_open)

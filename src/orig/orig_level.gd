@@ -63,8 +63,145 @@ func build() -> bool:
 		_place_objects(not klz)
 	if klz:
 		_build_orig_collision()
+	_apply_walk_patches()
 	_build_display_extras()
 	return true
+
+
+## B-036 [D]: unsichtbare Lauf-Korrekturen je Karte ([D]: „ohne Leertaste die Treppe hinauf“).
+## kind "ramp": begehbare Fläche von a nach b (Oberkante durch a und b, Breite w); kind "guide": senkrechte Leitwand
+## von a nach b, Höhe h, damit man nicht in eine Spalte/Keilfläche läuft, sondern in die begehbare Gasse gleitet.
+## Liegen unter der statischen Geometrie → gehen ins Navmesh ein (Cache-Schlüssel enthält die Quellgeometrie).
+## kind "stair" (B-010b): nur Navigation – NavigationLink3D vom Fuß (a = unterster Tritt, 0,55 m davor, eine Stufe
+## tiefer) zum Austritt (b = oberster Tritt, 0,45 m dahinter, eine Stufe höher). Für steile Original-Stahltreppen mit
+## echter Stufenkollision, die Recast nicht als Fläche erfasst (überlappende Tritte → kein Kopfraum je Rasterspalte);
+## die KI läuft den Link wie einen Weg (AIBrain: ohne Meta „climb“/„ladder“ einfach weiter). Physik unverändert,
+## kein Navmesh-Neubau (Links sind dynamisch, nicht im Cache). Tritte aus test_stairs (`stairs_report*`).
+const WALK_PATCHES := {
+	# NORWAY (nw1_dampfleitung): 14 Stahltreppen, test_stairs T1–T16 (T3/T4/T7/T8 = Doppelfunde von T1/T2/T5/T6).
+	# T17/T18 fehlen bewusst: auch der Spieler kommt dort nicht hinauf (Kopfraum), ein Link führte die KI in die Falle.
+	"norway": [
+		{"kind": "stair", "a": Vector3(60.2, 5.1, -270.0), "b": Vector3(60.2, 7.4, -267.6)},
+		{"kind": "stair", "a": Vector3(50.8, 5.1, -270.0), "b": Vector3(50.8, 7.4, -267.6)},
+		{"kind": "stair", "a": Vector3(60.1, 7.6, -263.5), "b": Vector3(60.1, 9.9, -261.1)},
+		{"kind": "stair", "a": Vector3(50.9, 7.6, -263.5), "b": Vector3(50.9, 9.9, -261.1)},
+		{"kind": "stair", "a": Vector3(-115.9, 6.8, -330.2), "b": Vector3(-115.1, 9.0, -328.2)},
+		{"kind": "stair", "a": Vector3(-110.3, 6.8, -316.3), "b": Vector3(-109.5, 9.0, -314.3)},
+		{"kind": "stair", "a": Vector3(-97.7, 6.8, -339.1), "b": Vector3(-96.6, 9.0, -337.2)},
+		{"kind": "stair", "a": Vector3(-57.8, 6.7, -249.9), "b": Vector3(-58.7, 9.0, -252.0)},
+		{"kind": "stair", "a": Vector3(-69.9, 6.7, -244.1), "b": Vector3(-71.1, 9.0, -246.0)},
+		{"kind": "stair", "a": Vector3(-90.2, 6.8, -326.3), "b": Vector3(-89.1, 9.0, -324.4)},
+		{"kind": "stair", "a": Vector3(-91.9, 9.4, -323.3), "b": Vector3(-91.2, 11.4, -321.8)},
+		{"kind": "stair", "a": Vector3(-106.8, 9.4, -316.0), "b": Vector3(-106.1, 11.4, -314.5)},
+	],
+
+	# ARCTIC2 T1 (B-036: keine Lauf-Korrektur nötig, T1_sten_67 ist die schräge Innenbegrenzung): B-010b nur Navigation –
+	# die Stockwerke waren im Netz nur senkrecht verbunden (Scherentreppe, Läufe überdecken sich) → Link je Rampe 01–08.
+	"arctic2": [
+		{"kind": "ramp_links", "match": "xT1_schod_", "a": Vector3.ZERO, "b": Vector3.ZERO},
+	],
+}
+
+
+## kind "ramp_links": je versteckter Ersatzrampe (Frame-Name enthält "match", mit Kollisionskörper) ein Link vom
+## unteren zum oberen Ende (Mittel der Eckpunkte ≤ 0,15 m über dem Tiefst- bzw. unter dem Höchstpunkt, je 0,6 m über
+## das Ende hinaus). Für Scherentreppen, deren Läufe sich in der Draufsicht überdecken (ARCTIC2 T1).
+func _ramp_links(body: Node3D, pat: String) -> void:
+	for n in root.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi.mesh == null or not String(mi.name).to_lower().contains(pat):
+			continue
+		if mi.find_children("*", "StaticBody3D", false, false).is_empty():
+			continue                                    # ohne Körper (ARCTIC2 xT1_schod_09/10) nicht begehbar
+		var xf := Transform3D()
+		var q: Node = mi
+		while q != null and q != root:
+			if q is Node3D:
+				xf = (q as Node3D).transform * xf
+			q = q.get_parent()
+		var vs: Array[Vector3] = []
+		var lo := INF
+		var hi := -INF
+		for v in mi.mesh.get_faces():
+			var w: Vector3 = xf * v
+			vs.append(w)
+			lo = minf(lo, w.y)
+			hi = maxf(hi, w.y)
+		if hi - lo < 0.5:
+			continue
+		var a := Vector3.ZERO
+		var b := Vector3.ZERO
+		var na := 0
+		var nb := 0
+		for w in vs:
+			if w.y <= lo + 0.15:
+				a += w
+				na += 1
+			elif w.y >= hi - 0.15:
+				b += w
+				nb += 1
+		a /= maxi(na, 1)
+		b /= maxi(nb, 1)
+		a.y = lo
+		b.y = hi
+		var dir := Vector3(b.x - a.x, 0.0, b.z - a.z).normalized()
+		var link := NavigationLink3D.new()
+		link.name = "RampLink_%s" % mi.name
+		link.bidirectional = true
+		link.set_meta("stair", true)
+		body.add_child(link)
+		link.start_position = a - dir * 0.6
+		link.end_position = b + dir * 0.6
+		stats["stair_links"] = int(stats.get("stair_links", 0)) + 1
+		if Game.cli.has("klz_debug"):
+			print("KLZ: Rampen-Link %s %s -> %s" % [mi.name, link.start_position, link.end_position])
+
+
+func _apply_walk_patches() -> void:
+	var key := mission_dir.get_file().to_lower()
+	if not WALK_PATCHES.has(key):
+		return
+	var body := StaticBody3D.new()
+	body.name = "WalkPatches"
+	body.collision_layer = 1
+	root.add_child(body)
+	for p: Dictionary in WALK_PATCHES[key]:
+		var a: Vector3 = p["a"]
+		var b: Vector3 = p["b"]
+		if p["kind"] == "ramp_links":
+			if not Game.cli.has("nav_stair_links_off"):
+				_ramp_links(body, String(p["match"]).to_lower())
+			continue
+		if p["kind"] == "stair":
+			if Game.cli.has("nav_stair_links_off"):
+				continue
+			var dir := Vector3(b.x - a.x, 0.0, b.z - a.z).normalized()
+			var link := NavigationLink3D.new()
+			link.name = "StairLink%d" % body.get_child_count()
+			link.bidirectional = true
+			link.set_meta("stair", true)
+			body.add_child(link)
+			link.start_position = a - dir * 0.55 + Vector3.DOWN * 0.16
+			link.end_position = b + dir * 0.45 + Vector3.UP * 0.16
+			stats["stair_links"] = int(stats.get("stair_links", 0)) + 1
+			continue
+		var cs := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		var d := b - a
+		var flat := Vector3(d.x, 0, d.z)
+		var yaw := atan2(flat.x, flat.z)
+		if p["kind"] == "guide":
+			var h: float = p.get("h", 1.2)
+			box.size = Vector3(0.06, h, flat.length())
+			cs.transform = Transform3D(Basis(Vector3.UP, yaw), (a + b) * 0.5 + Vector3.UP * h * 0.5)
+		else:
+			var thick := 0.12
+			var pitch := -atan2(d.y, flat.length())
+			box.size = Vector3(float(p.get("w", 1.0)), thick, d.length())
+			var basis := Basis(Vector3.UP, yaw) * Basis(Vector3.RIGHT, pitch)
+			cs.transform = Transform3D(basis, (a + b) * 0.5 - basis.y * thick * 0.5)
+		cs.shape = box
+		body.add_child(cs)
 
 
 # --- B-035: Glows, Umhängungen, Lichtkegel, Lightmaps (tools/fmt_glows.py, tools/fmt_lightmaps.py) ---------------
@@ -337,6 +474,10 @@ func _build_orig_collision() -> void:
 			continue
 		if not e[1] and not e[2] and not e[4]:      # sichtbar, ohne Klz-Flächen und ohne Kiste (nur OBB/kein Link)
 			collide = true
+			# B-036: Sichtverdecker („xxx_occlude01“ ARCTIC4 bei (−130; 0; 35), „yyy_occlude…“, „occlude104“) sind reine
+			# Render-Hilfskörper ohne Klz-Link – im Original ohne Kollision; hier sperrten sie den Weg (a4 Löser fest)
+			if String(mi.name).to_lower().contains("occlude") or String(mi.get_parent().name).to_lower().contains("occlude"):
+				collide = false
 			var box := mi.global_transform * mi.get_aabb()
 			for k in proxies.size():
 				if proxies[k].encloses(box) and (not proxy_strict[k] or _vol(box) >= 0.2 * _vol(proxies[k].grow(-0.3))):
@@ -557,12 +698,51 @@ func _mesh_collider(mi: MeshInstance3D, collide: bool, two_sided := false, klz_f
 		body.collision_layer = 1
 		var cs := CollisionShape3D.new()
 		cs.shape = mi.mesh.create_trimesh_shape()
-		if two_sided:
+		if mi.has_meta("klz_proxy") and not Game.cli.has("nav_proxy_flip_off"):
+			_orient_proxy_up(mi, cs.shape as ConcavePolygonShape3D)
+		# B-036: Kartengrenze „BORDER“ (Wände + Deckel, ARCTIC3 Deckel bei y 22,4 tiefer als die Hügel) nur einseitig –
+		# beidseitig war die Deckeloberseite begehbar, der Löser lief in a3 auf ihr kreuz und quer über die Karte
+		# nur Deckelteile (Unterkante ≥ 10 m über dem Ursprung, z. B. ARCTIC3 Border_15…29 bei 15,3…22,4); Seitenwände
+		# bleiben beidseitig, damit niemand hinausläuft
+		var is_border := String(mi.get_path()).contains("/BORDER/") and not Game.cli.has("border_two_sided") \
+			and mi.is_inside_tree() and (mi.global_transform * mi.get_aabb()).position.y >= 10.0
+		if two_sided and not is_border:
 			# Klz-Ebenen wirken beidseitig; versteckte Ersatzkörper sind teils nach unten orientiert (ARCTIC2 T1_strop_19)
 			(cs.shape as ConcavePolygonShape3D).backface_collision = true
 		body.add_child(cs)
 		mi.add_child(body)
 		stats.colliders += 1
+
+
+## B-010b: Recast (Navmesh) wertet nur Dreiecke als begehbar, deren Vorderseite nach oben zeigt. Versteckte
+## Ersatzkörper sind im Original teils nach unten orientiert (Klz wirkt beidseitig; ARCTIC2 T1_strop_19, NORWAY
+## BB_kolize09/10) → Kollision ok, aber nicht im Netz. Überwiegend nach unten zeigende Ersatzkörper (Fläche „unten“ >
+## 2 × „oben“, also verkehrt gewickelt statt geschlossener Kiste) werden umgedreht; physikalisch gleich, da beidseitig
+## kollidierend. Nur Ersatzkörper: eine Ausweitung auf alle Klz-Flächen drehte auf NORWAY 82 Formen (auch Decken-
+## platten) ohne Gewinn – verworfen. `--nav_proxy_flip_off` = alter Stand.
+func _orient_proxy_up(mi: MeshInstance3D, shape: ConcavePolygonShape3D) -> void:
+	var f := shape.get_faces()
+	var b := mi.global_transform.basis if mi.is_inside_tree() else mi.transform.basis
+	var up := 0.0
+	var down := 0.0
+	for i in range(0, f.size() - 2, 3):
+		var n := (b * (f[i + 2] - f[i])).cross(b * (f[i + 1] - f[i]))   # Godot-Vorderseite (im Uhrzeigersinn)
+		if absf(n.y) <= 0.5 * n.length():
+			continue
+		if n.y > 0.0:
+			up += n.length()
+		else:
+			down += n.length()
+	if down <= 2.0 * up or down <= 0.0:
+		return
+	for i in range(0, f.size() - 2, 3):
+		var t := f[i + 1]
+		f[i + 1] = f[i + 2]
+		f[i + 2] = t
+	shape.set_faces(f)
+	stats["proxy_flipped"] = int(stats.get("proxy_flipped", 0)) + 1
+	if Game.cli.has("klz_debug"):
+		print("KLZ: Ersatzkörper %s umgedreht (oben %.2f, unten %.2f)" % [mi.name, up, down])
 
 
 static func _has_area(mesh: Mesh) -> bool:

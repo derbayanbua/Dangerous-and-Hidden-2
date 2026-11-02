@@ -98,7 +98,8 @@ func _run() -> void:
 	var cfg := lm.server_settings()
 	var keys_ok := true
 	for k in Net.RULE_KEYS:
-		if not cfg.has(k) and k != "flood_protect":       # floodprotect: nur Konsole (nicht im Original-Menü)
+		# floodprotect und (B-029) spawnonstart: nur Konsole (nicht im Original-Menü)
+		if not cfg.has(k) and k != "flood_protect" and k != "spawn_on_start":
 			keys_ok = false
 	check(keys_ok and (cfg["map_list"] as Array).size() > 1 and cfg["bots_per_team"] == 1, "server_settings: alle Regeln, Kartenliste, KI-Soldaten",
 		str((cfg["map_list"] as Array).size()))

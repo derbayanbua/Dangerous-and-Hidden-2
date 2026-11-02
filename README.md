@@ -26,13 +26,15 @@ Tarnung, Fahrzeuge, Original-Missionsabläufe.
 - Texturen und Sounds sind aus dem Original und müssen manuel exportiert und Importiert werden
 - LAN Modus mit BOTs ist implementiert
 
-## Screenshots (v0.9.3)
+## Screenshots (v0.9.8)
 
-| Hauptmenü | Im Einsatz |
+| Hauptmenü | Einsatz Arktis |
 |---|---|
-| ![Hauptmenü](docs/screenshots/01_hauptmenue.png) | ![Im Einsatz](docs/screenshots/02_ingame.png) |
-| **Gefecht** | **LAN-Mehrspieler** |
-| ![Gefecht](docs/screenshots/03_kampf.png) | ![LAN-Menü](docs/screenshots/04_lan.png) |
+| ![Hauptmenü](docs/screenshots/01_hauptmenue.png) | ![Einsatz Arktis](docs/screenshots/02_einsatz_arktis.png) |
+| **Gefecht: Explosion mit Ragdoll-Physik** | **LAN-Mehrspieler** |
+| ![Gefecht](docs/screenshots/03_kampf_explosion.png) | ![LAN-Menü](docs/screenshots/04_lan.png) |
+| **HUD mit Befehlsmenü** | |
+| ![HUD und Befehlsmenü](docs/screenshots/05_hud_befehlsmenue.png) | |
 
 ## Keine Originaldaten im Repository
 

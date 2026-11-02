@@ -167,6 +167,18 @@ func _run_ap6(m, rt: LsRuntime, c: Soldier, space: PhysicsDirectSpaceState3D) ->
 	for sm in m.squad.members:
 		if sm != c:
 			sm.global_position += Vector3(0, 0, 400)     # andere Kameraden aus dem Blick
+	# Nur WALKER_GUARD_1 beobachtet: andere Gegner (Patrouillen, die zufällig in Sicht laufen) blind schalten, sonst
+	# zählt die Messung 2+ Beobachter (Abschluss 0.9.8: 2,5 s statt ≈ 6 s gemessen = zweiter Beobachter, kein Formelfehler)
+	var _blinded: Array = []
+	for node in get_tree().get_nodes_in_group("soldiers"):
+		var o := node as Soldier
+		if o and o != w1 and o.team != c.team:
+			var op: Perception = o.get_node_or_null("Perception")
+			if op and op.is_physics_processing():
+				op.set_physics_process(false)
+				op.disguise_seen.clear()
+				op.visible_now.clear()
+				_blinded.append(op)
 	c.put_on_uniform(Color(0.36, 0.38, 0.33), "cap")
 	check(c.disguised and c.disguise_value == 100.0, "Anziehen: Tarnwert sofort 100")
 	var fwd := w1.aim_direction()
@@ -189,6 +201,9 @@ func _run_ap6(m, rt: LsRuntime, c: Soldier, space: PhysicsDirectSpaceState3D) ->
 	check(c.disguise_value <= 0.0 and t_end > 4.0 and t_end < 10.0, "Ein Beobachter: Tarnung nach ≈ 6–7 s aufgebraucht (30 Hz)", "%.2f s" % t_end)
 	await seconds(0.6)
 	check(per.awareness.get(c, 0.0) >= 1.0, "Bei Tarnwert 0 enttarnt und erkannt")
+	for op in _blinded:
+		if is_instance_valid(op):
+			op.set_physics_process(true)
 	c.disguised = false
 	c.disguise_value = 0.0
 

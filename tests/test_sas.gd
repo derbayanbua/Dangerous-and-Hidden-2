@@ -159,8 +159,12 @@ func _run() -> void:
 		var lw := 21 if int(inv3["hands"]) != 21 else 4          # Sten bzw. zweite leichte Langwaffe
 		var cnt0 := SAS.count_of(inv3, lw)
 		Game.campaign["storage"].append([lw, 1])
+		var w3 := SAS.inv_weight(Game.sas_inventory(sold))
+		var heavy3 := w3 + SAS.weight(lw) > float(Game.sas_states()[str(sold)]["stats"]["strength"]) + 0.001
 		var ok3 := scr.give(sold, lw, 1, "items")
-		check(ok3 and int(Game.sas_inventory(sold)["shoulder"]) == lw and SAS.count_of(Game.sas_inventory(sold), lw) == cnt0 + 1
+		# Abschluss 0.9.8: zufälliges Team – mit Bren in den Händen kann die zweite Langwaffe die Traglast sprengen;
+		# dann ist die Ablehnung korrekt (Inventar unverändert), wie bei der Bren-Prüfung oben
+		check((heavy3 and not ok3 and SAS.count_of(Game.sas_inventory(sold), lw) == cnt0) or ok3 and int(Game.sas_inventory(sold)["shoulder"]) == lw and SAS.count_of(Game.sas_inventory(sold), lw) == cnt0 + 1
 			and not (Game.sas_inventory(sold)["items"] as Array).any(func(e): return int(e[0]) == lw),
 			"B-018: zweite Langwaffe auf den Rücken statt in die Taschen", str(Game.sas_inventory(sold)))
 		if ok3:

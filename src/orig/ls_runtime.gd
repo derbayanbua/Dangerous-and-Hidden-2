@@ -435,6 +435,10 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				# Gefangene gelten als ausgeschaltet (ARCTIC1 r_arc1a_obj1_sender.scr prüft deshalb alle 7 s nach:
 				# „to je kvuli zajimani“ – wegen der Gefangennahme)
 				return 1 if (af as Soldier).alive and not af.has_meta("captured") else 0
+			# B-032: zerstörtes Fahrzeug = 0 (Skriptbeleg AFRICA1 af1_dead_vehicles „opeldead (!_ACTOR_GetState(opel))“,
+			# ALPS1 obj_hakl zählt die Halbkette „hakl“ erst bei 0 als ausgeschaltet – vorher blieb Zusatzziel 8 hängen)
+			if af is Vehicle and (af as Vehicle).wrecked:
+				return 0
 			return int(af.get_meta("actor_state", 1)) if af else 0
 		"SETACTORSTATE":
 			var sf3 := _frame_arg(vm, args[0])
