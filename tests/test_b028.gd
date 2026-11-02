@@ -180,16 +180,19 @@ func _destruction_tests(rt, m) -> void:
 
 func _silent_tests(rt) -> void:
 	var vm := LsVM.new(LsCompiler.new(), null, rt)
-	# seit B-035 sind Lightmaps/Wetter umgesetzt; stumm bleiben u. a. Doppler (B-028) und Ju-88-Flag (B-033)
-	rt.call_api(vm, "FRM_SOUNDADJUSTDOPPLER", [["num", 0], ["num", 1]])
+	# Seit B-033 sind Doppler und Umgehungs-Flag umgesetzt (keine echten stummen Befehle mehr) → beide weder stumm noch
+	# „nicht umgesetzt“; die Zählung/den Bericht prüft ein künstlicher stummer Eintrag (Abschluss 0.9.8, Testerwartung veraltet).
 	rt.call_api(vm, "FRM_SOUNDADJUSTDOPPLER", [["num", 0], ["num", 1]])
 	rt.call_api(vm, "HUMAN_SETIGNORECIRCUMVENTIONFLAG", [["num", 1]])
-	check(rt.stubbed.has("FRM_SOUNDADJUSTDOPPLER") and int(rt.stubbed["FRM_SOUNDADJUSTDOPPLER"]["count"]) >= 2
-		and rt.stubbed["FRM_SOUNDADJUSTDOPPLER"]["owner"] == "B-028", "stummer Befehl FRM_SoundAdjustDoppler gezählt (B-028)")
-	check(not rt.unimplemented.has("FRM_SOUNDADJUSTDOPPLER") and rt.stubbed.has("HUMAN_SETIGNORECIRCUMVENTIONFLAG"),
-		"stumm ≠ nicht umgesetzt")
+	rt._stub("TEST_STUMM", "B-028")
+	rt._stub("TEST_STUMM", "B-028")
+	check(rt.stubbed.has("TEST_STUMM") and int(rt.stubbed["TEST_STUMM"]["count"]) >= 2
+		and rt.stubbed["TEST_STUMM"]["owner"] == "B-028", "stummer Befehl gezählt (B-028)")
+	check(not rt.unimplemented.has("FRM_SOUNDADJUSTDOPPLER") and not rt.unimplemented.has("HUMAN_SETIGNORECIRCUMVENTIONFLAG")
+		and not rt.stubbed.has("FRM_SOUNDADJUSTDOPPLER"), "Doppler/Umgehungs-Flag umgesetzt (B-033), stumm ≠ nicht umgesetzt")
 	var p := "res://test_output/ls_silent_b028.txt"
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
 	rt.write_silent_report(p, "test_b028")
 	var txt := FileAccess.get_file_as_string(p)
-	check(txt.contains("stumm\tFRM_SOUNDADJUSTDOPPLER") and txt.contains("stumm:"), "Bericht ls_silent geschrieben")
+	check(txt.contains("stumm\tTEST_STUMM") and txt.contains("stumm:"), "Bericht ls_silent geschrieben")
+	rt.stubbed.erase("TEST_STUMM")

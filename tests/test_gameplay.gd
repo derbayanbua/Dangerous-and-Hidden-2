@@ -10,8 +10,8 @@ var log_lines: Array[String] = []
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
-	# Sicherheitsnetz: hängender Test bricht nach 6 Minuten ab
-	get_tree().create_timer(360.0, true, false, true).timeout.connect(func():
+	# Sicherheitsnetz: hängender Test bricht nach 6 Minuten ab (--test_timeout=<s> für langsame Fensterläufe, z. B. release_shots)
+	get_tree().create_timer(float(Game.cli.get("test_timeout", "360")), true, false, true).timeout.connect(func():
 		check(false, "Zeitüberschreitung des Testlaufs")
 		_finish())
 	_run.call_deferred()

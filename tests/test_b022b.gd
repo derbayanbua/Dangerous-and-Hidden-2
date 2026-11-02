@@ -158,7 +158,7 @@ func _settings_sanitize() -> void:
 	check(Settings.resolution == Vector2i.ZERO, "M-024: unsinnige Auflösung → Desktop", str(Settings.resolution))
 	check(Settings.fullscreen == true and Settings.fov == 70.0 and is_equal_approx(Settings.sfx_volume, 0.9),
 		"M-024: falscher Typ → Wert bleibt", "%s %s %s" % [Settings.fullscreen, Settings.fov, Settings.sfx_volume])
-	check(Settings.quality == Settings.QUALITY_NAMES.size() - 1 and Settings.blood_level == 2 and Settings.texture_quality == 0
+	check(Settings.quality == Settings.QUALITY_NAMES.size() - 1 and Settings.blood_level == Settings.BLOOD_GORE and Settings.texture_quality == 0
 		and Settings.anisotropy == 4 and Settings.aa_mode == 3 and Settings.vsync_mode == 1 and Settings.connection_type == 4,
 		"M-024: Menüindizes geklemmt", "q%d b%d t%d a%d aa%d v%d c%d" % [Settings.quality, Settings.blood_level,
 		Settings.texture_quality, Settings.anisotropy, Settings.aa_mode, Settings.vsync_mode, Settings.connection_type])

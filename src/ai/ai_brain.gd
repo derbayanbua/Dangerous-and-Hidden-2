@@ -33,8 +33,11 @@ var _off_mesh := false
 var _off_check := 0.0
 var _detour := 0.0
 var _detour_sign := 1.0
-## B-033 HUMAN_SetIgnoreCircumventionFlag (hd2.exe Gehirn +0x11C, 0x562E30 [B]): keine Umgehung von Hindernissen/stehenden
-## Menschen (kein seitliches Ausweichen, kein Durchlaufen) – der Soldat bleibt stehen und bricht nach 2,5 s ab [P Wirkung]
+## B-033 HUMAN_SetIgnoreCircumventionFlag (hd2.exe Gehirn +0x11C [B]). 0x562E30 überspringt bei gesetztem Byte die Umgehung:
+## 0x5626B0 sucht im Pfad (+0xF4) den zusammenhängenden Abschnitt mit Punktflag 0x200, 0x562700 sammelt die Hindernisse darauf,
+## 0x561740/0x562900 schneiden den Pfad (x/z) mit deren Umkreis, 0x561C70 fügt Umgehungspunkte ein [B]. Mit Flag bleibt der
+## Pfad unverändert: kein seitliches Ausweichen, kein Durchlaufen. Einen Abbruch sieht diese Stelle nicht vor; der Soldat
+## wartet daher vor einem stehenden Menschen bis 10 s [E], an festen Hindernissen bleibt der Abbruch nach 2,5 s [E].
 var ignore_circumvention := false
 var _human_tries := 0
 var _climb_retry := 0.0
@@ -192,7 +195,7 @@ func update_movement(delta: float, face_move := true) -> void:
 				_detour_sign = -_detour_sign
 				_detour = 1.0
 			return
-	if _stuck_time > 2.5:
+	if _stuck_time > 2.5 and not (ignore_circumvention and _stuck_time < 10.0 and _blocked_by_human() != null):
 		_stuck_time = 0.0
 		stop_moving()
 

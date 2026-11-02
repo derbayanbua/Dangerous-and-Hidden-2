@@ -1230,6 +1230,12 @@ func _ready() -> void:
 	_load_current_profile()
 	if cli.has("screenshot"):
 		_screenshot_after(int(cli.get("frames", "120")), cli["screenshot"])
+	# B-032: Kampagnenkette im Löser (tests/test_orig_complete.gd --chain_in) – SaveGameValue-Werte des Vorgängerteils
+	# (JSON {"66": 1}) vor dem Missionsstart vorbelegen, damit _LoadGameValue in Init-Blöcken sie schon sieht
+	if cli.has("game_values") and cli.has("autoplay"):
+		var gv = JSON.parse_string(FileAccess.get_file_as_string(String(cli["game_values"])))
+		if gv is Dictionary:
+			campaign["game_values"] = gv
 	if cli.has("mission"):
 		start_mission.call_deferred(cli["mission"])
 	if cli.has("autoplay"):

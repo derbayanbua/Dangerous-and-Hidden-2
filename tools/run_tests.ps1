@@ -1,11 +1,11 @@
 ﻿# Führt alle automatisierten Tests headless aus und fasst zusammen (B-025).
-# Aufruf: powershell -File tools\run_tests.ps1 [-Exe build\DangerousHidden2.exe] [-Full] [-Only test_a1,test_sas] [-TimeoutSec 900]
+# Aufruf: powershell -File tools\run_tests.ps1 [-Exe build\DangerousHidden2.exe] [-Full] [-Only test_a1,test_sas] [-Exclude test_mp_coop] [-TimeoutSec 900]
 #  - Test-Sperre test_output\.godot_lock/.godot_lock2 (tools\test_lock.ps1): je Suite ein Slot, Mehrspieler-Suiten (mp) beide.
 #    Es läuft immer nur eine Suite gleichzeitig.
 #  - Zeitlimit je Suite (Standard 900 s, Eintrag `timeout`): bei Hänger wird nur der eigene Prozessbaum beendet, Suite = Fehler.
 #  - Bestanden nur mit Exit 0 UND `ERGEBNIS`-Zeile mit 0 Fehlschlägen.
 #  - -Full nimmt zusätzlich die langen Suiten (Gruppe "full": Treppen aller Karten, MP-Navigation, Kollision, Löser) auf.
-param([string]$Exe = "", [switch]$Full, [string[]]$Only = @(), [int]$TimeoutSec = 900)
+param([string]$Exe = "", [switch]$Full, [string[]]$Only = @(), [string[]]$Exclude = @(), [int]$TimeoutSec = 900)
 $proj = Split-Path $PSScriptRoot -Parent
 . "$PSScriptRoot\test_lock.ps1"
 New-Item -ItemType Directory -Force "$proj\test_output" | Out-Null
@@ -105,6 +105,8 @@ foreach ($s in $suites) {
 if (-not $Full) { $suites = @($suites | Where-Object { $_.group -ne "full" }) }
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })   # -File übergibt "a,b" als einen String
 if ($Only.Count -gt 0) { $suites = @($suites | Where-Object { $Only -contains $_.name }) }
+$Exclude = @($Exclude | ForEach-Object { $_ -split ',' } | Where-Object { $_ })   # -Exclude test_mp_coop: Suiten auslassen
+if ($Exclude.Count -gt 0) { $suites = @($suites | Where-Object { $Exclude -notcontains $_.name }) }
 
 $lockName = "run_tests"
 if (-not $Exe) {

@@ -808,14 +808,18 @@ func _hits(m: Node, bots: Array) -> void:
 			if ch.zone != &"head" or ch.collision_layer == 0:
 				continue
 			var cc: Vector3 = (ch.get_child(0) as Node3D).global_position
-			for up in [0.0, 0.03, 0.06, 0.09, -0.03]:
-				var p := cc + Vector3.UP * float(up)
+			# Abschluss 0.9.8: Punkt muss auch 3 cm tiefer noch Kopf ergeben (Geschossabfall auf 30 m ≈ 1 cm + Ruhe-Animation
+			# zwischen Prüfung und Einschlag) – ein Randpunkt an der Rumpfkiste ergab sonst reproduzierbar Rumpf (48,8)
+			var is_head := func(p: Vector3) -> bool:
 				var cq := PhysicsRayQueryParameters3D.create(p - Vector3(0, 0, 3), p + Vector3(0, 0, 0.3), Hitbox.LAYER, shooter.exclude_rids())
 				cq.collide_with_areas = true
 				cq.collide_with_bodies = false
 				var chit := sp2.intersect_ray(cq)
-				if not chit.is_empty() and chit.collider is Hitbox and (chit.collider as Hitbox).soldier == tgt \
-						and Ballistics._priority_zone(sp2, chit.collider, chit.position, Vector3(0, 0, 1)).zone == &"head":
+				return not chit.is_empty() and chit.collider is Hitbox and (chit.collider as Hitbox).soldier == tgt \
+						and Ballistics._priority_zone(sp2, chit.collider, chit.position, Vector3(0, 0, 1)).zone == &"head"
+			for up in [0.03, 0.06, 0.09, 0.0, 0.12]:
+				var p := cc + Vector3.UP * float(up)
+				if is_head.call(p) and is_head.call(p + Vector3.DOWN * 0.03) and is_head.call(p + Vector3.UP * 0.02):
 					aim2 = p
 					found = true
 					break

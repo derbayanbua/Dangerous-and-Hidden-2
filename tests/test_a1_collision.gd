@@ -179,8 +179,15 @@ func _fall_grid(m: Mission) -> void:
 	for k in keys:
 		report.append("  %4d  %s" % [by_mesh[k], k])
 	check(tested > 1000, "Fall-Raster: Originalflächen geprüft", str(tested))
-	check(holes.is_empty(), "Fall-Raster: überall, wo das Original Boden hat, gibt es Physikboden",
-		"%d Löcher (Bericht a1_collision_report.txt)" % holes.size())
+	# B-036 (gewollt): versteckte Grenzdeckel BORDER/Border_* (Unterkante ≥ 10 m) kollidieren nur einseitig von unten –
+	# ihre Oberseite ist kein begehbarer Boden mehr (Abschluss 0.9.8: alle 14196 Löcher lagen dort). Nur andere Löcher zählen.
+	var real := 0
+	for k in keys:
+		if not (String(k).begins_with("BORDER/") and String(k).ends_with("[versteckt]")):
+			real += int(by_mesh[k])
+	report.append("davon Grenzdeckel BORDER (B-036, einseitig gewollt): %d, übrige: %d" % [holes.size() - real, real])
+	check(real == 0, "Fall-Raster: überall, wo das Original Boden hat, gibt es Physikboden (ohne Grenzdeckel B-036)",
+		"%d Löcher außerhalb BORDER, %d Grenzdeckel (Bericht a1_collision_report.txt)" % [real, holes.size() - real])
 
 
 # --- 2. Bewegungsprobe -----------------------------------------------------------------------------------------

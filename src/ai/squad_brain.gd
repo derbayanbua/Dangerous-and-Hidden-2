@@ -46,6 +46,8 @@ func setup(s: Soldier) -> void:
 	reaction_time = 0.5
 	accuracy_skill = 0.6
 	direct_when_off_mesh = true     # Befehle auch abseits des Navigationsnetzes ausführen (Ersatz, kein Originalverhalten)
+	if Game.cli.has("no_direct_off_mesh"):    # B-010b Gegenprobe (test_a1/Löser a1 ohne Schalter)
+		direct_when_off_mesh = false
 	hold_pos = s.global_position
 	perception.target_detected.connect(_on_detected)
 	s.damaged.connect(func(_a, _z): _under_fire = 4.0)

@@ -198,7 +198,10 @@ func _phase_a1(m: OrigMission) -> void:
 			e.die()
 			victims.append(e.persistent_id)
 	m.raise_alarm(m.squad.leader().global_position, m.squad.leader())
-	await seconds(4.0)
+	# Abschluss 0.9.8: Ragdolls brauchen bis 9 s bis zur Ruhe; vorher gespeichert lag die Leiche (Dachwache) nach dem Laden
+	# an der Endlage, Herman (GATE_INQUISITOR) sah sie dort sofort (Art 512) → OnAlarm/EndScript nur im geladenen Stand
+	# (sporadisch 15/16). Erst nach der Ruhe speichern.
+	await seconds(10.0)
 	var o5 := m.objective(&"o5")
 	check(o5 != null and o5.state == Objective.State.DONE, "LKW zerstört → Zusatzziel 5", _objectives(m))
 	snap = _snapshot(rt)

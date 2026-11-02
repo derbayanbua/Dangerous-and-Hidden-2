@@ -23,6 +23,8 @@ if (-not (Test-Path "$proj\orig_cache\textures")) { throw "orig_cache fehlt – 
 # 1) Import + Skriptprüfung (unter der Test-Sperre der Agenten)
 $lock = "$proj\test_output\.godot_lock"
 New-Item -ItemType Directory -Force "$proj\test_output" | Out-Null
+# Slot 1 belegt (lange Löserläufe) -> freien zweiten Slot nehmen
+if ((Test-Path $lock) -and -not (Test-Path "$proj\test_output\.godot_lock2")) { $lock = "$proj\test_output\.godot_lock2" }
 while ((Test-Path $lock) -and ((Get-Date) - (Get-Item $lock).LastWriteTime).TotalMinutes -lt 20) {
   "   warte auf Test-Sperre ($(Get-Content $lock)) …"; Start-Sleep 30
 }
