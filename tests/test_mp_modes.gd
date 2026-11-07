@@ -88,6 +88,46 @@ func _run() -> void:
 			check(int(Net.players[1]["score"]) - score0 == Net.ZONE_NEUTRALIZE_PTS + Net.ZONE_CAPTURE_PTS,
 				"Punkte: +2 neutralisiert, +5 eingenommen", str(int(Net.players[1]["score"]) - score0))
 			check(Net.team_score[team] > ts0, "Team erhält Punkte je gehaltener Zone", "%.3f" % (Net.team_score[team] - ts0))
+			# 0.10.1: Besitzwechsel an alle gemeldet (neutralisiert + eingenommen), Besitz bleibt nach dem Verlassen
+			var evs: Array = Net.zone_events.filter(func(e): return int(e[0]) == target)
+			check(evs.size() >= 2 and int(evs[-2][1]) == -1 and int(evs[-1][1]) == team,
+				"0.10.1: Meldungen neutralisiert/eingenommen über RPC", str(evs))
+			s2.global_position = (zs[own_zone]["xf"] as Transform3D).origin + Vector3.UP * 0.5 if own_zone >= 0 else s2.global_position + Vector3(0, 0, 200)
+			await seconds(3.0)
+			check(Net.zone_owner[target] == team and float(Net.zone_progress[target]) == 0.0,
+				"0.10.1: Besitz bleibt nach dem Verlassen, Fortschritt zurückgesetzt", "%s / %.2f" % [str(Net.zone_owner[target]), float(Net.zone_progress[target])])
+			var hud = _find_mp_hud()
+			check(hud == null or String(hud.zone_text()).contains("[%s]" % ("A" if team == Soldier.TEAM_ALLIED else "X")),
+				"0.10.1: HUD zeigt Zonenbesitz", String(hud.zone_text()) if hud else "kein MpHud")
+			# Fortschrittsanzeige während einer laufenden Einnahme
+			var tgt2 := -1
+			for i in zs.size():
+				if Net.zone_owner[i] != team and Net._attackable(m, i, team) and zs[i]["capturable"]:
+					tgt2 = i
+					break
+			if tgt2 >= 0 and hud:
+				for i in 120:
+					s2.global_position = (zs[tgt2]["xf"] as Transform3D).origin + Vector3.UP * 0.5
+					await get_tree().physics_frame
+				check(String(hud.zone_text()).contains("%"), "0.10.1: HUD zeigt Einnahmefortschritt", String(hud.zone_text()))
+			# flaggen-Frames nicht zusammengefasst (StaticMerge schützt mp.json-Namen)
+			var f: Dictionary = zs[target]["flags"]
+			var fr: Node3D = m.runtime.find_frame(String(f.get("allied" if team == Soldier.TEAM_ALLIED else "axis", ""))) if m.runtime else null
+			if fr:
+				var merged := false
+				for mi in fr.find_children("*", "MeshInstance3D", true, false) + ([fr] if fr is MeshInstance3D else []):
+					if mi.has_meta("b039_merged"):
+						merged = true
+				check(fr.is_visible_in_tree() and not merged, "0.10.1: Flagge des neuen Besitzers sichtbar, nicht zusammengefasst")
+	Net.leave(false)
+	await frames(10)
+
+	# --- 0.10.1 Fahrzeuge im MP: Sitz, Schussursprung, Granate, Nachladen, Wiedereinsatz (CZECH6_MP_ZONE) ---
+	m = await _host("mp_czech6_mp_zone", Net.Mode.OCCUPATION, {"respawn_s": 5})
+	if m:
+		await _vehicle_checks()
+	else:
+		check(false, "CZECH6_MP_ZONE geladen")
 	Net.leave(false)
 	await frames(10)
 
@@ -111,6 +151,84 @@ func _run() -> void:
 		_check_single_slots(m)
 	Net.leave(false)
 	_finish()
+
+
+func _find_mp_hud():
+	var mm = Game.current_mission()
+	return mm.get_node_or_null("MpHud") if mm else null
+
+
+## 0.10.1: Fahrzeuge im MP (Server): Sitzlage am SEAT-Frame, Bordwaffe aus dem Rohr, Granate sprengt niemanden heraus,
+## Nachladen (auch ohne Munitionsinventar), Wiedereinsatz nach Zerstörung und nach Verlassen
+func _vehicle_checks() -> void:
+	await seconds(1.0)
+	var vs: Array = get_tree().get_nodes_in_group("vehicles").filter(func(v): return v is Vehicle and not (v as Vehicle).wrecked)
+	check(not vs.is_empty(), "CZECH6_MP_ZONE: Fahrzeuge vorhanden", str(vs.size()))
+	if vs.is_empty():
+		return
+	var gun_v: Vehicle = null
+	var gun_seat := -1
+	for v in vs:
+		for i in (v as Vehicle).seats.size():
+			if (v as Vehicle).seat_weapon(i) != null:
+				gun_v = v
+				gun_seat = i
+				break
+		if gun_v:
+			break
+	var s: Soldier = Net._soldiers[1]
+	s.set_meta("protect_until", 0)
+	var v: Vehicle = gun_v if gun_v else vs[0]
+	var seat := gun_seat if gun_seat >= 0 else 1
+	check(v.board(s, false, seat), "%s: Spieler besetzt Sitz %d" % [v.vehicle_name, seat])
+	await frames(5)
+	var sx := v.seats[seat].global_position
+	check(v.seat_transform(seat).origin.distance_to(sx) < 0.01, "%s: Insasse am Original-Sitzframe (nicht an der Mündung)" % v.vehicle_name)
+	check(absf(s.global_position.x - sx.x) < 0.05 and absf(s.global_position.z - sx.z) < 0.05, "%s: Figur steht am Sitz" % v.vehicle_name,
+		"%s / %s" % [str(s.global_position), str(sx)])
+	if gun_v:
+		var so := v.shot_origin(seat)
+		check(so.is_finite() and so.distance_to(v.muzzle_point(seat)) < 0.01, "%s: Bordwaffe feuert aus der Mündung" % v.vehicle_name)
+		var w := v.seat_weapon(seat)
+		check(s.current_weapon() == w, "%s: Bordwaffe in der Hand" % v.vehicle_name)
+		var r0 := w.reserve
+		print("FAHRZEUG-MUNITION %s Sitz %d: Inventar %s → %d+%d" % [v.vehicle_name, seat, str(v.ammo_items), w.in_mag, w.reserve])
+		if not v.ammo_items.is_empty():
+			check(r0 < Vehicle.UNLIMITED_RESERVE and r0 == w.data.magazine_size * (v.ammo_items.size() - 1),
+				"%s: Originalmenge aus dem Inventar (%d Munition → Reserve %d)" % [v.vehicle_name, v.ammo_items.size(), r0])
+		w.in_mag = 0
+		await frames(3)
+		check(w.is_reloading() or w.in_mag > 0 or r0 == 0, "%s: leere Bordwaffe lädt selbst nach" % v.vehicle_name, "mag %d res %d" % [w.in_mag, w.reserve])
+		await seconds(w.data.reload_empty_time + 0.5)
+		check(w.in_mag > 0 or r0 == 0, "%s: nachgeladen (%d+%d)" % [v.vehicle_name, w.in_mag, w.reserve])
+	# Granate neben dem Fahrzeug: Insasse bleibt drin (Schaden nur über das Fahrzeug-Schadensmodell)
+	var hp0 := s.health
+	var space := get_tree().root.get_world_3d().direct_space_state
+	WeaponDB.apply_blast(get_tree(), space, s.global_position + Vector3(1.0, 0.0, 0.0), 5.0, 150.0, null, 0.15, false)
+	await frames(5)
+	check(s.alive and s.vehicle == v, "%s: Granate sprengt Insassen nicht heraus" % v.vehicle_name, "hp %.0f→%.0f" % [hp0, s.health])
+	v.leave(s)
+	await frames(3)
+	# Wiedereinsatz nach Zerstörung (Server, Zeiten [E])
+	var start := v.spawn_xf.origin
+	var gen0 := v.respawn_gen
+	v.explode(null)
+	check(v.wrecked, "%s: zerstört" % v.vehicle_name)
+	v._respawn_t = Vehicle.RESPAWN_WRECK_S - 0.5
+	await seconds(1.5)
+	check(not v.wrecked and v.respawn_gen == gen0 + 1 and v.global_position.distance_to(start) < 0.5,
+		"%s: Wrack nach %d s am Startplatz neu" % [v.vehicle_name, int(Vehicle.RESPAWN_WRECK_S)], "gen %d pos %s" % [v.respawn_gen, str(v.global_position)])
+	check(v.damage_model == null or not v.damage_model.destroyed, "%s: Schadensmodell zurückgesetzt" % v.vehicle_name)
+	check(v.board(s, true), "%s: neu eingesetztes Fahrzeug besteigbar" % v.vehicle_name)
+	await frames(3)
+	v.leave(s)
+	# Verlassen und weggefahren → nach IDLE_S zurück
+	v.global_position = start + Vector3(10, 0.5, 0)
+	await frames(2)
+	v._respawn_t = Vehicle.RESPAWN_IDLE_S - 0.5
+	await seconds(1.5)
+	check(v.respawn_gen == gen0 + 2 and v.global_position.distance_to(start) < 0.5,
+		"%s: verlassenes Fahrzeug nach %d s zurück" % [v.vehicle_name, int(Vehicle.RESPAWN_IDLE_S)])
 
 
 ## B-029 M-010 (0x5ED700 [B]): ohne allowrespawn jeder Spawnplatz einer Zone nur einmal; nach dem letzten ist die Zone

@@ -83,14 +83,20 @@ func _run() -> void:
 	# Originalskript r_arc1a_objectives: OnCutscene(1) aktiviert Ziel 3 erst mit der Intro-Sequenz –
 	# vorher gesetzte Ziele würden zurückgesetzt. Darauf warten.
 	for attempt in 6:
+		# B-049/AP-49b (0.10.1, gewollt): kein Missionsende während einer Skriptkamera → Intro wie ein Spieler überspringen
+		if m.runtime and m.runtime.script_camera_active():
+			m.runtime.end_cutscene()
+			await frames(3)
 		for i in range(1, 5):
 			m.set_orig_objective(i, 1)
 		await seconds(3.5)   # Siegbedingung muss 3 s stabil sein
-		if m.finished:
+		if not is_instance_valid(m) or m.finished:   # nach dem Ende wechselt die Szene zur Nachbesprechung (m frei)
 			break
+	var obj_info := "-"
+	if is_instance_valid(m):
+		obj_info = str(m.objectives.map(func(o): return "%s:%d%s" % [o.id, o.state, "o" if o.optional else ""])) + " " + str(m.orig_objectives)
 	check(Game.last_result.get("mission", "") == "a1_blizzard" and Game.last_result.get("success", false),
-		"Arctic 1A erfolgreich (alle Pflichtziele)", str(Game.last_result.get("reason", "")) + " | " +
-		str(m.objectives.map(func(o): return "%s:%d%s" % [o.id, o.state, "o" if o.optional else ""])) + " " + str(m.orig_objectives))
+		"Arctic 1A erfolgreich (alle Pflichtziele)", str(Game.last_result.get("reason", "")) + " | " + obj_info)
 	check(Game.last_result.get("fallen", []).has(second_name), "Nachbesprechung nennt Gefallenen")
 	# Original 0x68C300: Übernahme erst mit SPEICHERN UND FORTSETZEN
 	check(not Game.is_unlocked("a2_erkundung") and not Game.is_fallen(second_pid) and Game.has_pending_debrief(),

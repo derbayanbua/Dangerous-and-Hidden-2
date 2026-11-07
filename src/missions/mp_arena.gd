@@ -13,6 +13,11 @@ func _spawn_actors() -> void:
 	if Net.is_online and Net.mode() == Net.Mode.COOP:
 		_spawn_coop_actors()
 		return
+	# 0.10.1: Akteurdaten auch außerhalb Coop (Fahrzeug-Munitionsinventar → Bordwaffen-Reserve, z. B. Puma 1+12;
+	# vorher leer → MP-Fahrzeuge ohne Originalmunition)
+	var ap = LsRuntime._read_json(orig.mission_dir + "/actor_params.json")
+	if typeof(ap) == TYPE_DICTIONARY:
+		actor_params = ap.get("actors", {})
 	runtime = LsRuntime.new()
 	add_child(runtime)
 	runtime.setup(self, orig)

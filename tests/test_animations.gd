@@ -136,8 +136,11 @@ func _test_b004(e: Soldier, t: Dictionary) -> void:
 	var fl := BodyAnim.seat_flags(jeep)
 	check(int(fl.get(0, 0)) == 1 and int(fl.get(1, 0)) == ((1 << 1) | (1 << 5)), "Sitzflags la_jeepw: SEAT0 / SEAT15", str(fl))
 	check(BodyAnim.seat_kind(int(fl.get(0, 0))) == "drive" and BodyAnim.seat_kind(int(fl.get(1, 0))) == "passenger"
-		and BodyAnim.seat_kind(1 | (1 << 7)) == "motorbike" and BodyAnim.seat_kind((1 << 1) | (1 << 8)) == ""
+		and BodyAnim.seat_kind(1 | (1 << 7)) == "motorbike" and BodyAnim.seat_kind(1 << 8) == ""
 		and BodyAnim.seat_kind(1 | (1 << 4)) == "", "Sitzhaltung: Fahrer !ridic, Mitfahrer !spol, Motorrad !namotorce, Bordwaffe/Panzer unverändert")
+	# 0.10.1 (gewollt, body_anim.gd seat_kind): Bordwaffensitz mit Sitzziffer 1 (SEAT18, Jeep-MG/Opel-Flak) sitzt wie ein Mitfahrer
+	check(BodyAnim.seat_kind((1 << 1) | (1 << 8)) == "passenger", "Bordwaffensitz SEAT18 (Bit 1 + 8): MG-Schütze sitzt (!spol)",
+		BodyAnim.seat_kind((1 << 1) | (1 << 8)))
 	var veh: Vehicle = null
 	for v in get_tree().get_nodes_in_group("vehicles"):
 		if v is Vehicle and not v.armored and v.seats.size() >= 2:

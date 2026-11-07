@@ -1048,9 +1048,11 @@ func _page_game() -> void:
 	_yesno(553, "KILL-CAM (MP)", Settings.kill_cam, func(v: bool): Settings.kill_cam = v)
 	# B-007 (Ergänzung): Sprachfassung – Originaltexte aus texts_<sprache>.json, eigene Texte über locale/ui_texts.csv
 	var langs := Settings.available_languages()
-	_cycle(Rect2(67, 597, 412, 32), tr("SPRACHE:") + " " + Settings.language_name(), func():
+	# 0.10.1 Ergänzung: Kugelfall-Ausgleich (Standard nein = Original)
+	_yesno(597, "PRÄZISES ZIELEN", Settings.precise_aim, func(v: bool): Settings.precise_aim = v)
+	_cycle(Rect2(67, 641, 412, 32), tr("SPRACHE:") + " " + Settings.language_name(), func():
 		Settings.set_language(langs[(maxi(langs.find(Settings.language), 0) + 1) % langs.size()]), langs.size() > 1, "blanguage")
-	_label(Rect2(67, 633, 412, 18), "Sprachausgabe nur in den Sprachen der Installation.", 11, TEXT_COLOR)
+	_label(Rect2(67, 677, 412, 18), "Sprachausgabe nur in den Sprachen der Installation.", 11, TEXT_COLOR)
 
 
 # --- Profile (Original change_profile.4ds) ---------------------------------------

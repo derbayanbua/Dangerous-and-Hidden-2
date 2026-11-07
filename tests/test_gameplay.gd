@@ -269,6 +269,12 @@ func _run() -> void:
 	b2.home_pos = e2.global_position
 	b2.home_yaw = e2.look_yaw
 	b2.set_state(EnemyBrain.State.GUARD)
+	# Unverwundbar für diesen Abschnitt: ein zufälliger Kopftreffer (×5, Original-Zonenfaktor) tötete Hale sonst
+	# (Lauf 07.11.2026: „Gesundheit 0“, danach folgte der Trupp einem Toten und das Laden fand ihn an anderer Stelle).
+	# Schaden wird weiter geprüft (Gesundheit sinkt bzw. bleibt), nur der Tod des Anführers ist ausgeschlossen.
+	var mh_h := hale.max_health
+	hale.max_health = 100000.0
+	hale.health = hale.max_health
 	var hp_h := hale.health
 	var shots1 := Ballistics.shots_fired
 	var t := 0.0
@@ -291,6 +297,7 @@ func _run() -> void:
 	if e2.alive:
 		e2.die(hale)
 	await seconds(0.5)
+	hale.max_health = mh_h
 	hale.health = hale.max_health
 
 	# --- Squad: Folgen, Halten, Bewegen ---

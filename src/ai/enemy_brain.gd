@@ -608,8 +608,9 @@ func _combat(delta: float) -> void:
 			return
 
 	# AP-3: Originalmissionen offline → Kampfautomat hd2.exe 0x549AE0 (OrigCombatFsm) statt eigener Deckungs-/Flankenlogik.
-	# Stellungsposten (stationary) bleiben bei der bisherigen Logik (bewegen sich nicht).
-	if _orig_rules() and not stationary:
+	# AP-48f (0.10.1): auch Stellungsposten (stationary, im Original unbekannt) laufen über den Automaten, ohne Ortswechsel
+	# (OrigCombatFsm.hold_post); `--b048f=0` = alte Herausschau-Logik.
+	if _orig_rules() and (not stationary or String(Game.cli.get("b048f", "1")) != "0"):
 		_orig_fsm_tick(delta)
 		return
 	if stationary:
@@ -945,6 +946,9 @@ func _on_damaged(_amount: float, _zone: StringName) -> void:
 		perception.awareness[a] = 1.0
 		perception.last_known[a] = a.global_position
 		_on_detected(a)
+		# K11 (B-048, 0.10.1) [P]: Treffer → Alarm → Automat ab Zustand 0 neu (4/5), wenn er gerade heimkehrt/ruht/sucht
+		if orig_fsm != null and _orig_rules():
+			orig_fsm.on_hit(a)
 
 
 func _on_alarm(pos: Vector3, _by: Node) -> void:

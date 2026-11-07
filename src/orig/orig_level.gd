@@ -1,5 +1,7 @@
 class_name OrigLevel
 extends RefCounted
+
+const SkyBackdrop := preload("res://src/world/sky_backdrop.gd")   # B-050: Original-Himmel kamerafest
 ## Baut einen Original-Level aus dem lokalen Cache (orig_cache/<mission>/), der von
 ## tools/convert_mission.py aus der HD2-Installation des Nutzers erzeugt wird.
 ##   scene.glb   statische Szene (Gelände, Gebäude) aus scene.4ds
@@ -493,7 +495,7 @@ func _build_orig_collision() -> void:
 		if Game.cli.has("collision_legacy"):       # Vergleichslauf alter Stand (test_a1_collision vorher/nachher)
 			_mesh_collider(mi, collide, e[1] or mi.has_meta("klz_proxy"))
 		else:
-			_mesh_collider(mi, collide, true, e[2])
+			_mesh_collider(mi, collide, true, e[2] or _klz_solid_grate(mi, e))
 		if collide and not e[1] and not e[2] and not e[3] and not e[4]:
 			# fix_no2_panzer: sichtbarer Frame ganz ohne Klz-Link (kein Original-Kollisionskörper) und klein (≤ 8 m Grundriss,
 			# ≤ 3 m hoch: Schutt „m_trosky_*“, Kleinkram) – Figuren/Geschosse kollidieren weiter, Fahrzeuge fahren hindurch
@@ -513,6 +515,34 @@ func _build_orig_collision() -> void:
 			stats["pass_through"] = int(stats.get("pass_through", 0)) + 1
 
 
+## 0.10.1 Gitterböden: alpha-getestete Gitter/Roste (ARCTIC2 „m_bmmriz*“, Gitterstege im Bunkerraum p1s33) sind in
+## tree.klz als Kiste/Volumen verlinkt (nicht als Fläche) → galten als „Laub“ ohne Kollision → Durchfallen (und wurden
+## als „Gras“ mit der Grasoption ausgeblendet). Kisten-/Volumenlink + flach oder überwiegend begehbar (|n.y| > 0,5) =
+## fester Boden. Hohe Alpha-Objekte mit Kistenlink (Bäume, Büsche) bleiben ausgenommen. `--grate_collision=0` = alter Stand.
+func _klz_solid_grate(mi: MeshInstance3D, e: Array) -> bool:
+	if mi.mesh == null or String(Game.cli.get("grate_collision", "1")) == "0" or e[1]:
+		return false
+	var linked: bool = e[3] or e[4] or e[6]
+	var unlinked: bool = not (e[2] or e[3] or e[4] or e[5] or e[6])
+	if not (linked or unlinked) or not _is_foliage(mi):
+		return false
+	var wb := mi.global_transform * mi.get_aabb() if mi.is_inside_tree() else mi.get_aabb()
+	var foot := wb.size.x * wb.size.z
+	if wb.size.y > 3.0:
+		return false
+	var walk := _slope_shares(mi).x
+	# Kisten-/Volumenlink: flache bzw. begehbare Gitter ab 0,5 m² (kleine Lampengläser/Armaturen bleiben ohne Kollision)
+	var ok := linked and foot >= 0.5 and (wb.size.y <= 0.35 or walk >= 0.6)
+	# ganz ohne Klz-Link: große, ebene Gitterplatte (ARCTIC2 Raum p1s17 „P1MRIZ06“, „P1BAZ49/50/52“ über dem Becken –
+	# nur P1BAZ130 ist im Original als Fläche verlinkt) – ≤ 0,1 m dick, ≥ 2 m², waagrecht
+	ok = ok or (unlinked and wb.size.y <= 0.1 and foot >= 2.0 and walk >= 0.9)
+	if ok:
+		stats["grates"] = int(stats.get("grates", 0)) + 1
+		mi.set_meta("klz_grate", true)
+		return true
+	return false
+
+
 static func _in_backdrop(n: Node) -> bool:
 	while n != null:
 		if n.has_meta("backdrop"):
@@ -521,11 +551,14 @@ static func _in_backdrop(n: Node) -> bool:
 	return false
 
 
-func _klz_walk(n: Node, obj: String, hidden: bool, out: Array) -> void:
+func _klz_walk(n: Node, obj: String, hidden: bool, out: Array, obj_box := false) -> void:
 	var key := ""
 	if n.has_meta("klz_obj"):
 		obj = String(n.get_meta("klz_obj"))       # Objektinstanz aus scene2.bin: Links „Objekt.Frame“
 		key = obj
+		# 0.10.1: Kisten-/Volumenlink der Objektinstanz (ARCTIC2 „m_bmmriz_16“) gilt für die Gitter-Regel auch für ihre
+		# Modell-Meshes („m_bmmriz_16.<Frame>“ steht nicht in collision.json)
+		obj_box = _klz_boxes.has(key) or _klz_vols.has(key)
 	elif n != root:
 		key = String(n.name) if obj == "" else obj + "." + String(n.name)
 	# nur Geometrie verstecken (Frames, Modellobjekte); Dummies/Lichter/Klänge behalten ihre Sichtbarkeit
@@ -534,10 +567,10 @@ func _klz_walk(n: Node, obj: String, hidden: bool, out: Array) -> void:
 		(n as Node3D).visible = false
 		stats["hidden"] = int(stats.get("hidden", 0)) + 1
 	if n is MeshInstance3D:
-		out.append([n, hidden, _klz_faces.has(key), _klz_vols.has(key), _klz_boxes.has(key), _klz_pass.has(key)])
+		out.append([n, hidden, _klz_faces.has(key), _klz_vols.has(key), _klz_boxes.has(key), _klz_pass.has(key), obj_box])
 	for c in n.get_children():
 		if not (c is CollisionObject3D):
-			_klz_walk(c, obj, hidden, out)
+			_klz_walk(c, obj, hidden, out, obj_box)
 
 
 static func _vol(b: AABB) -> float:
@@ -893,7 +926,9 @@ func _place_objects(collide := true) -> void:
 			# fix_af1_ferne: Der Backdrop-Sektor ist im Original kamerabezogen (Himmelswürfel, AFRICA1 m_oblohaaf1 = 324 m
 			# um den Ursprung, Karte reicht bis ±412 m). Weltfest stand er als vernebelte graue Wand in der Landschaft.
 			# Den Himmel stellen ProceduralSky + sky_fx (B-013) dar → Kulisse ausblenden. --backdrop=1 = alter Stand.
-			if String(Game.cli.get("backdrop", "0")) != "1":
+			# B-050/AP-50a: Standard = kamerafest als Himmel (src/world/sky_backdrop.gd, nach dem Einhängen);
+			# --backdrop=0 = ausgeblendet (Stand fix_af1_ferne), --backdrop=1 = alter weltfester Stand.
+			if SkyBackdrop.mode() == "0":
 				n.visible = false
 		created.append([n, o])
 		if not nodes.has(String(o.get("name", ""))):
@@ -910,6 +945,11 @@ func _place_objects(collide := true) -> void:
 			parent.add_child(n)
 		if collide and int(pair[1].get("type", -1)) == OBJ_MODEL and not n.has_meta("backdrop"):
 			_add_collision(n)
+	if SkyBackdrop.mode() not in ["0", "1"]:
+		for pair in created:
+			var n: Node3D = pair[0]
+			if n.has_meta("backdrop") and not (n.get_parent() != null and _in_backdrop(n.get_parent())):
+				SkyBackdrop.convert(n)
 
 
 func actor(name: String) -> Dictionary:

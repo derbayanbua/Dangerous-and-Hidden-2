@@ -79,6 +79,7 @@ var aiming := false
 var lean := 0.0                     ## -1 links .. 1 rechts
 var aim_point := Vector3.ZERO       ## Weltpunkt, auf den die Waffe zielt
 var has_aim_point := false
+var fpv_muzzle: Node3D = null       ## Mündung der FPV-Waffe (CameraRig setzt sie in der 1. Person), sonst null
 var extra_spread := 0.0             ## Zusatzstreuung (Grad), z. B. KI-Fehler
 var is_player_controlled := false
 
@@ -987,6 +988,9 @@ func _update_weapon(delta: float) -> void:
 	_trigger_prev = trigger
 	if w.trigger(trigger and can_fire):
 		_fire_shot(w)
+	# 0.10.1: Bordwaffe (Kanone 1 Schuss je Magazin) lädt im Fahrzeug von selbst nach, sobald leer [P]; R geht weiter
+	if vehicle != null and not net_puppet and w.in_mag <= 0 and w.can_reload():
+		reload()
 
 
 ## Schwere MGs mit Zweibein/Dreibein (B-012): items.sav Feuerwaffen-Verhalten Feld u9 (Datensatz +0x24 im Block,
@@ -1013,11 +1017,20 @@ func _fire_shot(w: Weapon) -> void:
 	var origin := eye_position()
 	if is_instance_valid(mounted) and mounted.has_method("shot_origin"):
 		origin = mounted.shot_origin()
+	var veh_gun := false
+	if vehicle != null and is_instance_valid(vehicle) and vehicle.has_method("shot_origin"):
+		var vo: Vector3 = vehicle.shot_origin(seat_index)      # 0.10.1: Bordwaffe feuert aus dem Rohr, Schütze sitzt
+		if vo.is_finite():
+			origin = vo
+			veh_gun = true
 	var dir := aim_direction()
 	if has_aim_point:
 		var to := aim_point - origin
 		if to.length() > 1.0:
 			dir = to.normalized()
+			# 0.10.1: Standard wie Original (Visierachse, Kugel fällt); Option „Präzises Zielen“ gleicht den Fall aus
+			if w.data.action != WeaponData.Action.ROCKET and Ballistics.compensation_enabled():
+				dir = Ballistics.solve_direction(origin, aim_point, w.data)
 	var spread_deg := current_spread()
 	dir = _apply_spread(dir, spread_deg)
 	if w.data.action == WeaponData.Action.ROCKET:
@@ -1027,11 +1040,15 @@ func _fire_shot(w: Weapon) -> void:
 		Ballistics.fire(self, origin, dir, w.data, exclude_rids(), team)
 		_net("shot", origin, dir, String(w.data.id))
 	var muzzle := origin + dir * 0.9
-	if is_instance_valid(mounted) and mounted.has_method("shot_origin"):
-		muzzle = origin                     # Waffenstellung: Mündungsfeuer an der Mündung des Stellungsmodells
+	if veh_gun or (is_instance_valid(mounted) and mounted.has_method("shot_origin")):
+		muzzle = origin                    # Waffenstellung: Mündungsfeuer an der Mündung des Stellungsmodells
 	elif model and model.weapon_socket:
 		muzzle = model.muzzle_point(dir, w.data.model_length)
-	Effects.muzzle_flash(muzzle, dir)
+	var fsize := Effects.flash_scale(w.data)
+	if is_instance_valid(fpv_muzzle) and fpv_muzzle.is_inside_tree():
+		Effects.muzzle_flash(muzzle, dir, fsize, fpv_muzzle)    # 1. Person: an der Mündung der FPV-Waffe
+	else:
+		Effects.muzzle_flash(muzzle, dir, fsize)
 	# Original-Schussklang der Waffe (items.sav +u4 -> Kat. 2), beim letzten Schuss zusätzlich +u17
 	# („(LS)“: Garand-Ping, P08/Colt/Tokarev/Taisho); Hülsen auf hartem Boden Kat. 5/0 (Zuordnung = Annahme)
 	OrigAudio.play_weapon(w.data, "shoot", muzzle, null, team)

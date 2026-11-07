@@ -344,7 +344,35 @@ func state_text() -> String:
 	return ""
 
 
+## Besetzung (0.10.1): Besitz aller Zonen (A Alliierte, X Achse, – neutral) und laufende Einnahme mit Fortschritt
+## (Gesamt aus Neutralisieren + Einnehmen, je halbe Einnahmezeit wie Original 0x5ECF20) – sichtbar für alle Spieler
+func zone_text() -> String:
+	if Net.mode() != Net.Mode.OCCUPATION:
+		return ""
+	var m = Game.current_mission()
+	if m == null or not m.has_method("mp_zones"):
+		return ""
+	var zs: Array = m.mp_zones()
+	var lines: PackedStringArray = []
+	for i in zs.size():
+		var own: int = int(Net.zone_owner[i]) if i < Net.zone_owner.size() else int(zs[i]["owner"])
+		var mark := "A" if own == Soldier.TEAM_ALLIED else ("X" if own == Soldier.TEAM_AXIS else "–")
+		var line := "[%s] %s" % [mark, String(zs[i]["text"])]
+		var att: int = int(Net.zone_attacker[i]) if i < Net.zone_attacker.size() else -1
+		var prog: float = float(Net.zone_progress[i]) if i < Net.zone_progress.size() else 0.0
+		if att in [0, 1] and prog > 0.0:
+			var cap := maxf(float(zs[i]["capture_time"]), 1.0)
+			var done := prog / cap + (0.5 if own == -1 else 0.0)
+			var pct := clampi(int(done * 100.0), 0, 100)
+			var bar := "■".repeat(pct / 10) + "□".repeat(10 - pct / 10)
+			line += "  %s %s %d %%" % ["Alliierte" if att == 0 else "Achse", bar, pct]
+		lines.append(line)
+	return "\n".join(lines)
+
+
 func objectives_text() -> String:
+	if Net.mode() == Net.Mode.OCCUPATION:
+		return zone_text()
 	if Net.mode() != Net.Mode.OBJECTIVES:
 		return ""
 	var m = Game.current_mission()

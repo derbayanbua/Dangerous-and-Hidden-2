@@ -42,6 +42,19 @@ static func is_new() -> bool:
 	return mode() == Settings.VIEW_NEW
 
 
+## 0.10.1: Mehrspieler-Nebelfaktor (`--mp_fog=` überschreibt, 1 = wie Einzelspieler). PerfTuning blendet erst hinter
+## dem Nebelende aus (classic_cull_distance) → wächst mit; Kamera-far ebenso.
+const MP_FOG_SCALE := 1.4
+
+
+static func is_mp() -> bool:
+	return Net.is_online or Game.current_mission_id.begins_with("mp_")
+
+
+static func mp_fog_scale() -> float:
+	return clampf(float(Game.cli.get("mp_fog", MP_FOG_SCALE)), 1.0, 3.0)
+
+
 ## Kamera-Fernebene für alle Spielkameras (CameraRig, Zuschauer, Zwischensequenz)
 static func camera_far() -> float:
 	return float(current.get("far", DEFAULT_FAR))
@@ -122,6 +135,10 @@ static func apply(m: Node, env: Environment) -> Dictionary:
 	elif folder != "":
 		var v := orig_values(folder)
 		var rg := classic_range(v)
+		# 0.10.1 (Nutzerauftrag): im Mehrspieler Nebel moderat weiter weg (Sichtweite ×MP_FOG_SCALE, Beginn mit)
+		if is_mp():
+			rg *= mp_fog_scale()
+			st["mp_scale"] = mp_fog_scale()
 		env.fog_enabled = true
 		env.fog_mode = Environment.FOG_MODE_DEPTH
 		env.fog_depth_begin = rg.x

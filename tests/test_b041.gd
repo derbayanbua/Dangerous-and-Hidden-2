@@ -46,7 +46,10 @@ func _common(m) -> void:
 	var src := FileAccess.get_file_as_string("res://src/ui/main_menu.gd")
 	check(src.contains("\"bviewmode\"") and src.contains("SICHTWEITE:"), "Menüeintrag SICHTWEITE (Optionen Anzeige)")
 	var sm = m.env.sky.sky_material
-	if Settings.quality >= 1:
+	# B-050 ([D] 07.11.2026): Fotohimmel (PanoramaSkyMaterial) hat Vorrang vor dem Wolkenshader
+	if bool(m.sky_fx.stats.get("photo", false)):
+		check(sm is PanoramaSkyMaterial, "Fotohimmel aktiv (B-050, beide Stufen)", str(sm))
+	elif Settings.quality >= 1:
 		check(sm is ShaderMaterial, "Wolkenhimmel aktiv (beide Stufen)", str(sm))
 		if sm is ShaderMaterial:
 			check(float(sm.get_shader_parameter("haze")) > 0.0, "Horizontdunst gesetzt", str(sm.get_shader_parameter("haze")))
@@ -65,7 +68,12 @@ func _classic(m) -> void:
 		"%.1f / %.1f" % [e.fog_depth_end, float(v["view"])])
 	check(is_equal_approx(e.fog_depth_begin, rg.x) and rg.x < rg.y, "Nebelbeginn nach Regel", "%.1f" % e.fog_depth_begin)
 	if v["fog_color"] != null:
-		check(e.fog_light_color.is_equal_approx(v["fog_color"]), "Nebelfarbe = Original-Nebellicht", str(e.fog_light_color))
+		var want: Color = v["fog_color"]
+		# B-050: mit Fotohimmel wird das Original-Nebellicht zu 70 % an den Foto-Horizont angeglichen (sky_fx.gd)
+		if bool(m.sky_fx.stats.get("photo", false)) and m.sky_fx.stats.has("fog_color"):
+			want = want.lerp(m.sky_fx.stats["fog_color"], 0.7)
+		check(e.fog_light_color.is_equal_approx(want), "Nebelfarbe = Original-Nebellicht (B-050: an Foto-Horizont angeglichen)",
+			"%s / %s" % [e.fog_light_color, want])
 	check(not e.volumetric_fog_enabled, "kein künstlicher Volumennebel")
 	Settings.apply()
 	await frames(2)

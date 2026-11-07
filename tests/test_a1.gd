@@ -81,7 +81,9 @@ func _run() -> void:
 	var kan := rt.actors.get("KANISTERNIK") as Soldier
 	check(kan != null and kan.weapons[0] != null and kan.weapons[0].data.id == &"mp40", "Kanisternik mit MP 40 (items.dat)")
 	var rebel := rt.actors.get("REBEL") as Soldier
-	check(rebel != null and rebel.team == Soldier.TEAM_NEUTRAL, "Sygurd (Rebel) gespawnt, neutral (Original-Seite 4)")
+	# 0.10.1: Seite 4 = Fraktion 1 Spielerseite (hd2.exe 0x5A8820), nicht im Trupp (docs/AI_AUDIT_ALLY.md)
+	check(rebel != null and rebel.team == Soldier.TEAM_ALLIED and not m.squad.members.has(rebel),
+		"Sygurd (Rebel) gespawnt, Spielerseite außerhalb des Trupps (Original-Seite 4)")
 	check(gg.model.orig_figure != null and gg.model.orig_figure.find_child("Skeleton3D", true, false) != null,
 		"Torwache als Original-Figur mit Skelett (ge01*)")
 	check(m.squad.members[0].model.orig_figure != null, "Kommandos als Original-Figur (en01)")

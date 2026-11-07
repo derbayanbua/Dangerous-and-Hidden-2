@@ -14,6 +14,7 @@ var enabled := true
 
 ## Kampf-Parameter
 var reaction_time := 0.6        ## s bis zum ersten Schuss nach Zielerfassung
+var skip_reaction := false      ## AP-48b: OrigCombatFsm feuert ohne zweite Reaktionssperre (nur Blickfehler)
 var accuracy_skill := 0.5       ## 0..1, verringert die KI-Zusatzstreuung
 var burst_left := 0
 var burst_pause := 0.0
@@ -356,7 +357,7 @@ func engage(target: Soldier, delta: float) -> bool:
 		err += 0.5
 	err += dist / 80.0
 	soldier.extra_spread = err
-	var can_shoot := _track_time >= reaction_time and facing_error(aim_p) < 0.12
+	var can_shoot := (skip_reaction or _track_time >= reaction_time) and facing_error(aim_p) < 0.12
 	if can_shoot and check_fire_line and friend_in_fire_line(aim_p):
 		can_shoot = false
 	_handle_bursts(w, can_shoot, delta, dist)

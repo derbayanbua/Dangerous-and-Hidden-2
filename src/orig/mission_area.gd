@@ -82,7 +82,7 @@ func team_flags() -> int:
 func _physics_process(delta: float) -> void:
 	if mission == null or mission.finished:
 		return
-	if runtime and runtime.get("in_cutscene"):
+	if runtime and (runtime.get("in_cutscene") or runtime.get("fake_cutscene") == true):
 		return
 	_t -= delta
 	_msg_t -= delta

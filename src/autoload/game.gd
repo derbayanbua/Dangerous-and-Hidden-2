@@ -192,6 +192,12 @@ func mp_allowed_from(map: String) -> String:
 	return String(MISSIONS.get(map, {}).get("mp_allowed_from", ""))
 
 
+## Zusätzliche Freigaben einer eigenen Karte zur Liste aus "mp_allowed_from" (Registerschlüssel "mp_extra_allowed",
+## Einträge im Format von mp.json „allowed_items“) [D]
+func mp_extra_allowed(map: String) -> Array:
+	return MISSIONS.get(map, {}).get("mp_extra_allowed", [])
+
+
 # --- Profile ---------------------------------------------------------------------
 
 ## Schwierigkeitsgrade 1..4 = Original-Texte 2157–2160 (leicht, normal, schwer, sehr schwer)

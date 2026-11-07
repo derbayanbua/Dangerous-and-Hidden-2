@@ -135,9 +135,14 @@ static func seat_flags(model_path: String) -> Dictionary:
 ## Haltung eines Insassen nach Sitzflags [B Daten, P Deutung]: Bit 0 Fahrer („!ridic“), Bit 7 Motorrad/Kleinst-U-Boot
 ## („!namotorce“), Bit 1 sitzender Mitfahrer („!spol“); Bit 4 (in der Panzerung verborgen) und Bit 8 (Bordwaffe:
 ## Haltung über die Waffe) behalten die bisherige Darstellung → "".
+## 0.10.1: Bordwaffensitz mit Sitzziffer 1 (Bit 1, z. B. Jeep SAS „SEAT18“, Opel-Flak „SEAT18“ – Original-Clips
+## „(jeep1919“/„(flaksed“ sind sitzend, re_notes_weapons §11) sitzt wie ein Mitfahrer im Fahrzeug; vorher hockte die Figur
+## ohne Sitzclip 0,55 m unter dem Sitzframe mit den Beinen durch Boden/Bordwand („MG-Schütze außerhalb“) [P].
 static func seat_kind(mask: int) -> String:
-	if mask & (1 << 8) or mask & (1 << 4):
+	if mask & (1 << 4):
 		return ""
+	if mask & (1 << 8):
+		return "passenger" if mask & (1 << 1) else ""
 	if mask & (1 << 7):
 		return "motorbike"
 	if mask & 1:

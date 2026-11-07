@@ -47,7 +47,7 @@ func _enabled() -> bool:
 		return false
 	var rt = mission.get("runtime")
 	# MP-Arenen ohne Skriptlaufzeit: get() liefert null (bool(null) war ein Skriptfehler, B-017)
-	if rt and is_instance_valid(rt) and rt.get("in_cutscene") == true:
+	if rt and is_instance_valid(rt) and (rt.get("in_cutscene") == true or rt.get("fake_cutscene") == true):
 		return false
 	return true
 

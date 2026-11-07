@@ -678,9 +678,10 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				get_tree().create_timer(dly, false).timeout.connect(func(): _set_interface_timer(dur))
 			return null
 		"CSC_SETUPFAKECUTSCENE":
-			# Sequenz ohne Kameraübernahme: Spielerfiguren ruhen (NORMANDY2) – Steuerung sperren/freigeben
-			if mission.controller and args.size() > 0:
-				mission.controller.input_enabled = not LsVM._truthy(vm.value(args[0]))
+			# B-049/AP-49a: „Fake-Cutscene“ (NORMANDY2 r_n2_camerasend.scr): Welt, KI und Skripte laufen weiter, das
+			# Skript übernimmt aber die Kamera (FRM_SetActiveCamera auf Kamera1/2 mit #CAMNO2_*), Steuerung gesperrt,
+			# HUD aus, kein Überspringen [P]. false beendet und gibt die Spielkamera zurück.
+			set_fake_cutscene(LsVM._truthy(vm.value(args[0])) if args.size() > 0 else true)
 			return null
 		"CSC_FADEOUTTOCOLOR", "CSC_FADEINFROMCOLOR":
 			# (ms, r, g, b): Blende zu/aus einer Farbe (AFRICA4 Sandsturm-Blitz: weiß)
@@ -865,8 +866,15 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			end_cutscene()
 			return null
 		"FRM_SETACTIVECAMERA":
-			var cf := _frame_arg(vm, args[0])
-			if cf and in_cutscene:
+			var cf := _frame_arg(vm, args[0]) if args.size() > 0 else null
+			# B-049: K0 aus FRM_GetActiveCamera = Spielkamera (rig.camera) → Rückgabe an den Spieler
+			if cf and mission and mission.get("rig") and cf == mission.rig.camera:
+				_cam_frame = null
+				_cam_target = null
+				if not in_cutscene:
+					mission.rig.camera.current = true
+				return null
+			if cf and (in_cutscene or fake_cutscene):
 				_cam_frame = cf
 				_cut_cam.global_transform = cf.global_transform
 				_cut_cam.current = true
@@ -1077,7 +1085,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				if nf is Soldier:
 					var ns := nf as Soldier
 					ns.remove_from_group("team_%d" % ns.team)
-					ns.team = Soldier.TEAM_ALLIED if join else Soldier.TEAM_NEUTRAL
+					# Seite 4 (Fraktion 1, hd2.exe 0x5A8820) bleibt beim Verlassen Spielerseite (AI_AUDIT_ALLY)
+					ns.team = Soldier.TEAM_ALLIED if join or int(ns.get_meta("orig_side", 3)) == 4 else Soldier.TEAM_NEUTRAL
 					ns.add_to_group("team_%d" % ns.team)
 					# Original: NPC schließt sich dem Team an und folgt (CZECH3 Freiberg zur Villa) –
 					# Begleit-KI wie bei befreiten Gefangenen; 0 = wieder Skriptsteuerung
@@ -1648,7 +1657,7 @@ func _display_tick(delta: float) -> void:
 				if m:
 					m.uv1_offset.y = fposmod(m.uv1_offset.y + SHIFT_SPEED * delta * float(_shifting[f]), 1.0)
 	if _clouder and clouder_on:
-		var cam: Camera3D = _cut_cam if in_cutscene and _cut_cam else (mission.rig.camera if mission and mission.get("rig") else null)
+		var cam: Camera3D = _cut_cam if (in_cutscene or (fake_cutscene and is_instance_valid(_cam_frame))) and _cut_cam else (mission.rig.camera if mission and mission.get("rig") else null)
 		if cam:
 			_clouder.global_position.x = cam.global_position.x
 			_clouder.global_position.z = cam.global_position.z
@@ -2227,6 +2236,7 @@ func _set_ai_mode(b: EnemyBrain, fname: String) -> void:
 # --- Zwischensequenzen (CSC_*) --------------------------------------------------------
 
 var in_cutscene := false
+var fake_cutscene := false      ## B-049: CSC_SetupFakeCutscene(true) – Skriptkamera, Welt läuft weiter
 var cutscene_id := 0
 var _cutscene_vm: LsVM
 var _cut_cam: Camera3D
@@ -2314,6 +2324,30 @@ func run_cutscene(n: int, vm: LsVM) -> void:
 		end_cutscene.call_deferred()
 
 
+## B-049/AP-49a: Fake-Cutscene ein/aus (NORMANDY2 Endsequenz). Ein: Steuerung gesperrt, HUD aus, FRM_SetActiveCamera
+## wirkt; aus: Spielkamera/HUD/Steuerung zurück (Skript ruft vorher SetPlayerInput(true), FRM_SetActiveCamera(K0)).
+func set_fake_cutscene(on: bool) -> void:
+	fake_cutscene = on
+	if mission == null:
+		return
+	if mission.controller:
+		mission.controller.input_enabled = not on
+	if in_cutscene:
+		return      # echte Sequenz behält Kamera/HUD
+	if mission.hud:
+		mission.hud.visible = not on
+	if not on:
+		_cam_frame = null
+		_cam_target = null
+		if mission.get("rig") and mission.rig.camera:
+			mission.rig.camera.current = true
+
+
+## Skript führt die Kamera (echte oder Fake-Cutscene)
+func script_camera_active() -> bool:
+	return in_cutscene or fake_cutscene
+
+
 func end_cutscene() -> void:
 	if not in_cutscene:
 		return
@@ -2366,12 +2400,14 @@ func _fade_to(a: float, secs: float) -> void:
 func _process(_delta: float) -> void:
 	if in_cutscene and not auto_skip:
 		_cutscene_auto_end(_delta)
-	if in_cutscene and is_instance_valid(_cam_frame):
+	if script_camera_active() and is_instance_valid(_cam_frame):
 		_cut_cam.global_transform = _cam_frame.global_transform
+		if fake_cutscene and not _cut_cam.current:
+			_cut_cam.current = true
 	if in_cutscene and is_instance_valid(_cam_target):
 		_cut_cam.look_at(_cam_target.global_position, Vector3.UP)
 	if _snow and mission.rig and mission.rig.camera:
-		var cam := _cut_cam if in_cutscene else mission.rig.camera
+		var cam := _cut_cam if in_cutscene or (fake_cutscene and is_instance_valid(_cam_frame)) else mission.rig.camera
 		_snow.global_position = cam.global_position + Vector3.UP * 8.0
 
 
@@ -2713,7 +2749,7 @@ func save_state() -> Dictionary:
 			vis.append([key, (f as Node3D).visible])
 	var out := {
 		"version": SAVE_VERSION, "vms": vl, "game_values": gv,
-		"cutscene": {"on": in_cutscene, "id": cutscene_id, "vms": cut_vms},
+		"cutscene": {"on": in_cutscene, "id": cutscene_id, "vms": cut_vms, "fake": fake_cutscene},
 		"formations": forms, "dups": dups, "actors": act, "visible": vis,
 		"weather": {"mode": int(weather.mode), "count": float(weather.count), "speed": float(weather.speed),
 			"size": save_value(weather.size), "color": save_value(weather.color), "on": bool(weather.on)},
@@ -2883,6 +2919,9 @@ func load_state(d: Dictionary) -> Array:
 	# Laufende Zwischensequenz: Zustand herstellen und wie per Leertaste überspringen – die OnCutscene-Abläufe laufen
 	# im Schnelldurchlauf zu Ende (Spielzustand wie bei „Überspringen“), Kamera/Blende sind danach wieder beim Spieler
 	var cut: Dictionary = d.get("cutscene", {})
+	# B-049: laufende Fake-Cutscene wiederherstellen; das Skript läuft weiter und schaltet die Kamera selbst (K1/K2 → K0)
+	if bool(cut.get("fake", false)):
+		set_fake_cutscene(true)
 	if bool(cut.get("on", false)):
 		in_cutscene = true
 		cutscene_id = int(cut.get("id", 0))

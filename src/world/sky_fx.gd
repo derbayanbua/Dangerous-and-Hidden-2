@@ -10,6 +10,13 @@ extends Node3D
 ## Stufe „Niedrig“: unveränderter prozeduraler Himmel, keine Schatten → keine Zusatzkosten (VM/WARP).
 
 const SHADER := preload("res://src/world/sky_clouds.gdshader")
+const SkyBackdrop := preload("res://src/world/sky_backdrop.gd")
+const SkyPhoto := preload("res://src/world/sky_hdri.gd")
+var photo: PanoramaSkyMaterial
+var _photo_fog_base := Color.BLACK
+var _photo_fog_set := Color(-1, -1, -1, -1)
+var day_night_material: Material   ## 0.10.1: gesetzt von day_night.gd → Vorrang vor Foto/Original
+var _photo_checked := false
 const CLOUD_HEIGHT := 1000.0      ## gedachte Wolkenhöhe [m] (koppelt Himmel-UV und Schattengeschwindigkeit)
 const CLOUD_SCALE := 0.9
 const SHADOW_PERIOD := 420.0      ## Kachelgröße der Schattenmaske [m]; Decal = 2×2 Kacheln
@@ -58,6 +65,19 @@ func setup(m: Node, e: Environment, s: DirectionalLight3D) -> void:
 	if not Settings.changed.is_connected(apply):
 		Settings.changed.connect(apply)
 	apply()
+	_recheck_backdrop.call_deferred()
+
+
+## B-050: Das Level (Backdrop-Himmel) hängt evtl. erst nach der Umgebung im Baum → einige Sekunden nachprüfen und bei
+## Wechsel neu anwenden (sonst blieben Rauschwolken/Wolkenschatten über dem Original-/Fotohimmel).
+func _recheck_backdrop() -> void:
+	for i in 20:
+		if not is_inside_tree():
+			return
+		var has: bool = SkyBackdrop.present(get_tree())
+		if has != bool(stats.get("backdrop", false)):
+			apply()
+		await get_tree().create_timer(0.5, true, false, true).timeout
 
 
 static func _mission_key(m: Node) -> String:
@@ -99,6 +119,48 @@ func apply() -> void:
 		return
 	stats["applied"] += 1
 	var q := Settings.quality
+	# 0.10.1: Tag/Nacht (src/world/day_night.gd) steuert Himmel/Nebelfarbe selbst
+	if day_night_material:
+		env.sky.sky_material = day_night_material
+		if is_inside_tree():
+			for n in get_tree().get_nodes_in_group(SkyBackdrop.GROUP):
+				(n as Node3D).visible = false
+		stats["day_night"] = true
+		stats["backdrop"] = false
+		_set_shadows(false)
+		return
+	# B-050/AP-50a: Mission mit Original-Himmel (Backdrop kamerafest) → gemalte Wolken des Originals, keine Rauschwolken/
+	# Wolkenschatten (statische Wolken passen nicht zu ziehenden Schatten); der prozedurale Himmel bleibt nur darunter.
+	# B-050: fotorealistischer Himmel (CC0-HDRI, src/world/sky_photo.gd) hat Vorrang vor dem Original-Himmel
+	if photo == null and not _photo_checked:
+		_photo_checked = true
+		var om = mission.get("orig_mission") if mission else null
+		photo = SkyPhoto.material_for(String(om) if om != null else "")
+	stats["photo"] = photo != null
+	if photo:
+		env.sky.sky_material = photo
+		if is_inside_tree():
+			for n in get_tree().get_nodes_in_group(SkyBackdrop.GROUP):
+				(n as Node3D).visible = false
+		if not stats.has("fog_color"):
+			stats["fog_color"] = SkyPhoto.horizon_color(photo)
+		var hc: Color = stats["fog_color"]
+		if env.fog_enabled:
+			# Nebel → Horizont des Fotos [D]; idempotent: wiederholtes apply() (Settings.changed) mischt nicht erneut,
+			# solange niemand (ViewDistance) die Nebelfarbe neu gesetzt hat
+			if not env.fog_light_color.is_equal_approx(_photo_fog_set):
+				_photo_fog_base = env.fog_light_color
+			_photo_fog_set = _photo_fog_base.lerp(hc, 0.7)
+			env.fog_light_color = _photo_fog_set
+		env.sky.process_mode = Sky.PROCESS_MODE_QUALITY
+		stats["backdrop"] = false
+		_set_shadows(false)
+		return
+	stats["backdrop"] = is_inside_tree() and SkyBackdrop.present(get_tree())
+	if stats["backdrop"]:
+		env.sky.sky_material = procedural
+		_set_shadows(false)
+		return
 	if q <= 0:
 		env.sky.sky_material = procedural
 		_set_shadows(false)

@@ -387,10 +387,54 @@ func _process(_delta: float) -> void:
 		_prompt.text = "[%s] Aussteigen" % InputSetup.binding_text("interact")
 	var optic: int = mission.rig.optic_overlay() if mission.rig else (4 if s.using_binoculars else -1)
 	_update_optic(optic)
+	_update_breath(optic)
 	# Zoom über Kimme/Korn bzw. Optik: kein Fadenkreuz (die Visierlinie liegt auf der Bildmitte)
 	var zoomed: bool = mission.rig != null and mission.rig.zoomed()
 	_crosshair.visible = optic < 0 and not zoomed and (Settings.crosshair or s.aiming)
 	_crosshair.queue_redraw()
+
+
+var _breath_bar: Control
+var _breath_txt := ""
+
+
+## Atemanzeige beim Zielfernrohr (0.10.1, Luft anhalten mit Shift): Balken unten mittig, sichtbar mit Zielfernrohr
+## oder solange der Atem nicht voll ist; Farbe weiß = bereit, hellblau = angehalten, rot = Atemnot.
+func _update_breath(optic: int) -> void:
+	var rig = mission.rig
+	if rig == null or not ("breath" in rig):
+		return
+	if _breath_bar == null:
+		_breath_bar = Control.new()
+		_breath_bar.name = "BreathBar"
+		_breath_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_breath_bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+		_breath_bar.position = Vector2(-110, -96)
+		_breath_bar.size = Vector2(220, 26)
+		_breath_bar.draw.connect(_draw_breath)
+		_root.add_child(_breath_bar)
+	var scoped := optic >= 0 and optic <= 3
+	_breath_bar.visible = scoped or float(rig.breath) < 0.999
+	if _breath_bar.visible:
+		_breath_bar.queue_redraw()
+
+
+func _draw_breath() -> void:
+	var rig = mission.rig
+	if rig == null:
+		return
+	var st: String = rig.breath_state()
+	var col := Color(0.92, 0.92, 0.88, 0.85)
+	if st == "hold":
+		col = Color(0.55, 0.85, 1.0, 0.95)
+	elif st == "winded":
+		col = Color(0.95, 0.3, 0.25, 0.95)
+	var w := _breath_bar.size.x
+	_breath_bar.draw_rect(Rect2(0, 14, w, 8), Color(0, 0, 0, 0.55))
+	_breath_bar.draw_rect(Rect2(1, 15, (w - 2) * clampf(float(rig.breath), 0.0, 1.0), 6), col)
+	var label: String = {"hold": "Luft angehalten", "winded": "Atemnot", "recover": "Atem", "full": "[Shift] Luft anhalten"}.get(st, "")
+	var f := _breath_bar.get_theme_default_font()
+	_breath_bar.draw_string(f, Vector2(0, 11), label, HORIZONTAL_ALIGNMENT_CENTER, w, 12, col)
 
 
 var _optic: Control

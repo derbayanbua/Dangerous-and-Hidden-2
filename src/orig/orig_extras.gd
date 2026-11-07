@@ -70,16 +70,48 @@ static func _vec(a: Array) -> Vector3:
 	return Vector3(a[0], a[1], a[2])
 
 
+## 0.10.1 Lampenlicht [D, Nutzerauftrag „wo Lampen sind, heller“]: Original-Lichter mit kleinem `power` (0,1–0,2)
+## waren als Echtzeitlicht kaum sichtbar, die meisten Lampenlichter sind im Original nur in die Lightmap gebacken
+## (`lightmap_only`) und fehlten ganz. Jetzt: Energie mit Grundhelligkeit (`lamp_energy`), gebackene Punkt-/Spotlichter
+## zusätzlich als echte Lichter (höchstens BAKED_MAX, nach Stärke × Reichweite, Häufungen < BAKED_MERGE_M
+## zusammengefasst, Reichweite ≤ BAKED_RANGE_MAX). Gebackene zählen NICHT für die KI-Sicht (mission.lamps unverändert).
+## Schatten nur ab Ultra für die SHADOW_MAX stärksten Spots; Entfernungsausblendung über PerfTuning.
+## `--lamp_boost=0` = alter Stand (Vergleichsbilder).
+const BAKED_MAX := 64
+const BAKED_MERGE_M := 1.5
+const BAKED_RANGE_MAX := 22.0
+const SHADOW_MAX := 4
+var lamp_stats := {"baked": 0, "baked_skipped": 0, "merged": 0, "shadowed": 0}
+
+
+static func lamp_boost_on() -> bool:
+	return String(Game.cli.get("lamp_boost", "1")) != "0"
+
+
+static func lamp_energy(power: float) -> float:
+	if not lamp_boost_on():
+		return power * POINT_ENERGY
+	return POINT_ENERGY * clampf(0.45 + power, 0.55, 2.6)
+
+
 func _build_lights(lights: Array) -> void:
+	var placed: Array[Vector3] = []
+	var spots: Array = []                 # [stärke, SpotLight3D]
+	var baked: Array = []
 	for l in lights:
+		var t := String(l.get("type", ""))
 		if l.get("lightmap_only", false):
+			if lamp_boost_on() and (t == "point" or t == "spot") and float(l.get("range", 0.0)) >= 1.5 \
+					and float(l.get("power", 0.0)) >= 0.05:
+				baked.append(l)
 			continue
 		var col := Color(l["color"][0], l["color"][1], l["color"][2])
 		var rng: float = maxf(float(l.get("range", 8.0)), 1.0)
 		var pos := _vec(l["world_pos"])
-		match String(l.get("type", "")):
+		placed.append(pos)
+		match t:
 			"point":
-				var o := mission.add_lamp(pos, rng, col, float(l.get("power", 1.0)) * POINT_ENERGY)
+				var o := mission.add_lamp(pos, rng, col, lamp_energy(float(l.get("power", 1.0))))
 				o.shadow_enabled = false
 				_lights.append(o)
 				o.name = String(l["name"]).validate_node_name()
@@ -89,7 +121,7 @@ func _build_lights(lights: Array) -> void:
 				var s := SpotLight3D.new()
 				s.name = String(l["name"]).validate_node_name()
 				s.light_color = col
-				s.light_energy = float(l.get("power", 1.0)) * POINT_ENERGY * 1.5
+				s.light_energy = lamp_energy(float(l.get("power", 1.0))) * 1.5
 				s.spot_range = rng
 				s.spot_angle = clampf(rad_to_deg(float(l.get("cone_outer", 1.0))) * 0.5, 5.0, 89.0)
 				s.shadow_enabled = false
@@ -100,6 +132,56 @@ func _build_lights(lights: Array) -> void:
 				# Lichtkegel macht Bereiche darunter für die Sicht-Erkennung hell
 				mission.lamps.append([pos + s.global_basis * Vector3(0, 0, -rng * 0.6), rng * 0.5, 1.2])
 				stats.spots += 1
+				spots.append([float(l.get("power", 1.0)) * rng, s])
+	_build_baked_lamps(baked, placed, spots)
+	if lamp_boost_on() and Settings.quality >= 3:
+		spots.sort_custom(func(a, b): return a[0] > b[0])
+		for i in mini(SHADOW_MAX, spots.size()):
+			(spots[i][1] as SpotLight3D).shadow_enabled = true
+			lamp_stats.shadowed += 1
+
+
+func _build_baked_lamps(baked: Array, placed: Array[Vector3], spots: Array) -> void:
+	baked.sort_custom(func(a, b): return float(a["power"]) * float(a["range"]) > float(b["power"]) * float(b["range"]))
+	for l in baked:
+		var pos := _vec(l["world_pos"])
+		var near := false
+		for p in placed:
+			if p.distance_to(pos) < BAKED_MERGE_M:
+				near = true
+				break
+		if near:
+			lamp_stats.merged += 1
+			continue
+		if lamp_stats.baked >= BAKED_MAX:
+			lamp_stats.baked_skipped += 1
+			continue
+		placed.append(pos)
+		var col := Color(l["color"][0], l["color"][1], l["color"][2])
+		var rng := clampf(float(l["range"]), 2.0, BAKED_RANGE_MAX)
+		var e := lamp_energy(float(l["power"]))
+		var li: Light3D
+		if String(l["type"]) == "spot":
+			var s := SpotLight3D.new()
+			s.spot_range = rng
+			s.spot_angle = clampf(rad_to_deg(float(l.get("cone_outer", 1.0))) * 0.5, 5.0, 89.0)
+			s.light_energy = e * 1.5
+			li = s
+			spots.append([float(l["power"]) * rng, s])
+		else:
+			var o := OmniLight3D.new()
+			o.omni_range = rng
+			o.omni_attenuation = 1.4
+			o.light_energy = e
+			li = o
+		li.name = "baked_" + String(l["name"]).validate_node_name()
+		li.light_color = col
+		li.shadow_enabled = false
+		li.set_meta("orig_baked_lamp", true)
+		mission.dynamic_root.add_child(li)
+		li.global_transform = Transform3D(Basis(_quat(l["world_rot"])), pos)
+		_lights.append(li)
+		lamp_stats.baked += 1
 
 
 func _build_sounds(sounds: Array, script_text: String) -> void:

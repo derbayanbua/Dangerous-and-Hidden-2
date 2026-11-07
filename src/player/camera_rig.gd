@@ -92,6 +92,7 @@ func set_target(s: Soldier) -> void:
 			target.model.visible = true
 			target.model.head.visible = true
 			target.model.set_weapon_visible(true)
+		target.fpv_muzzle = null
 		if target.weapon_changed.is_connected(_on_weapon_changed):
 			target.weapon_changed.disconnect(_on_weapon_changed)
 			target.shot_fired.disconnect(_on_shot)
@@ -595,6 +596,13 @@ func _update_viewmodel(delta: float) -> void:
 		_viewmodel.visible = false
 	elif fpv_active and not _viewmodel.visible and not target.using_binoculars and not scope_hides_vm and target.alive:
 		_viewmodel.visible = true
+	# 0.10.1: Mündungsfeuer in der 1. Person am Knoten „flash“ der FPV-Waffe (folgt Schuss-/Zielanimation)
+	var vflash: Node3D = null
+	if _viewmodel.visible and is_instance_valid(_vm_weapon) and _vm_tool == "":
+		vflash = _vm_weapon.find_child("flash", true, false) as Node3D
+		if vflash == null and _vm_weapon.has_meta("muzzle"):
+			vflash = _vm_weapon.get_meta("muzzle") as Node3D
+	target.fpv_muzzle = vflash
 	if not _viewmodel.visible or not is_instance_valid(_vm_weapon):
 		return
 	# FPV-Modell mit eigenem Sichtfeld (65° bzw. 40° beim Zoomen) unter der Weltkamera: Skalierung in x/y um
@@ -788,7 +796,54 @@ func _safe_pivot(p: Vector3, margin: float) -> Vector3:
 ## Wackeln der Blickrichtung beim Zoomen (hd2.exe 0x466970, Kamera +0x290): Amplitude A = 0,002 bei Kimme/Korn;
 ## mit Zielfernrohr/Fernglas wächst A bis 0,008 (4e-6 je ms) bzw. sinkt in Ruhe bis 0,0015 (5e-6 je ms) [P: Ruhe =
 ## stillstehen]; Ausschlag (2 − Schießen/100) · A · (sin(cos(0,0018 t)), cos(sin(0,0008 t + 3))).
+## Luft anhalten (0.10.1, Nachbau [D]: im Original nicht vorhanden – hd2.exe kennt nur das Wackeln 0x466970):
+## Zielfernrohr (Overlay 0–3) + Sprint-Taste (Shift) hält bis BREATH_HOLD_S die Luft an, das Wackeln klingt in
+## BREATH_FADE_S aus. Ist der Atem verbraucht, folgt Atemnot (stärkeres Wackeln, kein erneutes Anhalten), bis der
+## Atem wieder BREATH_RESUME erreicht; Erholung BREATH_REGEN_S für vollen Atem. HUD: `breath`, `breath_state()`.
+const BREATH_HOLD_S := 4.0
+const BREATH_REGEN_S := 6.0
+const BREATH_FADE_S := 0.3
+const BREATH_RESUME := 0.6
+const BREATH_WINDED_K := 2.5        ## Wackelfaktor bei Atemnot (fällt mit der Erholung auf 1)
+var breath := 1.0                   ## 0 … 1
+var breath_holding := false
+var breath_winded := false
+var _breath_k := 1.0                ## aktueller Wackelfaktor
+var breath_force := -1              ## Tests: 1 = Taste gedrückt, 0 = losgelassen, -1 = Eingabe
+
+
+func breath_state() -> String:
+	return "hold" if breath_holding else ("winded" if breath_winded else ("recover" if breath < 1.0 else "full"))
+
+
+func _breath_key() -> bool:
+	if breath_force >= 0:
+		return breath_force == 1
+	return is_instance_valid(target) and target.is_player_controlled and Input.is_action_pressed("run")
+
+
+func _update_breath(delta: float, scoped: bool) -> void:
+	var want := scoped and _breath_key() and not breath_winded and breath > 0.0
+	breath_holding = want
+	if breath_holding:
+		breath = maxf(0.0, breath - delta / BREATH_HOLD_S)
+		if breath <= 0.0:
+			breath_holding = false
+			breath_winded = true
+	else:
+		breath = minf(1.0, breath + delta / BREATH_REGEN_S)
+		if breath_winded and breath >= BREATH_RESUME:
+			breath_winded = false
+	var k_target := 0.0
+	if not breath_holding:
+		# nach dem Anhalten: Nachatmen proportional zum verbrauchten Atem, bei Atemnot deutlich stärker
+		k_target = 1.0 + (1.0 - breath) * (BREATH_WINDED_K - 1.0 + (1.0 if breath_winded else 0.0)) * 0.8
+	_breath_k = move_toward(_breath_k, k_target, delta / BREATH_FADE_S * maxf(1.0, absf(k_target - _breath_k)))
+
+
 func _sway(delta: float, on: bool) -> Vector3:
+	var scoped := on and not target.using_binoculars and int(_zoom_info().get("scope", 5)) <= 3
+	_update_breath(delta, scoped)
 	if not on:
 		_sway_ms = 0.0
 		return Vector3.ZERO
@@ -802,7 +857,7 @@ func _sway(delta: float, on: bool) -> Vector3:
 	else:
 		_sway_amp = maxf(_sway_amp - ms * 5e-6, 0.0015)
 	var skill: float = clampf(target.skill_shooting / 100.0, 0.0, 1.0) if target.skill_shooting >= 0.0 else 0.5
-	var amp := (2.0 - skill) * _sway_amp
+	var amp := (2.0 - skill) * _sway_amp * (_breath_k if scoped else 1.0)
 	var right := _dir.cross(Vector3.UP).normalized()
 	var up := right.cross(_dir).normalized()
 	return right * amp * sin(cos(0.0018 * _sway_ms)) + up * amp * cos(sin(0.0008 * _sway_ms + 3.0))

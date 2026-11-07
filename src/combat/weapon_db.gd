@@ -136,6 +136,11 @@ static func apply_blast(tree: SceneTree, space: PhysicsDirectSpaceState3D, pos: 
 		var s := n as Soldier
 		if s == null or not s.alive:
 			continue
+		# 0.10.1: Fahrzeuginsassen bekommen keinen direkten Explosionsschaden – Original: Explosion trifft das Fahrzeug
+		# (Car-Schaden Art 2 → Zone; Insassen nur über durchschlagene Zonen bzw. Zerstörung, 0x4E1A20/0x4E18C0/0x4DBF00).
+		# Vorher tötete eine Granate neben dem Fahrzeug den Insassen direkt und er fiel heraus („herausgesprengt“).
+		if s.vehicle != null and is_instance_valid(s.vehicle) and (s.vehicle.get("damage_model") != null or bool(s.vehicle.get("armored"))):
+			continue
 		var target := s.global_position + Vector3.UP * 0.5
 		var d2 := pos.distance_squared_to(target)
 		if d2 > r2:

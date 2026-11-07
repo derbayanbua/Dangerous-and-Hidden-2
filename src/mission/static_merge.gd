@@ -10,7 +10,8 @@ extends RefCounted
 ## Abschalten: --static_merge=0 bzw. --b039=0.
 
 const MAX_VERTS := 3000
-const TOKEN_FILES := ["interactive.json", "meshplayer.json", "lightmaps.json", "glows.json"]
+## mp.json: Flaggen-Frames der MP-Zonen (Besitzwechsel blendet sie um – zusammengefasst blieben sie sonst sichtbar, 0.10.1)
+const TOKEN_FILES := ["interactive.json", "meshplayer.json", "lightmaps.json", "glows.json", "mp.json"]
 static var last := {}
 
 
@@ -96,7 +97,7 @@ static func apply(m: Node) -> Dictionary:
 
 
 static func _eligible(mi: MeshInstance3D) -> bool:
-	if mi.mesh == null or not mi.is_visible_in_tree() or mi.skin != null:
+	if mi.mesh == null or not mi.is_visible_in_tree() or mi.skin != null or mi.has_meta("sky_backdrop"):
 		return false
 	if mi.material_override != null or mi.get_blend_shape_count() > 0 or mi.mesh.get_blend_shape_count() > 0:
 		return false

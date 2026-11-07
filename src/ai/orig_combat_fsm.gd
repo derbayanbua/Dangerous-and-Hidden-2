@@ -43,10 +43,13 @@ const FLANK_GRID := 5.0
 const ADV_MIN := 10.0
 const ADV_MAX := 20.0
 const ADV_COS := 0.5
-## Zeiten ohne Beleg [E]: Zustand 2 (Zufallszeit vor dem Heimweg), Zustand 12 (Ruhe), Wiederholsperre Aktion 7 (+0x108)
-const LOST_MS := Vector2(1000.0, 2000.0)
-const REST_MS := Vector2(2000.0, 3000.0)
-const ACTION7_LOCK_MS := 1500.0
+## Zeitgeber [B, 0.10.1 aus hd2.exe 0x549AE0 dekodiert: rand·k + c, Konstanten 0x81016C/0x810D68/0x810B60/0x810BAC/0x810D54]
+## Zustand 2 (vor dem Heimweg): rand·10000 + 15000 ms; Zustand 12 (Ruhe): rand·3000 + 2000 ms;
+## Zustand 8 (Zielaufnahme nach Ankunft): rand·2000 + 1500 ms; Wiederholsperre Aktion 7 (+0x108): (rand + 1)·1500 ms.
+const LOST_MS := Vector2(15000.0, 25000.0)
+const REST_MS := Vector2(2000.0, 5000.0)
+const ACTION7_LOCK_MS := 1500.0      ## Grundwert; gezogen wird (rand + 1)·1500
+const EVAL_MS := Vector2(1500.0, 3500.0)
 ## Zustand 7: abbrechen, wenn der Weg nicht vorankommt (Original: Bit 28 „Pfad läuft“ fällt weg) [E Zeit]
 const MOVE_ABORT_S := 12.0
 
@@ -95,6 +98,15 @@ func start_search(p: Vector3) -> void:
 	_enter(S_SEARCH)
 
 
+## K11 [P]: Treffer durch a während Rückzug/Ruhe/Suche → Kampf neu eröffnen (Zustand 0); im Gefecht keine Änderung.
+func on_hit(a: Soldier) -> void:
+	if a == null or not is_instance_valid(a) or a.team == brain.soldier.team:
+		return
+	if finished or state in [S_LOST, S_HOME, S_REST, S_SEARCH, S_SEARCH_ARRIVED]:
+		brain.target = a
+		start(a)
+
+
 func is_active() -> bool:
 	return not finished
 
@@ -116,7 +128,8 @@ func _enter(s: int, t_ms := 0.0) -> void:
 	state = s
 	timer_ms = t_ms
 	_state_s = 0.0
-	history.append(s)
+	if history.size() < 400:
+		history.append(s)
 	if Game.cli.has("debug_fsm") and brain and brain.soldier:
 		print("FSM %s -> %d %s (%.0f ms)" % [brain.soldier.name, s, state_name(), t_ms])
 
@@ -162,7 +175,7 @@ func tick(delta: float) -> bool:
 		S_FIRE: _st_fire(delta)
 		S_CHOOSE: _st_choose()
 		S_MOVE: _st_move(delta)
-		S_EVAL: _st_eval()
+		S_EVAL: _st_eval(delta)
 		S_ADVANCE: _st_advance()
 		S_ADV_ARRIVED: _st_adv_arrived()
 		S_CLOSE: _st_close(delta)
@@ -190,6 +203,42 @@ func _aim_only(delta: float) -> void:
 	brain.soldier.trigger = false
 
 
+## AP-48b: Schuss-/Zielaktion 0x58C330 [B Aufruf in 3/4/5/7, P Bedeutung „Feuern“]: bei Sicht auf das Ziel feuern, auch
+## in der Bewegung; sonst nur anvisieren. Keine zweite Reaktionssperre (Original: Teil der Zustandsfolge [P]) – nur der
+## Blickfehler begrenzt den ersten Schuss. Gibt true zurück, wenn gefeuert werden durfte.
+var shots_allowed := 0           ## Bilder mit Feuerfreigabe (Test/Messung)
+var fire_states := {}            ## Zustand → Bilder mit gedrücktem Abzug (Test/Messung)
+
+
+## Messschalter `--b048=0`: Stand vor 0.10.1 (Feuer nur in Zustand 5 mit Reaktionssperre) – nur für Vorher/Nachher-Messung.
+static func b048() -> bool:
+	return String(Game.cli.get("b048", "1")) != "0"
+
+
+func _fire(delta: float) -> bool:
+	if not b048():
+		if state == S_FIRE and _visible():
+			brain.engage(target, delta)
+			if brain.soldier.trigger:
+				shots_allowed += 1
+				fire_states[state] = int(fire_states.get(state, 0)) + 1
+			return true
+		if _target_ok():
+			_aim_only(delta)
+		return false
+	if _visible():
+		brain.skip_reaction = true
+		brain.engage(target, delta)
+		brain.skip_reaction = false
+		if brain.soldier.trigger:
+			shots_allowed += 1
+			fire_states[state] = int(fire_states.get(state, 0)) + 1
+		return true
+	if _target_ok():
+		_aim_only(delta)
+	return false
+
+
 # --- Zustände ---------------------------------------------------------------------------
 
 func _st_open() -> void:
@@ -198,7 +247,7 @@ func _st_open() -> void:
 		return
 	# Ziel = Spieler und ≥ 20 m und Weg zum Ziel (0x557540) → hingehen, 3; sonst Bewegung 2 (halten) → 4 [B]
 	# AP-6: Scharfschütze (HUMAN_SetSniper) verlässt den Posten nicht → kein Anmarsch [P]
-	if _target_is_player() and _dist() >= APPROACH_MIN and not brain.sniper_enabled and has_path(brain, target_pos):
+	if _target_is_player() and _dist() >= APPROACH_MIN and not brain.sniper_enabled and not hold_post() and has_path(brain, target_pos):
 		_go(target_pos, Soldier.Stance.STAND, Soldier.MoveMode.JOG)
 		_enter(S_APPROACH)
 	else:
@@ -210,7 +259,8 @@ func _st_approach(_delta: float) -> void:
 	if not _target_ok():
 		_enter(S_LOST, _rand_ms(LOST_MS))
 		return
-	face_move = true
+	# AP-48b: Feuern beim Anmarsch (0x58C330 auch in Zustand 3) – Körper zum Ziel, Weg läuft weiter
+	face_move = not _fire(_delta)
 	if not brain.has_move_target() or brain.arrived(1.5) or _dist() < APPROACH_MIN * 0.5:
 		brain.stop_moving()
 		counter = 0
@@ -223,7 +273,7 @@ func _st_aim(delta: float) -> void:
 		_enter(S_LOST, _rand_ms(LOST_MS))
 		return
 	brain.stop_moving()
-	_aim_only(delta)
+	_fire(delta)
 	# Ziel < 30 m → 0x5582C0 meldet es dem eigenen Sensor (keine Rundmeldung, B-031) [B]
 	if _dist() < REPORT_DIST:
 		brain.perception.awareness[target] = 1.0
@@ -234,18 +284,20 @@ func _st_aim(delta: float) -> void:
 
 func _st_fire(delta: float) -> void:
 	brain.stop_moving()
-	if _visible():
-		brain.engage(target, delta)
-	elif _target_ok():
+	if not _fire(delta):
 		brain.soldier.trigger = false
-		_aim_only(delta)
-	if timer_ms <= 0.0:
+	# AP-48b [B]: Verweilzeit (+0xC) wird JEDES Bild gegen eine neu gewürfelte Schwelle rand·600+200 (aggressiv) bzw.
+	# rand·2000+500 geprüft; timer_ms (beim Eintritt gezogen) bleibt als Obergrenze.
+	if timer_ms <= 0.0 or _state_s * 1000.0 > fire_pause_ms(aggressive(), rng):
 		brain.soldier.trigger = false
 		_enter(S_CHOOSE)
 
 
 func _st_choose() -> void:
 	brain.soldier.trigger = false
+	if hold_post():
+		_hold_reaim()
+		return
 	var p := Vector3.INF
 	if _target_ok():
 		if aggressive():
@@ -270,20 +322,28 @@ func _st_move(delta: float) -> void:
 	if close:
 		# Aktion 7 (0x570980 Modus 7): Blick/Anschlag auf die Zielposition, Wiederholsperre +0x108 [B Teil, AP-7 H]
 		if _action7_lock <= 0.0:
-			_action7_lock = ACTION7_LOCK_MS
+			_action7_lock = (rng.randf() + 1.0) * ACTION7_LOCK_MS
 			action7_count += 1
-		_aim_only(delta)
+		if not _fire(delta):
+			_aim_only(delta)
 		face_move = false
 	else:
-		face_move = true
+		# AP-48b: 0x58C330 nach der Gangwahl auch in Zustand 7 → Feuern im Laufen, sobald das Ziel sichtbar ist
+		face_move = not _fire(delta)
 	if not brain.has_move_target() or brain.arrived(1.2) or _state_s > MOVE_ABORT_S:
 		brain.stop_moving()
 		if _target_ok():
 			_aim_only(delta)
-		_enter(S_EVAL)
+		# AP-48c [B Ablauf]: nach Ankunft Zeitgeber +0x10 = rand·2000+1500 ms (Zielaufnahme) [B]
+		_enter(S_EVAL, _rand_ms(EVAL_MS))
 
 
-func _st_eval() -> void:
+func _st_eval(delta: float) -> void:
+	# Zeitgeber gilt nur im Zweig "Ziel lebt und aggressiv" (sonst sofort 0x5AE310) [B]
+	if timer_ms > 0.0 and _target_ok() and aggressive():
+		brain.stop_moving()
+		_fire(delta)
+		return
 	# Ziel lebt und Modus 0x100: Zeitgeber 0 → 9; sonst neues Ziel (0x5AE310) → 5, keins → 2 [B]
 	if _target_ok() and aggressive():
 		_enter(S_ADVANCE, 0.0)
@@ -301,9 +361,20 @@ func _st_eval() -> void:
 		_enter(S_LOST, _rand_ms(LOST_MS))
 
 
+func _hold_reaim() -> void:
+	brain.stop_moving()
+	if _visible():
+		_enter(S_AIM)
+	else:
+		_enter(S_LOST, _rand_ms(LOST_MS))
+
+
 func _st_advance() -> void:
 	if not _target_ok():
 		_enter(S_LOST, _rand_ms(LOST_MS))
+		return
+	if hold_post():
+		_hold_reaim()
 		return
 	if _dist() >= CLOSE_DIST:
 		# 0x5541F0 → Wegpunkt hockend/laufend (Gang 0x2008, Haltung 1) → 10; keiner → 2 [B]
@@ -408,10 +479,18 @@ func _reach(p: Vector3) -> Vector3:
 	return brain.reachable_point(p)
 
 
+## AP-48f: Stellungsposten (EnemyBrain.stationary) – Automat ohne Ortswechsel [E; Original kennt stationary nicht].
+func hold_post() -> bool:
+	return brain != null and brain.stationary
+
+
 func _go(p: Vector3, stance: int, mode: int) -> void:
 	_stance = stance
 	_mode = mode
 	brain.soldier.stance_request = stance
+	if hold_post():
+		brain.stop_moving()
+		return
 	brain.move_to(p, mode)
 
 
@@ -419,9 +498,10 @@ func _go(p: Vector3, stance: int, mode: int) -> void:
 ##  nicht aggressiv: 0x5547B0, Haltung 1 (hocken), Bewegung 2;
 ##  aggressiv: Ziel Spieler und d > rand·20 + 60 → Fernmodus 0x554800 (Sprint 0x10008, AP-7 I);
 ##             sonst d ≤ (1 + rand)·20 → hocken, Gang 0x2008; sonst Bewegung 4 + 0x5547B0 (aufrecht laufen 0x4008).
-## Die Bit-0x10000-Variante in Zustand 7 (Gaußschwelle) ist nicht nachgebaut [offen].
+## Laufende Anpassung in Zustand 7 (Gaußschwellen): `_gait_update`/`gait_step` (AP-48c, 0.10.1).
 func _gait(choose: bool) -> void:
 	if not choose:
+		_gait_update()
 		return
 	var d := _dist() if target_pos.is_finite() else 0.0
 	if not aggressive():
@@ -436,6 +516,43 @@ func _gait(choose: bool) -> void:
 	else:
 		_stance = Soldier.Stance.STAND
 		_mode = Soldier.MoveMode.JOG
+
+
+## AP-48c [B, 0x549AE0 Zustand 7 bei Bit 28 „Pfad läuft“], d² = Abstand² zum Ziel, g = Mittel aus 4 rand (glockenförmig):
+##  Sprint (Bit 0x10000):     d² < (g − 0,5)·100 + 150  → hockend laufen 0x2008
+##  aufrecht laufen (Bit 14): d² < (g + 0,5)·100        → hockend laufen 0x2008
+##  nicht schleichend (Bit 12): d² < rand·24 + 25       → geduckt schleichen 0x1008 (Bewegung 2)
+## Gangcode → MoveMode/Haltung [P]: 0x10008 = STAND+RUN, 0x4008 = STAND+JOG, 0x2008 = CROUCH+RUN, 0x1008 = CROUCH+SNEAK.
+var gait_changes := 0            ## Test/Messung
+
+
+static func gauss4(r: RandomNumberGenerator) -> float:
+	return (r.randf() + r.randf() + r.randf() + r.randf()) / 4.0
+
+
+func _gait_update() -> void:
+	if not target_pos.is_finite():
+		return
+	var d2 := brain.soldier.global_position.distance_squared_to(target_pos)
+	var next := gait_step(_stance, _mode, d2, rng)
+	if next.x != _stance or next.y != _mode:
+		_stance = next.x
+		_mode = next.y
+		brain.soldier.stance_request = _stance
+		gait_changes += 1
+
+
+static func gait_step(stance: int, mode: int, d2: float, r: RandomNumberGenerator) -> Vector2i:
+	var sprint := stance == Soldier.Stance.STAND and mode == Soldier.MoveMode.RUN
+	var upright := stance == Soldier.Stance.STAND and mode == Soldier.MoveMode.JOG
+	var sneak := mode == Soldier.MoveMode.SNEAK
+	if sprint and d2 < (gauss4(r) - 0.5) * 100.0 + 150.0:
+		return Vector2i(Soldier.Stance.CROUCH, Soldier.MoveMode.RUN)
+	if upright and d2 < (gauss4(r) + 0.5) * 100.0:
+		return Vector2i(Soldier.Stance.CROUCH, Soldier.MoveMode.RUN)
+	if not sneak and d2 < r.randf() * 24.0 + 25.0:
+		return Vector2i(Soldier.Stance.CROUCH, Soldier.MoveMode.SNEAK)
+	return Vector2i(stance, mode)
 
 
 # --- Deckungswahl (statisch, testbar) ----------------------------------------------------
@@ -464,13 +581,44 @@ static func _sees(b: AIBrain, from_feet: Vector3, to_feet: Vector3) -> bool:
 	return space.intersect_ray(q).is_empty()
 
 
-## 0x553EB0 (aggressiv) [B]: nächster Wegpunkt zum Ziel im Umkreis 5 m und seine Nachbarn in 5 m; behalten nur Punkte mit
-## (Punkt − Ziel)·(eigene Lage − Ziel) < 0 (abgewandte Seite = Flanke/Rücken), daraus zufällig.
-## Nachbau: Wegpunkt = Navmesh-Rasterpunkt im 5-m-Raster um das Ziel (Mitte ≤ 5 m, Nachbarn je 5 m → ≤ 10 m) [E Quelle],
-## zusätzlich Sichtprüfung Punkt → Ziel [E]. INF, wenn keiner passt.
+## 0x553EB0 (aggressiv) [B]: nächster Wegpunkt zum Ziel im Umkreis 5 m und seine Nachbarn in 5 m; Punkte mit
+## (Punkt − Ziel)·(eigene Lage − Ziel) < 0 werden ENTFERNT → es bleiben nur Punkte auf der eigenen Seite des Ziels,
+## daraus zufällig; keine Sichtprüfung (AP-48a, 0.10.1 – vorher Vorzeichen verkehrt + Sichtprüfung [E]).
+## Nachbau: Wegpunkt = Navmesh-Rasterpunkt im 5-m-Raster um das Ziel (Mitte ≤ 5 m, Nachbarn je 5 m → ≤ 10 m) [E Quelle].
+## INF, wenn keiner passt.
+## AP-48d: Fußwegenetz der Mission (check2.bin Abschnitt 1 → LsCheckpoints), falls geladen; sonst null.
+static func walk_net(b: AIBrain) -> LsCheckpoints:
+	if b == null or String(Game.cli.get("b048d", "1")) == "0":
+		return null
+	var rt = b.get("runtime")
+	if rt == null or not is_instance_valid(rt):
+		return null
+	var cp = rt.get("checkpoints")
+	if cp is LsCheckpoints and not (cp as LsCheckpoints).base_pos.is_empty():
+		return cp
+	return null
+
+
 static func pick_flank_point(b: AIBrain, tpos: Vector3, self_pos: Vector3, r: RandomNumberGenerator) -> Vector3:
 	var to_self := self_pos - tpos
 	to_self.y = 0.0
+	# AP-48d [B 0x553EB0/0x51D5C0/0x520830]: nächster Wegpunkt am Ziel (≤ 5 m) + Nachbarn ≤ 5 m, nur eigene Seite
+	var net := walk_net(b)
+	if net:
+		var n := net.nearest_node(tpos, FLANK_GRID)
+		if n >= 0:
+			var np: Vector3 = net.base_pos[n]
+			var cand: Array[Vector3] = []
+			for k in [n] + Array(net.base_adj[n]):
+				var p: Vector3 = net.base_pos[k]
+				if k != n and p.distance_to(np) > FLANK_GRID:
+					continue
+				var d := p - tpos
+				d.y = 0.0
+				if d.dot(to_self) >= 0.0 and d.length() >= 1.0:
+					cand.append(p)
+			if not cand.is_empty():
+				return cand[r.randi() % cand.size()]
 	var out: Array[Vector3] = []
 	for i in range(-2, 3):
 		for j in range(-2, 3):
@@ -484,10 +632,9 @@ static func pick_flank_point(b: AIBrain, tpos: Vector3, self_pos: Vector3, r: Ra
 				continue
 			var d := p - tpos
 			d.y = 0.0
-			if d.dot(to_self) >= 0.0 or d.length() < 1.0:
+			if d.dot(to_self) < 0.0 or d.length() < 1.0:
 				continue
-			if _sees(b, p, tpos):
-				out.append(p)
+			out.append(p)
 	if out.is_empty():
 		return Vector3.INF
 	return out[r.randi() % out.size()]
@@ -501,6 +648,19 @@ static func pick_advance_point(b: AIBrain, self_pos: Vector3, tpos: Vector3, r: 
 	if dir.length() < 0.01:
 		return Vector3.INF
 	dir = dir.normalized()
+	# AP-48d [B 0x5541F0]: Wegpunkte 10–20 m von sich, Richtungskosinus > 0,5 zum Ziel, zufällig
+	var net := walk_net(b)
+	if net:
+		var cand: Array[Vector3] = []
+		for p in net.base_pos:
+			var d: Vector3 = p - self_pos
+			d.y = 0.0
+			var l2 := d.length_squared()
+			if l2 >= ADV_MIN * ADV_MIN and l2 <= ADV_MAX * ADV_MAX and absf(p.y - self_pos.y) < 4.0 \
+					and d.normalized().dot(dir) > ADV_COS:
+				cand.append(p)
+		if not cand.is_empty():
+			return cand[r.randi() % cand.size()]
 	var seen: Array[Vector3] = []
 	var other: Array[Vector3] = []
 	for k in 20:

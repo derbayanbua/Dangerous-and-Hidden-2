@@ -29,6 +29,8 @@ $suites = @(
   @{ name = "test_ai_fsm";   args = "--headless -- --mission=a1_blizzard --autoplay=test_ai --phase=fsm" },
   @{ name = "test_ai_ap6";   args = "--headless -- --mission=a1_blizzard --autoplay=test_ai --phase=ap6" },
   @{ name = "test_b044";     args = "--headless -- --mission=a1_blizzard --autoplay=test_b044" },   # B-044 Gegner-Stillstand
+  @{ name = "test_ally_no2"; args = "--headless -- --mission=no2_schwerttaenzer --autoplay=test_ally_no2" },   # 0.10.1 Verbündete Schwerttänzer
+  @{ name = "test_ally_a1";  args = "--headless -- --mission=a1_blizzard --autoplay=test_ally_no2" },   # 0.10.1 Seite 4 (Rebel)
   @{ name = "test_orig_save"; args = "--headless -- --mission=a1_blizzard --autoplay=test_orig_save" },
   @{ name = "test_orig_save_a2"; args = "--headless -- --mission=a2_erkundung --autoplay=test_orig_save --phase=a2" },
   @{ name = "test_orig_cmds"; args = "--headless -- --mission=a1_blizzard --autoplay=test_orig_cmds" },
@@ -39,6 +41,7 @@ $suites = @(
   @{ name = "test_script_systems"; args = "--headless -- --mission=a1_blizzard --autoplay=test_script_systems" },
   @{ name = "test_commands_orig"; args = "--headless -- --mission=a1_blizzard --autoplay=test_commands_orig" },
   @{ name = "test_sp_weapons"; args = "--headless -- --mission=a1_blizzard --autoplay=test_sp_weapons" },
+  @{ name = "test_aim_ballistics"; args = "--headless -- --mission=a1_blizzard --autoplay=test_aim_ballistics" },   # 0.10.1 Visier/Ballistik/Muendungsfeuer/Atem
   @{ name = "test_a2";       args = "--headless -- --mission=a2_erkundung --autoplay=test_orig_part --commandos=1" },
   @{ name = "test_a2_interaktiv"; args = "--headless -- --mission=a2_erkundung --autoplay=test_a2" },
   @{ name = "test_a3";       args = "--headless -- --mission=a3_rendezvous --autoplay=test_orig_part --commandos=4" },
@@ -56,8 +59,10 @@ $suites = @(
   @{ name = "test_b017_af1"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_b017 --phase=doors" },
   @{ name = "test_b017_no2"; args = "--headless -- --mission=no2_schwerttaenzer --autoplay=test_b017 --phase=doors" },
   @{ name = "test_b017_arctic"; args = "--headless -- --mission=a1_blizzard --autoplay=test_b017 --phase=arctic" },
+  @{ name = "test_arctic2_licht"; args = "--headless -- --mission=a2_erkundung --autoplay=test_arctic2_licht" },
   @{ name = "test_b017_mp"; args = "--headless -- --autoplay=test_b017 --phase=mp_markers"; mp = $true },
-  @{ name = "test_af6";      args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" },
+  @{ name = "test_no2_final"; args = "--headless -- --mission=no2_schwerttaenzer --autoplay=test_no2_final --test_timeout=900"; timeout = 1200 },
+  @{ name = "test_af6";     args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" },
   @{ name = "test_af_air";   args = "--headless -- --mission=af2_flugschau --autoplay=test_af_air" },
   @{ name = "test_items";    args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_items" },
   @{ name = "test_vehicle_types"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_vehicle_types"; timeout = 2400 },
@@ -77,6 +82,8 @@ $suites = @(
   @{ name = "test_b045";     args = "--headless -- --mission=m01_funkfeuer --autoplay=test_b045" },
   @{ name = "test_b041";     args = "--headless -- --mission=a2_erkundung --autoplay=test_b041 --phase=classic" },
   @{ name = "test_b041_neu"; args = "--headless -- --mission=a2_erkundung --autoplay=test_b041 --phase=neu --view_mode=1" },
+  @{ name = "probe_normandy3"; args = "-- --autoplay=probe_normandy3 --resolution 1280x720"; timeout = 1700; mp = $true },
+  @{ name = "test_b050";     args = "--headless -- --autoplay=test_b050 --shots=0 --missions=af1_spaghetti_airport,bu1_ameisenhuegel --profiles_dir=user://test_b050"; timeout = 1500 },
   @{ name = "test_tools_mines"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_tools_mines" },
   @{ name = "test_tools_mines_mp"; args = "--headless -- --autoplay=test_tools_mines --phase=mp"; mp = $true },
   # test_inventory: sp + mp (zweiprozessig mit test_inventory_client)

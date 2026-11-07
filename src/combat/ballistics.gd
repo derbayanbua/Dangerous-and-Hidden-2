@@ -6,7 +6,8 @@ extends Node
 ## Flugstrecke und Trefferzone (WeaponDB.bullet_damage/zone_damage); eigene Waffen ohne
 ## Originalwert skalieren mit der Restenergie (v/v0)^2 ab falloff_start.
 
-const GRAVITY := 9.81
+## hd2.exe Projektil-Schritt 0x44B910: v.y -= dt_ms * 0,001 * 9,8 (0x80F514, 0x80F9F4); kein Luftwiderstand [B]
+const GRAVITY := 9.8
 const MAX_LIFETIME := 3.0
 const MASK := 1 | Hitbox.LAYER
 
@@ -28,6 +29,8 @@ class Projectile:
 	var whizzed := false
 
 var _projectiles: Array[Projectile] = []
+## Einschlag eines Geschosses (Welt oder Trefferzone): Punkt, Kollider, Schütze (Tests: test_aim_ballistics)
+signal projectile_impact(pos: Vector3, collider: Object, shooter: Node)
 var impact_scene_parent: Node   ## Mission setzt hier ihren Effekt-Container
 
 ## Statistik für Tests/Debug
@@ -50,7 +53,7 @@ func fire(shooter: Node, origin: Vector3, direction: Vector3, data: WeaponData, 
 	p.v0 = data.muzzle_velocity
 	# Widerstandsbeiwert: Gewehrgeschosse verlieren über 300 m ~30 %,
 	# Pistolengeschosse deutlich schneller.
-	p.drag = 0.0012 if data.muzzle_velocity > 600.0 else 0.0026
+	p.drag = drag_of(data)
 	p.damage = data.damage
 	p.falloff_start = data.falloff_start
 	p.data = data
@@ -60,6 +63,71 @@ func fire(shooter: Node, origin: Vector3, direction: Vector3, data: WeaponData, 
 	p.world = (shooter as Node3D).get_world_3d()
 	_projectiles.append(p)
 	shots_fired += 1
+
+
+## Luftwiderstand: Originalwaffen (Schadensabfall aus items.sav) fliegen wie im Original ohne Widerstand (0x44B910
+## verändert nur v.y) [B]; eigene Waffen ohne Originalwert behalten den Widerstand für die Restenergie [D].
+static func drag_of(data: WeaponData) -> float:
+	if data == null or data.falloff_per_m > 0.0:
+		return 0.0
+	return 0.0012 if data.muzzle_velocity > 600.0 else 0.0026
+
+
+## Flugbahn wie _step (gleicher Integrator, Physiktakt) bis zur waagerechten Strecke range_h ab origin;
+## liefert den Bahnpunkt dort (bzw. den letzten Punkt nach MAX_LIFETIME).
+static func trajectory_point(origin: Vector3, vel: Vector3, drag: float, range_h: float) -> Vector3:
+	var dt := 1.0 / float(Engine.physics_ticks_per_second)
+	var pos := origin
+	var v := vel
+	var t := 0.0
+	while t < MAX_LIFETIME:
+		var speed := v.length()
+		v -= v * (drag * speed * dt)
+		v.y -= GRAVITY * dt
+		var next := pos + v * dt
+		var h0 := Vector2(pos.x - origin.x, pos.z - origin.z).length()
+		var h1 := Vector2(next.x - origin.x, next.z - origin.z).length()
+		if h1 >= range_h:
+			var f := clampf((range_h - h0) / maxf(h1 - h0, 1e-6), 0.0, 1.0)
+			return pos.lerp(next, f)
+		pos = next
+		t += dt
+	return pos
+
+
+## Kugelfall-Ausgleich aktiv? Einzelspieler: Option „Präzises Zielen“ (Settings.precise_aim, Standard aus = Original);
+## Mehrspieler/Coop: Server-Regel „precise_aim“ (für alle gleich). force_compensation: Tests (-1 = Einstellung).
+static var force_compensation := -1
+
+
+static func compensation_enabled() -> bool:
+	if force_compensation >= 0:
+		return force_compensation == 1
+	if Net.is_online:
+		return bool(Net.rule("precise_aim"))
+	return Settings.precise_aim
+
+
+## Abschussrichtung, mit der das Geschoss (Schwerkraft/Widerstand wie _step) den Zielpunkt 	arget trifft –
+## Fadenkreuz, Kimme/Korn und Absehen zeigen dadurch auf jeder Entfernung genau auf den Treffpunkt (Nachbau [D]:
+## automatische Fleckschuss-Einstellung; das Original zielt ohne Ausgleich, Kugelfall dort sichtbar).
+static func solve_direction(origin: Vector3, target: Vector3, data: WeaponData) -> Vector3:
+	var to := target - origin
+	if data == null or to.length() < 1.0 or data.muzzle_velocity <= 0.0:
+		return to.normalized() if to.length() > 0.0001 else Vector3.FORWARD
+	var drag := drag_of(data)
+	var range_h := Vector2(to.x, to.z).length()
+	if range_h < 0.5:
+		return to.normalized()
+	var aim := target
+	for i in 4:
+		var dir := (aim - origin).normalized()
+		var hitp := trajectory_point(origin, dir * data.muzzle_velocity, drag, range_h)
+		var err := target - hitp
+		if err.length() < 0.002:
+			break
+		aim += err
+	return (aim - origin).normalized()
 
 
 func _physics_process(delta: float) -> void:
@@ -169,6 +237,7 @@ func _step(p: Projectile, delta: float) -> bool:
 		p.pos = next
 		return true
 	p.travelled += p.pos.distance_to(hit.position)
+	projectile_impact.emit(hit.position, hit.collider, p.shooter)
 	# Original (hd2.exe 0x44B3B0): linearer Abfall nach Flugstrecke; eigene Waffen ohne Originalwert: Restenergie
 	var base := p.damage
 	if p.data and p.data.falloff_per_m > 0.0:

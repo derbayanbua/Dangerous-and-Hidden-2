@@ -52,6 +52,8 @@ func _build_world() -> void:
 	Settings.changed.connect(orig.apply_grass_setting)
 	# Filmtexturen (meshplayer.bin: Wasserflächen mit GameMovie-Film, src/orig/orig_movie_textures.gd)
 	movie_textures = load("res://src/orig/orig_movie_textures.gd").apply(self, orig)
+	# 0.10.1: realistisches Wasser auf ausgewählten Karten (ersetzt den Film, src/world/water_fx.gd)
+	load("res://src/world/water_fx.gd").apply(self, orig)
 	# Untergrund-Material der Kollisionsflächen (tree.klz) für Schritt-/Einschlagklänge (tools/fmt_klz.py)
 	if not OrigAudio.load_surface(orig.mission_dir):
 		print("ORIG: surface.bin fehlt (tools/fmt_klz.py %s) – Schritte ohne Untergrund" % orig_mission)
@@ -175,9 +177,20 @@ func _spawn_orig_human(nm: String, model: String, t: Transform3D) -> void:
 	var side := int(actor_params.get(nm, {}).get("params", {}).get("side", -1))
 	var enemy := side == 2 if side >= 0 else (model.begins_with("ge") or model.begins_with("it") or model.begins_with("ja"))
 	if not enemy:
-		s = spawn_soldier(t.origin + Vector3.UP * 0.3, yaw, Soldier.TEAM_NEUTRAL, nm, ["", "", ""],
-			Color(0.32, 0.27, 0.22), "cap", nm)
-		var b := EnemyBrain.new()
+		# Bewaffnung laut items.dat auch für Neutrale/Verbündete (NORMANDY2 Ally_n: BAR/M1A1/Thompson). Vorher immer
+		# unbewaffnet → HUMAN_IllFire/HUMAN_Attack der Verbündeten feuerten nie (docs/AI_AUDIT_ALLY.md). Ohne Waffeneintrag
+		# (Zivilisten) bleibt die Figur unbewaffnet (kein K98k-Standard wie bei Gegnern ohne Parameterdatei).
+		var ap: Dictionary = actor_params.get(nm, {})
+		var armed := String(ap.get("weapon", "") if ap.get("weapon") != null else "") != "" or ap.get("weapon_id") != null
+		# Seite 4 (verbündeter NPC mit Profil: Rebel, Pilot, Agentin …) = Fraktion 1 Spielerseite (hd2.exe 0x5A8820) →
+		# TEAM_ALLIED: Gegner dürfen sie angreifen. Nicht im Trupp (squad.members) → _PlayerInRange/„alle überleben“ zählen
+		# sie wie im Original nicht (Spielerliste Spiel+0x1C, B-036b). Seite 3 = Fraktion 2 neutral.
+		var team := Soldier.TEAM_ALLIED if side == 4 else Soldier.TEAM_NEUTRAL
+		s = spawn_soldier(t.origin + Vector3.UP * 0.3, yaw, team, nm,
+			_orig_loadout(nm) if armed else ["", "", ""], Color(0.32, 0.27, 0.22), "cap", nm)
+		s.set_meta("orig_side", side)
+		# Seite 3 = Fraktion „neutral“ (hd2.exe 0x5A8820): nur skriptgesteuert; HUMAN_Attack hält die Stellung (AllyBrain)
+		var b := AllyBrain.new()
 		b.name = "EnemyBrain"
 		s.add_child(b)
 		b.setup(s)

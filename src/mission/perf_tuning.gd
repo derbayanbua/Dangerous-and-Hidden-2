@@ -65,6 +65,8 @@ static func apply(m: Node) -> Dictionary:
 	for r in roots:
 		for n in (r as Node).find_children("*", "GeometryInstance3D", true, false):
 			var gi := n as GeometryInstance3D
+			if gi.has_meta("sky_backdrop"):
+				continue                              # B-050: kamerafester Himmel – nie nach Abstand ausblenden
 			st.meshes += 1
 			var box := gi.global_transform * gi.get_aabb()
 			var s := maxf(box.size.x, maxf(box.size.y, box.size.z))

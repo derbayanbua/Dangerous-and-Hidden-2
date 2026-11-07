@@ -1,6 +1,36 @@
 # Changelog
 
-Versionierung: vorerst immer 0.9.x – jeder Commit nach GitHub zählt die letzte Stelle hoch und bekommt einen Tag.
+Versionierung: ab 0.10.1 ([D]) – jeder Commit nach GitHub zählt die letzte Stelle hoch und bekommt einen Tag.
+
+## 0.10.1 (08.11.2026)
+
+**Einzelspieler-KI (Abgleich mit dem Original, `docs/AI_AUDIT_ENEMY.md`, `docs/AI_AUDIT_ALLY.md`)**
+- Gegner flankieren auf der eigenen Seite, feuern auch im Anmarsch/Laufen, Original-Zeitgeber (z. B. 15–25 s Warten nach
+  Zielverlust), Gangwahl beim Annähern, Stellungsposten bleiben am Platz, Flanken-/Nachrückpunkte aus dem Fußwegenetz.
+- Verbündete (z. B. Amerikaner in Schwerttänzer, Burma, Arktis) sind bewaffnet und feuern aus ihrer Stellung statt
+  vorzurücken; Rebellen/Piloten u. ä. gehören zur Spielerseite.
+- Schwerttänzer: Schlusssequenz mit Kamerafahrt, Mission endet erst danach.
+
+**Grafik**
+- Fotorealistische Himmel je Karte (CC0, Poly Haven, siehe `docs/SKY_SOURCES.md`), Original-Himmel als Option.
+- Normandie 3: neues Wasser, Tag-/Nachtwechsel (1 Tag = 10 Minuten, im MP synchron).
+- Lampen der Originalkarten leuchten als echte Lichter; Rauch nach Explosionen deutlich leichter.
+- Mündungsfeuer an der echten Mündung, je Waffentyp.
+
+**Waffen**
+- Kugelfall wie im Original; Option „Präzises Zielen“ (aus; im MP Server-Regel).
+- Scharfschützen: Luft anhalten mit Shift (4 s, danach Atemnot).
+
+**Mehrspieler / Fahrzeuge**
+- Eroberung: Einnahme sichtbar (Fahne, Meldungen, Fortschritt) und auf allen Rechnern festgehalten.
+- Fahrzeuge erscheinen neu, Schützen sitzen richtig, Kanonen laden nach (Originalmunition), Granaten sprengen niemanden
+  mehr aus dem Fahrzeug.
+- Sichtweite im MP etwas größer.
+
+**Fehlerbehebungen**
+- Arktis 2: Gitterböden begehbar (Regel für alle Karten).
+
+**Bekannt offen:** Original-Schuss-/Streuroutine nicht entschlüsselt; Respawnzeiten Fahrzeuge geschätzt; test_bots 1 schwankende Prüfung.
 
 ## 0.9.9 (07.11.2026)
 

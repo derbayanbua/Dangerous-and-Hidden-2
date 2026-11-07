@@ -288,11 +288,11 @@ func _run_fsm(m, rt: LsRuntime, c: Soldier, space: PhysicsDirectSpaceState3D) ->
 		var dp := p - c.global_position
 		var ds := w1.global_position - c.global_position
 		dp.y = 0.0; ds.y = 0.0
-		if dp.dot(ds) < 0.0 and dp.length() <= 10.0 + 1.6:
+		if dp.dot(ds) >= 0.0 and dp.length() <= 10.0 + 1.6:
 			ok_f += 1
 		else:
 			bad_f += " %s" % p
-	check(ok_f >= 6 and bad_f == "", "Flankenpunkt hinter dem Ziel im 5-m-Raster (0x553EB0)", "%d/12 gültig%s" % [ok_f, bad_f])
+	check(ok_f >= 6 and bad_f == "", "AP-48a: Flankenpunkt auf der eigenen Seite des Ziels im 5-m-Raster (0x553EB0)", "%d/12 gültig%s" % [ok_f, bad_f])
 
 	# 3) Nachrückpunkt 0x5541F0: 10–20 m von sich, ±60° zum Ziel
 	var far := w1.global_position + fwd * 40.0
@@ -408,6 +408,25 @@ func _run_fsm(m, rt: LsRuntime, c: Soldier, space: PhysicsDirectSpaceState3D) ->
 			n60 += 1
 	check(absf(n60 / 2000.0 - 0.6) < 0.04 and OrigCombatFsm.CONT_CLOSE == 0.8, "Fortsetzung Nachrücken 60 %/80 %",
 		"%.3f" % (n60 / 2000.0))
+	# AP-48b: Feuern nicht nur in Zustand 5, sondern auch beim Anvisieren/Laufen (0x58C330 in 3/4/5/7)
+	check(fsm.shots_allowed > 0, "AP-48b: Gegner feuert im Automaten", "Feuerbilder je Zustand %s" % str(fsm.fire_states))
+	var moving_fire := 0
+	for st in [OrigCombatFsm.S_APPROACH, OrigCombatFsm.S_AIM, OrigCombatFsm.S_MOVE, OrigCombatFsm.S_EVAL]:
+		moving_fire += int(fsm.fire_states.get(st, 0))
+	check(moving_fire > 0, "AP-48b: Feuer außerhalb von Zustand 5 (Anvisieren/Laufen/Bewerten)", str(fsm.fire_states))
+	# AP-48c: Gaußgang Zustand 7 (0x549AE0) – Sprint wird nahe am Ziel zu hockend laufen, sehr nah zu geduckt schleichen
+	var rg := RandomNumberGenerator.new()
+	rg.seed = 5
+	var g_far := OrigCombatFsm.gait_step(Soldier.Stance.STAND, Soldier.MoveMode.RUN, 400.0, rg)
+	var g_mid := OrigCombatFsm.gait_step(Soldier.Stance.STAND, Soldier.MoveMode.RUN, 60.0, rg)
+	var g_near := OrigCombatFsm.gait_step(Soldier.Stance.CROUCH, Soldier.MoveMode.RUN, 16.0, rg)
+	check(g_far == Vector2i(Soldier.Stance.STAND, Soldier.MoveMode.RUN) and g_mid == Vector2i(Soldier.Stance.CROUCH, Soldier.MoveMode.RUN)
+		and g_near == Vector2i(Soldier.Stance.CROUCH, Soldier.MoveMode.SNEAK), "AP-48c: Gaußgang Sprint → hockend → schleichen",
+		"%s %s %s" % [g_far, g_mid, g_near])
+	check(OrigCombatFsm.LOST_MS == Vector2(15000, 25000) and OrigCombatFsm.EVAL_MS == Vector2(1500, 3500)
+		and OrigCombatFsm.REST_MS == Vector2(2000, 5000), "AP-48c: Zeitgeber aus 0x549AE0 (2: 15–25 s, 8: 1,5–3,5 s, 12: 2–5 s)")
+	var b_rt := b1.reaction_time
+	check(not b1.skip_reaction, "AP-48b: Reaktionssperre nur während des Automatenschusses ausgesetzt", "rt %.2f" % b_rt)
 	check(OrigCombatFsm.APPROACH_MIN == 20.0 and OrigCombatFsm.CLOSE_DIST == 6.0 and OrigCombatFsm.REPORT_DIST == 30.0,
 		"Schwellen 20 m / 6 m / 30 m")
 
@@ -419,4 +438,33 @@ func _run_fsm(m, rt: LsRuntime, c: Soldier, space: PhysicsDirectSpaceState3D) ->
 	b1.runtime = null
 	check(not b1._orig_rules(), "Ohne LsRuntime (Übungseinsatz/MP): eigene Kampflogik")
 	b1.runtime = rt
+	# AP-48f: Stellungsposten über den Automaten, ohne Ortswechsel
+	b1.ai_mode = EnemyBrain.Mode.AGGRESSIVE
+	b1.stationary = true
+	var p0 := w1.global_position
+	var sf := OrigCombatFsm.new(b1)
+	sf.rng.seed = 11
+	b1.orig_fsm = sf
+	b1.target = c
+	b1.set_state(EnemyBrain.State.COMBAT)
+	sf.start(c)
+	for i in 24:
+		await seconds(0.25)
+	var moved := w1.global_position.distance_to(p0)
+	check(sf.hold_post() and not sf.history.has(OrigCombatFsm.S_MOVE) and not sf.history.has(OrigCombatFsm.S_APPROACH)
+		and moved < 0.6, "AP-48f: Stellungsposten bleibt am Platz (Automat ohne 3/7)", "Folge %s, %.2f m" % [str(sf.history.slice(0, 12)), moved])
+	check(sf.history.has(OrigCombatFsm.S_FIRE), "AP-48f: Stellungsposten erreicht Feuerzustand", str(sf.history.slice(0, 12)))
+	b1.stationary = false
+	b1.orig_fsm = null
+	# AP-48d: Fußwegenetz als Quelle der Flankenpunkte (falls in a1 geladen)
+	var net := OrigCombatFsm.walk_net(b1)
+	if net:
+		var fp := OrigCombatFsm.pick_flank_point(b1, c.global_position, w1.global_position, r)
+		var on_node := false
+		for q in net.base_pos:
+			if fp.is_finite() and (q as Vector3).distance_to(fp) < 0.01:
+				on_node = true
+				break
+		check(not fp.is_finite() or on_node or net.nearest_node(c.global_position, OrigCombatFsm.FLANK_GRID) < 0,
+			"AP-48d: Flankenpunkt = Knoten des Fußwegenetzes", str(fp))
 	print("FSM-Folge: %s, Aktion7 %d" % [str(fsm.history), fsm.action7_count])

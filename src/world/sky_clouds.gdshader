@@ -28,10 +28,13 @@ uniform vec3 haze_color : source_color = vec3(0.7, 0.72, 0.75);
 uniform float haze = 0.3;
 uniform float stars = 0.0;
 
+// B-050/AP-50b: Gitter auf 289 Zellen gefaltet (kachelbar, Hash bleibt bei großen Koordinaten genau) und
+// Hash nach Hoskins (hash12) statt fract(p·123) → kein sichtbares Blockraster/Flimmern.
 float hash(vec2 p) {
-	p = fract(p * vec2(123.34, 456.21));
-	p += dot(p, p + 45.32);
-	return fract(p.x * p.y);
+	p = mod(p, 289.0);
+	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+	p3 += dot(p3, p3.yzx + 33.33);
+	return fract((p3.x + p3.y) * p3.z);
 }
 
 float vnoise(vec2 p) {
@@ -94,7 +97,9 @@ void sky() {
 	}
 	if (dir.y > 0.0) {
 		// Wolkenschicht: Projektion auf eine Ebene, nahe dem Horizont gestaucht (Perspektive)
-		vec2 uv = dir.xz / (dir.y + 0.12) * cloud_scale + wind * TIME;
+		// B-050/AP-50b: flachere Horizontprojektion (+0,25 statt +0,12: weniger Streifen), Windversatz periodisch
+		// (mod 289 = Hash-Periode → nahtlos, kein Präzisionsverlust nach langer Spielzeit)
+		vec2 uv = dir.xz / (dir.y + 0.25) * cloud_scale + mod(wind * TIME, vec2(289.0));
 		int n = AT_CUBEMAP_PASS ? max(octaves - 2, 2) : octaves;
 		float d = cloud_density(uv, n);
 		if (d > 0.001) {

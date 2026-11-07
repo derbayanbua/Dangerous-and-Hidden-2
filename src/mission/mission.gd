@@ -14,6 +14,7 @@ var effects_root: Node3D
 var env: Environment
 var sun: DirectionalLight3D
 var sky_fx: Node3D        ## src/world/sky_fx.gd (B-013: Wolkenhimmel, Wolkenschatten)
+var day_night: Node       ## src/world/day_night.gd (0.10.1: Tag/Nacht, nur ausgewählte Karten) oder null
 const ViewDistanceScript := preload("res://src/world/view_distance.gd")
 var view_stats := {}      ## B-041: zuletzt angewandte Sichtweite (ViewDistance.apply)
 var squad: SquadManager
@@ -222,6 +223,8 @@ func _setup_environment() -> void:
 	sky_fx = preload("res://src/world/sky_fx.gd").new()
 	add_child(sky_fx)
 	sky_fx.setup(self, env, sun)
+	# 0.10.1: Tag-/Nachtwechsel auf ausgewählten Karten (src/world/day_night.gd, im MP über Serverzeit)
+	day_night = preload("res://src/world/day_night.gd").attach(self, env, sun, sky_fx)
 
 
 ## B-041: Sichtweite im Spiel umgeschaltet → Nebel/Kamera sofort; Fernausblendung/LOD erst beim nächsten Laden.
@@ -1023,6 +1026,11 @@ func _check_orig_completion() -> void:
 		return
 	_completion_pending = true
 	await get_tree().create_timer(3.0, false).timeout
+	# B-049/AP-49b: nie während einer Skriptkamera (Zwischen- oder Fake-Cutscene, NORMANDY2 r_n2_camerasend.scr) enden –
+	# das Original zeigt die Endsequenz vollständig [P]; danach erneut 3 s stabil
+	while not finished and is_instance_valid(ls_runtime) and ls_runtime.has_method("script_camera_active") \
+			and ls_runtime.script_camera_active():
+		await get_tree().create_timer(0.5, false).timeout
 	_completion_pending = false
 	if not finished and _orig_complete_now():
 		finish(true, "Alle Einsatzziele erfüllt.")

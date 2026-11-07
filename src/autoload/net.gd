@@ -56,6 +56,8 @@ const RULE_KEYS := {
 	# unbegrenzt), Fadenkreuz (im Original wirkungslos, nur Serverinfo), Respawn beim Neustart [P, nur Anzeige], Team-Leben
 	"coop_difficulty": "coopdifficulty", "coop_lives": "cooplives", "allow_crosshair": "allowcrosshair",
 	"spawn_on_start": "spawnonstart", "team_lives": "teamlives",
+	# 0.10.1 (Ergänzung): Präzises Zielen (Kugelfall-Ausgleich) für alle gleich, Standard aus
+	"precise_aim": "preciseaim",
 }
 ## Wertebereiche: Menü (0x629EE0) bzw. Konsole; bots = Ergänzung (KI-Soldaten je Team); 0 = „No limit“ (T2010)
 const RULE_RANGE := {
@@ -1512,6 +1514,8 @@ func _client_ready() -> void:
 		support.sync_to(id)                        # B-011: Funkgerät liegt/getragen
 	if not zone_locked.is_empty():
 		_zone_lock.rpc_id(id, zone_locked)         # B-029: erschöpfte Zonen
+	if not zone_owner.is_empty():
+		_zones_full.rpc_id(id, zone_owner, zone_progress, zone_attacker)   # 0.10.1: Besitz sofort beim Beitritt
 	if mode() == Mode.COOP:
 		coop.sync_to(id)                           # B-029: gefallene Missions-KI für Spät-Beitretende
 	_server_spawn(id)
@@ -1845,7 +1849,10 @@ func _do_act(s: Soldier, kind: String, a: Vector3, b: Vector3, wid: String) -> v
 					and 2 - maxi(int(s.stance), int(s.stance_request)) > Soldier.fire_stance_max(wd):
 				return
 			Ballistics.fire(s, a, b, wd, s.exclude_rids(), s.team)
-			Effects.muzzle_flash(a + b * 0.9, b)
+			var mz := a + b * 0.9
+			if s.model and s.model.weapon_socket:
+				mz = s.model.muzzle_point(b, wd.model_length)
+			Effects.muzzle_flash(mz, b, Effects.flash_scale(wd))
 			Effects.play(Effects.weapon_sound(wd), a, 0.0, 1.0, wd.noise_radius * 2.0)
 			Events.emit_noise(s.global_position, wd.noise_radius, s, s.team, &"gunshot")
 			# Netzfigur: Feuerclip + Rückstoß wie beim lokalen Schützen (ohne Modell-/Haltungswechsel)
@@ -2606,7 +2613,8 @@ func _hud_snapshot() -> Dictionary:
 	return {"st": game_state, "t": _match_t, "tl": float(rule("time_limit_min")) * 60.0, "wl": _warm_t,
 		"rn": round_no, "rc": int(rule("round_count")), "w": team_wins, "wave": _wave_t if mode() == Mode.OCCUPATION else -1.0,
 		"alive": [_team_alive(Soldier.TEAM_ALLIED), _team_alive(Soldier.TEAM_AXIS)], "vote": vote, "obj": obj_done,
-		"over": match_over, "pg": _pings(), "cts": coop_team_spawns}
+		"over": match_over, "pg": _pings(), "cts": coop_team_spawns,
+		"dn": preload("res://src/world/day_night.gd").shared_s}   # 0.10.1: Tageszeit des Servers (−1 = aus)
 
 
 func _pings() -> Dictionary:
@@ -3689,7 +3697,7 @@ func _apply_class(m: Node, s: Soldier, team: int, cls: int) -> void:
 		var keep_launcher := s.weapons[WeaponData.Slot.LAUNCHER]
 		if keep_launcher and not is_item_allowed(team, keep_launcher.data.id):
 			# Standard-Werfer des Nachbaus nur, wenn die Karte einen Werfer der Seite erlaubt (sonst der erlaubte)
-			var lorder: Array = [39, 38] if team != Soldier.TEAM_AXIS else [38, 39]
+			var lorder: Array = [39, 38, 264] if team != Soldier.TEAM_AXIS else [38, 264, 39]
 			var lp := allowed_pool(team, lorder)
 			keep_launcher = Weapon.new(WeaponDB.from_orig(int(lp[0]), true), false) if not lp.is_empty() else null
 			if keep_launcher:
@@ -3697,7 +3705,14 @@ func _apply_class(m: Node, s: Soldier, team: int, cls: int) -> void:
 				keep_launcher.reserve = 2
 		var keep_knife := s.weapons[WeaponData.Slot.MELEE]
 		s.equip([ids[0], ids[1], ids[2], "", ""])
-		s.weapons[WeaponData.Slot.LAUNCHER] = keep_launcher if ids[3] == "" else s.weapons[WeaponData.Slot.LAUNCHER]
+		if ids[3] != "":
+			# Werfer aus der Klassenvorlage (Schulter/Inventar) mit seinen Raketen aus der Vorlage
+			var lw := Weapon.new(WeaponDB.get_weapon(StringName(ids[3])))
+			lw.in_mag = 1 if int(lo["launcher_shots"]) > 0 else 0
+			lw.reserve = maxi(int(lo["launcher_shots"]) - 1, 0)
+			s.weapons[WeaponData.Slot.LAUNCHER] = lw
+		else:
+			s.weapons[WeaponData.Slot.LAUNCHER] = keep_launcher
 		s.weapons[WeaponData.Slot.MELEE] = keep_knife
 		for w in s.weapons:
 			if w == null or w.data.slot in [WeaponData.Slot.LAUNCHER, WeaponData.Slot.MELEE]:
@@ -3806,7 +3821,11 @@ func _zones_tick(delta: float) -> void:
 				att = t
 		var cap := float(z["capture_time"])
 		if att == -1:
-			zone_progress[i] = maxf(float(zone_progress[i]) - delta, 0.0)
+			# Original 0x5ECF20: Bedingung im 1-s-Takt nicht mehr erfüllt → Einnahme abgebrochen (Zähler zurück)
+			if float(zone_progress[i]) > 0.0 or int(zone_attacker[i]) != -1:
+				zone_progress[i] = 0.0
+				zone_attacker[i] = -1
+				changed = true
 			continue
 		if zone_attacker[i] != att:
 			zone_attacker[i] = att
@@ -3818,14 +3837,14 @@ func _zones_tick(delta: float) -> void:
 			zone_progress[i] = 0.0
 			for id in present[att]:
 				players[id]["score"] += ZONE_NEUTRALIZE_PTS
-			Events.say("%s neutralisiert" % z["text"], 3.0)
+			_zone_event.rpc(i, -1, att)
 			changed = true
 		elif owner == -1 and zone_progress[i] >= cap * 0.5:
 			zone_owner[i] = att
 			zone_progress[i] = 0.0
 			for id in present[att]:
 				players[id]["score"] += ZONE_CAPTURE_PTS
-			Events.say("%s eingenommen (%s)" % [z["text"], ["Alliierte", "Achsenmächte"][att]], 3.0)
+			_zone_event.rpc(i, att, att)
 			changed = true
 	for o in zone_owner:
 		if o in [0, 1]:
@@ -3837,6 +3856,7 @@ func _zones_tick(delta: float) -> void:
 	if changed or _zone_sync_t <= 0.0:
 		_zone_sync_t = 0.5
 		_zones.rpc(zone_owner, zone_progress)
+		_zone_att.rpc(zone_attacker)
 		_scores.rpc(team_score)
 	# Ende: Punktelimit, ein Team hält alle Zonen
 	var lim := float(rule("score_limit"))
@@ -3901,6 +3921,41 @@ func _zones(owners: Array, progress: Array) -> void:
 			var fr: Node3D = m.runtime.find_frame(f[side]) if String(f[side]) != "" else null
 			if fr:
 				fr.visible = side == show
+
+
+## 0.10.1: angreifendes Team je Zone (HUD-Fortschritt auf allen Rechnern)
+@rpc("authority", "call_remote", "unreliable_ordered")
+func _zone_att(att: Array) -> void:
+	zone_attacker = att
+
+
+## 0.10.1: Vollstand für Spät-Beitretende (zuverlässig, inkl. Flaggen)
+@rpc("authority", "call_remote", "reliable")
+func _zones_full(owners: Array, progress: Array, att: Array) -> void:
+	zone_attacker = att
+	_zones(owners, progress)
+
+
+## Besitzwechsel einer Zone an alle (Original 0x5EC8B0 meldet den neuen Besitzer auf jedem Rechner): owner −1 =
+## neutralisiert durch `by`. Zuverlässig, damit kein Wechsel verloren geht; setzt den Besitz sofort (Flaggen).
+var zone_events: Array = []          ## [Zone, Besitzer, Team] je Meldung (Tests/HUD)
+@rpc("authority", "call_local", "reliable")
+func _zone_event(zi: int, owner: int, by: int) -> void:
+	if zi >= 0 and zi < zone_owner.size() and not multiplayer.is_server():
+		zone_owner[zi] = owner
+		if zi < zone_progress.size():
+			zone_progress[zi] = 0.0
+		_zones(zone_owner, zone_progress)
+	zone_events.append([zi, owner, by])
+	var m = Game.current_mission()
+	var nm := "Zone %d" % (zi + 1)
+	if m and m.has_method("mp_zones") and zi < (m.mp_zones() as Array).size():
+		nm = String(m.mp_zones()[zi]["text"])
+	var side: String = ["Alliierte", "Achsenmächte"][by] if by in [0, 1] else ""
+	if owner == -1:
+		Events.say("%s neutralisiert (%s)" % [nm, side], 3.0)
+	else:
+		Events.say("%s eingenommen (%s)" % [nm, side], 3.0)
 
 
 @rpc("authority", "call_remote", "unreliable_ordered")
@@ -4181,13 +4236,14 @@ func _current_allowed() -> Array:
 	var mid: String = String(settings.get("map", "")) if is_online else ""
 	var folder: String = Game.mp_allowed_from(mid) if mid != "" else ""
 	if folder != "":
-		if not _custom_allowed_cache.has(folder):
+		if not _custom_allowed_cache.has(mid):
 			var d = LsRuntime._read_json(OrigLevel.cache_root() + "/" + folder + "/mp.json")
 			var lst: Array = []
 			if typeof(d) == TYPE_DICTIONARY and not (d.get("game_styles", []) as Array).is_empty():
-				lst = d["game_styles"][0].get("allowed_items", [])
-			_custom_allowed_cache[folder] = lst
-		return _custom_allowed_cache[folder]
+				lst = (d["game_styles"][0].get("allowed_items", []) as Array).duplicate()
+			lst.append_array(Game.mp_extra_allowed(mid))      # Registerschlüssel "mp_extra_allowed"
+			_custom_allowed_cache[mid] = lst
+		return _custom_allowed_cache[mid]
 	return []
 
 

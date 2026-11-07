@@ -83,6 +83,17 @@ const TURRET_SPEED := 0.7853982
 const NO_LIMIT := 1.0e6
 const PITCH_ABS := 1.5676548      ## Höhenrichtung höchstens ±89,8° (0x4C2580, Konstanten 0x8106AC/0x8106B0) [B]
 const AIM_DEADBAND := 0.001       ## rad (0x8106B8) [B]
+const UNLIMITED_RESERVE := 99999  ## Bordwaffe ohne Munitionsinventar: Vorrat praktisch unbegrenzt [E]
+## Mehrspieler-Wiedereinsatz (0.10.1) [E – Original-Zeiten nicht dekodiert]: Wrack nach WRECK_S, verlassenes und
+## vom Startplatz bewegtes Fahrzeug nach IDLE_S am Startplatz neu (Server entscheidet, Clients über net_state „gen“)
+const RESPAWN_WRECK_S := 30.0
+const RESPAWN_IDLE_S := 60.0
+const RESPAWN_MOVED_M := 5.0
+var spawn_xf := Transform3D()
+var _spawn_set := false
+var respawn_gen := 0
+var _respawn_t := 0.0
+var _dm0: Dictionary = {}
 signal hit(damage: float, by: Node)   ## Treffer (Originalskript OnHit)
 
 ## Originalmodell-Datei (Rohr-Parameter) und Schadensmodell (vor add_child setzen; OrigMission._spawn_orig_car)
@@ -116,6 +127,9 @@ func _ready() -> void:
 		damage_model = VehicleDamage.new()
 		if not damage_model.setup_from(self, custom_visual, dm_path):
 			damage_model = null
+		else:
+			_dm0 = damage_model.serialize()
+	_remember_spawn.call_deferred()
 	if persistent_id != "":
 		_entry.persistent_id = "veh_" + persistent_id     # Netzabgleich Zerstörung/Zonen (Net.object_state)
 
@@ -181,9 +195,25 @@ func _setup_orig_seats() -> void:
 			for a in counts:
 				if OrigInteractive.weapon_for_ammo(int(a)) == iid:
 					ammo_n += int(counts[a])
-			ammo_n = maxi(ammo_n, 1)
+			# Keine Munition genau dieser Waffe: Munition derselben Waffenklasse (Kanone ↔ MG) aus dem Inventar nehmen
+			# (Original-Inventare nennen teils die Munition einer Schwesterwaffe) [P]
+			if ammo_n == 0:
+				var is_cannon := wd.action == WeaponData.Action.ROCKET and wd.shot_interval() >= 1.0
+				for a in counts:
+					var awd := OrigInteractive.heavy_weapon(OrigInteractive.weapon_for_ammo(int(a)))
+					if awd and (awd.action == WeaponData.Action.ROCKET and awd.shot_interval() >= 1.0) == is_cannon:
+						ammo_n = int(counts[a])
+						break
 			w.in_mag = wd.magazine_size
-			w.reserve = wd.magazine_size * (ammo_n - 1)
+			# 0.10.1: Fahrzeug ganz ohne Munition im Inventar (z. B. ARDENS1_OBJ-Panzer) – mit nur einem Schuss war die
+			# Kanone nach dem ersten Treffer tot. Nur dann unbegrenzter Vorrat [E] (Original-Regel nicht dekodiert);
+			# sonst Magazine aus der Inventarmunition (Originalmenge).
+			if ammo_n > 0:
+				w.reserve = wd.magazine_size * (ammo_n - 1)
+			elif counts.is_empty():
+				w.reserve = UNLIMITED_RESERVE
+			else:
+				w.reserve = 0
 			turrets[i]["weapon"] = w
 			if wd.action == WeaponData.Action.ROCKET and wd.shot_interval() >= 1.0:
 				cannons.append(w)
@@ -194,6 +224,8 @@ func _setup_orig_seats() -> void:
 			gi += 1
 		elif not cannons.is_empty():
 			turrets[i]["weapon"] = cannons[0]
+		if turrets[i].get("weapon") != null:
+			turrets[i]["reserve0"] = (turrets[i]["weapon"] as Weapon).reserve    # Wiedereinsatz (respawn_now)
 	armored = not cannons.is_empty()
 
 
@@ -721,11 +753,16 @@ func leave_all() -> void:
 func seat_transform(idx: int) -> Transform3D:
 	if idx < 0 or idx >= seats.size():
 		return global_transform
-	# Panzer-Waffensitz: Schütze (unsichtbar) sitzt an der Mündung, damit Schüsse aus dem Rohr kommen
-	if armored and turrets.has(idx) and turrets[idx].get("weapon") != null:
-		var d := turret_dir(idx)
-		return Transform3D(seats[idx].global_basis, muzzle_point(idx) + d * 0.6 + Vector3.DOWN * 0.5)
+	# 0.10.1: Insasse immer am Original-Sitzframe SEATnn (vorher saß der Panzerschütze an der Mündung = „in der
+	# Kanone“); Bordwaffenschüsse kommen über shot_origin() aus dem Rohr (Soldier._fire_shot)
 	return seats[idx].global_transform
+
+
+## Ursprung eines Bordwaffenschusses: Mündung des Waffensitzes (SHDUM/BARREL), sonst INF
+func shot_origin(idx: int) -> Vector3:
+	if turrets.has(idx) and turrets[idx].get("weapon") != null:
+		return muzzle_point(idx)
+	return Vector3.INF
 
 
 # --- Fahren ------------------------------------------------------------------
@@ -955,8 +992,73 @@ func _next_drive_point() -> void:
 		drive.release_controls(true)
 
 
+func _remember_spawn() -> void:
+	if not _spawn_set and is_inside_tree():
+		spawn_xf = global_transform
+		_spawn_set = true
+
+
+## Mehrspieler (nur Server): Wrack bzw. verlassenes, vom Startplatz bewegtes Fahrzeug nach Ablauf neu einsetzen
+func _respawn_tick(delta: float) -> void:
+	if not Net.is_online or not multiplayer.has_multiplayer_peer() or not multiplayer.is_server() or not _spawn_set:
+		return
+	if script_driving or persistent_id == "":
+		return
+	var occupied := false
+	for o in occupants:
+		if is_instance_valid(o):
+			occupied = true
+			break
+	var due := 0.0
+	if wrecked:
+		due = RESPAWN_WRECK_S
+	elif not occupied and global_position.distance_to(spawn_xf.origin) > RESPAWN_MOVED_M:
+		due = RESPAWN_IDLE_S
+	if due <= 0.0:
+		_respawn_t = 0.0
+		return
+	_respawn_t += delta
+	if _respawn_t >= due:
+		_respawn_t = 0.0
+		respawn_now()
+
+
+## Fahrzeug am Startplatz neu: heil, Schadensmodell/Munition zurück, Insassen raus. Server erhöht respawn_gen und
+## verteilt den Stand (net_state), Clients wenden ihn in apply_net_state an. Knotenpfad bleibt (Sitz-/Lageabgleich).
+func respawn_now(gen := -1) -> void:
+	leave_all()
+	respawn_gen = respawn_gen + 1 if gen < 0 else gen
+	wrecked = false
+	health = max_health
+	if damage_model:
+		damage_model.destroyed = false
+		damage_model.deserialize(_dm0)
+		damage_model.timer_ms = 0
+	for mi in find_children("*", "MeshInstance3D", true, false):
+		if mi.has_meta("_mo0"):
+			(mi as MeshInstance3D).material_override = mi.get_meta("_mo0")
+			mi.remove_meta("_mo0")
+	for i in turrets:
+		var w: Weapon = turrets[i].get("weapon")
+		if w:
+			w.cancel_reload()
+			w.in_mag = w.data.magazine_size
+			w.reserve = int(turrets[i].get("reserve0", w.reserve))
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	global_transform = spawn_xf
+	_net_t = -1.0
+	throttle = 0.0
+	steer_input = 0.0
+	if drive:
+		drive.release_controls(true)
+	if gen < 0:
+		_net_push()
+
+
 func _physics_process(delta: float) -> void:
 	_update_engine_sound()
+	_respawn_tick(delta)
 	if not turrets.is_empty() and not wrecked:
 		_update_turrets(delta)
 	if damage_model and damage_model.timer_ms != 0 and not _net_client():
@@ -1204,6 +1306,8 @@ func explode(by: Node = null) -> void:
 	for mi in find_children("*", "MeshInstance3D", true, false):
 		var m := StandardMaterial3D.new()
 		m.albedo_color = Color(0.08, 0.07, 0.06)
+		if not mi.has_meta("_mo0"):
+			mi.set_meta("_mo0", (mi as MeshInstance3D).material_override)   # für respawn_now
 		(mi as MeshInstance3D).material_override = m
 	destroyed_vehicle.emit()
 
@@ -1231,13 +1335,15 @@ func deserialize(d: Dictionary) -> void:
 
 ## Netzstand für Clients/Spät-Beitretende (über VehicleEntry → Net.object_state/_obj_states)
 func net_state() -> Dictionary:
-	var out := {"wrecked": wrecked, "health": health}
+	var out := {"wrecked": wrecked, "health": health, "gen": respawn_gen}
 	if damage_model:
 		out["dm"] = damage_model.serialize()
 	return out
 
 
 func apply_net_state(st: Dictionary) -> void:
+	if int(st.get("gen", 0)) > respawn_gen:
+		respawn_now(int(st.get("gen", 0)))       # 0.10.1: Wiedereinsatz vom Server
 	health = float(st.get("health", health))
 	if damage_model and st.has("dm"):
 		damage_model.deserialize(st["dm"])

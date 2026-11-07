@@ -10,6 +10,15 @@ extends RefCounted
 ## Texturen werden prozedural neu erzeugt (Rauschen → weiche Rauchballen), keine Originaldaten.
 
 const COUNT_K := [0.35, 0.6, 1.0, 1.4, 2.0]
+## 0.10.1 Rauch-Leistung (Nutzerbefund: Bildrate nach Explosionen): weniger, kleinere, kürzer lebende Rauchpartikel,
+## Beleuchtung je Ecke statt je Pixel (jede Lampe kostete je Rauchpixel), weiche Bodenkante erst ab Ultra, Budget über
+## gleichzeitig aktive Rauchsäulen und Entfernung zur Kamera, Sichtweitengrenze. `--smoke_fx=0` bzw. `legacy` = alter Stand.
+const SMOKE_BUDGET := 4          ## ab so vielen aktiven Rauchsäulen halbe Menge/kürzer
+const SMOKE_HARD := 8            ## ab hier nur noch Minimalrauch
+const SMOKE_FAR := 60.0          ## m: weiter weg halbe Menge
+const SMOKE_VIS_END := 180.0     ## m: Rauch ausgeblendet
+static var legacy := false
+static var _active_smoke: Array = []
 static var _puff_cache := {}
 static var _ring_shader: Shader
 static var _haze_shader: Shader
@@ -36,7 +45,17 @@ static func spawn(parent: Node3D, pos: Vector3, radius: float, q: int, kind: Str
 		root.add_child(_fireball(rs, k, puff, q))
 		parts.append("Fireball")
 	var smoke_life: float = (6.0 if big or kind == &"vehicle" else 4.5) * (1.0 if q >= 2 else 0.7)
-	root.add_child(_smoke(rs, k, puff, q, smoke_life, water))
+	if is_legacy():
+		root.add_child(_smoke(rs, k, puff, q, smoke_life, water))
+	else:
+		smoke_life = (5.0 if big or kind == &"vehicle" else 3.4) * (1.0 if q >= 2 else 0.75)
+		var sk := k * smoke_load_factor(root)
+		if _active_smoke.size() >= SMOKE_BUDGET and not big:   # große Säulen (B-011) bleiben lang, nur dünner
+			smoke_life *= 0.75
+		var sm := _smoke_lite(rs, sk, puff, q, smoke_life, water)
+		root.add_child(sm)
+		_active_smoke.append(sm)
+		sm.tree_exiting.connect(func(): _active_smoke.erase(sm))
 	parts.append("Smoke")
 	if q >= 1:
 		root.add_child(_debris(rs, k, water))
@@ -173,6 +192,71 @@ static func _smoke(rs: float, k: float, puff: Texture2D, q: int, life: float, wa
 	var p := _particles("Smoke", int(22.0 * k * clampf(rs, 1.0, 2.5)), life, pm, qm)
 	p.explosiveness = 0.75
 	p.draw_order = GPUParticles3D.DRAW_ORDER_VIEW_DEPTH
+	return p
+
+
+static func is_legacy() -> bool:
+	return legacy or String(Game.cli.get("smoke_fx", "1")) == "0"
+
+
+## Mengenfaktor für eine neue Rauchsäule: gleichzeitig aktive Säulen und Kameraabstand (LOD)
+static func smoke_load_factor(root: Node3D) -> float:
+	_active_smoke = _active_smoke.filter(func(x): return is_instance_valid(x))
+	var f := 1.0
+	var n := _active_smoke.size()
+	if n >= SMOKE_HARD:
+		f = 0.25
+	elif n >= SMOKE_BUDGET:
+		f = 0.5
+	var cam := root.get_viewport().get_camera_3d() if root.is_inside_tree() else null
+	if cam and cam.global_position.distance_to(root.global_position) > SMOKE_FAR:
+		f *= 0.5
+	return f
+
+
+## 0.10.1: sparsamer Rauch (s. Kopf). Gleiches Erscheinungsbild im Großen: wenige große Ballen statt vieler.
+static func _smoke_lite(rs: float, k: float, puff: Texture2D, q: int, life: float, water: bool) -> GPUParticles3D:
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.6 * rs
+	pm.direction = Vector3.UP
+	pm.spread = 25.0 if not water else 12.0
+	pm.initial_velocity_min = 1.5 * rs
+	pm.initial_velocity_max = (4.0 if not water else 9.0) * rs
+	pm.damping_min = 1.0
+	pm.damping_max = 2.0
+	pm.gravity = Vector3(0.25, 0.5, 0.0) if not water else Vector3(0, -6.0, 0)
+	pm.angle_min = -180.0
+	pm.angle_max = 180.0
+	pm.angular_velocity_min = -15.0
+	pm.angular_velocity_max = 15.0
+	pm.scale_min = 0.9
+	pm.scale_max = 1.4
+	pm.scale_curve = _curve([[0.0, 0.4], [0.3, 1.0], [1.0, 1.7]])
+	if water:
+		pm.color_ramp = _ramp([[0.0, Color(0.9, 0.95, 1.0, 0.0)], [0.08, Color(0.9, 0.95, 1.0, 0.85)],
+			[1.0, Color(0.85, 0.9, 0.95, 0.0)]])
+	else:
+		# früher ausblenden (Überzeichnung großer, fast durchsichtiger Ballen am Ende)
+		pm.color_ramp = _ramp([[0.0, Color(0.25, 0.22, 0.2, 0.0)], [0.06, Color(0.22, 0.19, 0.17, 0.88)],
+			[0.45, Color(0.32, 0.3, 0.28, 0.6)], [0.85, Color(0.42, 0.4, 0.38, 0.12)], [1.0, Color(0.45, 0.43, 0.41, 0.0)]])
+	if q >= 3:
+		pm.turbulence_enabled = true
+		pm.turbulence_noise_strength = 0.8
+		pm.turbulence_noise_scale = 6.0
+	var qm := QuadMesh.new()
+	qm.size = Vector2.ONE * 2.1 * rs
+	var m := _billboard_mat(puff, false, true)
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_VERTEX
+	m.proximity_fade_enabled = q >= 3
+	qm.material = m
+	var p := _particles("Smoke", maxi(int(13.0 * k * clampf(rs, 1.0, 2.0)), 3), life, pm, qm)
+	p.explosiveness = 0.75
+	p.visibility_range_end = SMOKE_VIS_END
+	p.visibility_range_end_margin = 20.0
+	p.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+	if q >= 2:
+		p.draw_order = GPUParticles3D.DRAW_ORDER_VIEW_DEPTH
 	return p
 
 

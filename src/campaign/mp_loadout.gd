@@ -28,6 +28,10 @@ static func map_style(map: String) -> Dictionary:
 		var d = LsRuntime._read_json(OrigLevel.cache_root() + "/" + folder + "/mp.json")
 		if typeof(d) == TYPE_DICTIONARY and not (d.get("game_styles", []) as Array).is_empty():
 			st = d["game_styles"][0]
+	var extra: Array = Game.mp_extra_allowed(map) if custom != "" else []
+	if not extra.is_empty() and not st.is_empty():
+		st = st.duplicate()
+		st["allowed_items"] = (st.get("allowed_items", []) as Array) + extra   # Registerschlüssel "mp_extra_allowed"
 	_style_cache[map] = st
 	return st
 

@@ -109,6 +109,9 @@ var hurt_feedback := true     ## Treffer-Richtungsanzeige beim Getroffenen (Serv
 var kill_cam := true          ## Kill-Cam nach dem eigenen Tod (src/ui/kill_cam.gd; Server-Regel killcam)
 ## BEWUSSTE ABWEICHUNG ([D]): Zielmarker/Randpfeile mit Entfernung (src/ui/objective_markers.gd)
 var objective_markers := true
+## 0.10.1 Ergänzung (Nutzerentscheidung): „Präzises Zielen“ = Kugelfall-Ausgleich (Ballistics.solve_direction);
+## Standard aus = Original (Schuss entlang der Visierachse, Kugel fällt mit 9,8 m/s²). MP: Server-Regel „preciseaim“.
+var precise_aim := false
 ## B-016 BEWUSSTE ABWEICHUNG ([D]): Ragdoll-Physik für Gefallene (src/actors/ragdoll.gd);
 ## aus = Original-Todesanimationen (anim.sav) wie im Original
 var ragdoll := true
@@ -183,7 +186,7 @@ func load_from_config(cfg: ConfigFile) -> void:
 		_load_key(cfg, "controls", k)
 	for k in ["master_volume", "music_volume", "sfx_volume", "speech_volume"]:
 		_load_key(cfg, "audio", k)
-	for k in ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"]:
+	for k in ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll", "precise_aim"]:
 		_load_key(cfg, "game", k)
 	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		_load_key(cfg, "graphics", k)
@@ -308,7 +311,7 @@ func save_settings() -> void:
 	_cfg.set_value("graphics", "shadows", shadows)
 	_cfg.set_value("game", "subtitles", subtitles)
 	_cfg.set_value("game", "crosshair", crosshair)
-	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"]:
+	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll", "precise_aim"]:
 		_cfg.set_value("game", k, get(k))
 	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		_cfg.set_value("graphics", k, get(k))

@@ -623,7 +623,10 @@ func server_settings() -> Dictionary:
 		"max_ping": int(_max_ping.value), "max_freq": int(_max_freq.value), "max_inactivity": int(_max_idle.value),
 		"autorestart": _autorestart.button_pressed,
 		"coop_difficulty": _coop_diff.get_selected_id(), "coop_lives": int(_coop_lives.value),
-		"team_lives": _team_lives.button_pressed, "allow_crosshair": _crosshair.button_pressed}
+		"team_lives": _team_lives.button_pressed, "allow_crosshair": _crosshair.button_pressed,
+		# 0.10.1: Regel „precise_aim“ (Kugelfall-Ausgleich, für alle gleich) – ohne eigenes Formularfeld (LAN-Formular
+		# bleibt unverändert), übernimmt die Option „Präzises Zielen“ des Hosts; Konsole/Config: preciseaim
+		"precise_aim": Settings.precise_aim}
 
 
 ## Konfigurationsdatei im Original-ServerLauncher-Stil (Konsolenzeilen) für den dedizierten Server
