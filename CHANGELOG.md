@@ -2,6 +2,43 @@
 
 Versionierung: vorerst immer 0.9.x – jeder Commit nach GitHub zählt die letzte Stelle hoch und bekommt einen Tag.
 
+## 0.9.9 (07.11.2026)
+
+**Neu**
+- Option „Sichtweite“: CLASSIC = Nebel/Sichtweite wie im Original, NEU = ohne Nebel, volle Reichweite mit
+  vereinfachten Details in der Ferne. Künstliche Zusatznebel entfernt, Himmel mit Horizontdunst/Sonnenhof/Sternen.
+- Coop im LAN-/Internet-Menü: alle Einzelspieler-Missionen 1:1 als Coop-Karten.
+- Kameraden halten zu Missionsbeginn ihre Position und folgen erst auf „Folgen“.
+
+**Gore und Ragdoll**
+- Leichen werden nicht mehr verzerrt/gestreckt (Knochenabstände bleiben, Gelenke begrenzt).
+- Wunden je Kaliber und Trefferzone, Austrittswunden, Blutlachen nach Blutverlust; EXTRA GORE mit Schnittflächen.
+
+**Fahrzeuge**
+- Alle 31 Fahrzeugmodelle geprüft: Flak 38 auf dem Opel Blitz bedienbar, Panzer bremsen mit der Handbremse,
+  Halbkette M3 fährt.
+
+**KI und Missionen**
+- Gegner bleiben deutlich seltener stehen (Wegfolge, unerreichbare Ziele, Untersuchen); Burma-Gegner sind wieder
+  bewaffnet (japanische und weitere Waffen fehlten); Skript-Patrouillen laufen auch nach „Defensiv“.
+- Trupp feuert nicht, wenn ein Kamerad in der Schusslinie steht.
+- `_PlayerInRange` liefert wie im Original die Anzahl der Soldaten im Radius.
+- Kanten zwischen Skript-Wegpunkten werden wie im Original geprüft.
+- HD/4K-Texturen: fehlerhafte Hochskalierungen fallen automatisch auf die nächste Stufe zurück.
+
+**Fehlerbehebungen**
+- Dedizierter Server beendet sich nach „quit“ zuverlässig (auch nach Neustart durch den Wächter).
+- MP-Bots laufen nicht mehr endlos denselben unerreichbaren Halteplatz an.
+- Konverter legt bei fehlerhaftem Missionsnamen keine leeren Ordner mehr an; Build bricht bei solchen Ordnern ab.
+
+**Tests**
+- Neue Testreihen für Fahrzeugtypen, Sichtweite, Gore/Ragdoll und Gegner-Stillstand; Löser prüft Kampagnenketten
+  (Afrika 1–6 erfüllbar), Fehlschlagpfade und Zeitlimits.
+
+**Bekannt offen**
+- Gegner-KI im Kampf noch nicht wie im Original (Flankenseite, Feuern in Bewegung), Schwerttänzer-Schlusssequenz
+  ohne Kamerafahrt, Himmel noch ohne Original-Texturen – siehe Gap-Analyse vom 06.11.2026.
+
 ## 0.9.8 (02.11.2026)
 
 **Arktis-Kampagne „menschlich“ geprüft**

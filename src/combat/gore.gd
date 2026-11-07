@@ -271,22 +271,69 @@ static func _stump(s: Node3D, sk: Skeleton3D, b: int, fx: bool, dir: Vector3) ->
 		ba.name = nm
 		sk.add_child(ba)
 		ba.bone_name = sk.get_bone_name(p)
+	var head := sk.get_bone_name(b) == "f"
+	var r := 0.075 if head else 0.055
 	var cap := MeshInstance3D.new()
 	cap.name = "GoreCap"
-	cap.mesh = _cap_mesh(0.075 if sk.get_bone_name(b) == "f" else 0.055)
+	cap.mesh = _cap_mesh(r)
 	cap.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	ba.add_child(cap)
 	cap.global_position = joint
+	_cut_face(ba, joint, out, r, head)        # B-045: Schnittfläche mit Fleischrand und Knochen
 	var bfx = Effects.blood_fx
 	if bfx == null:
 		return
 	bfx.wound(s, joint.lerp(pj, 0.25), out, 0.3)
 	if fx:
-		bfx._jet(ba, joint, (out + Vector3.UP * 0.2).normalized(), randf_range(1.4, 2.4))
+		bfx._jet(ba, joint, (out + Vector3.UP * 0.2).normalized(), randf_range(2.0, 3.2) if head else randf_range(1.4, 2.4))
+		bfx.stump_pool(s, ba, 1.7 if head else 1.3)   # B-045: großer Blutverlust am Stumpf
 		var parent: Node3D = Effects._parent()
 		if parent:
 			bfx._spray(parent, joint, (out + dir * 0.5).normalized(), 1.5, 35.0)
 			bfx._floor_splat(joint + dir * 0.4, randf_range(0.4, 0.7), "x_blood04", 3.0)
+
+
+## B-045 [D]: Schnittfläche an Stumpf bzw. losem Teil: flache Fleischscheibe (dunkelrot, feucht glänzend), darin der
+## Knochenquerschnitt (elfenbein) leicht herausstehend. axis = Richtung aus dem Schnitt heraus.
+static func _cut_face(parent: Node3D, at: Vector3, axis: Vector3, r: float, head: bool) -> void:
+	var up := axis.normalized() if axis.length() > 0.01 else Vector3.UP
+	var ref := Vector3.FORWARD if absf(up.dot(Vector3.FORWARD)) < 0.95 else Vector3.RIGHT
+	var x := ref.cross(up).normalized()
+	var basis := Basis(x, up, x.cross(up)).orthonormalized()
+	var flesh := MeshInstance3D.new()
+	flesh.name = "GoreFlesh" if parent is BoneAttachment3D else "GoreCut"
+	flesh.mesh = _disc_mesh(r * 0.95, 0.025, Color(0.45, 0.05, 0.04), 0.25)
+	flesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(flesh)
+	flesh.global_transform = Transform3D(basis, at + up * 0.012)
+	var bone := MeshInstance3D.new()
+	bone.name = "GoreBone"
+	# Halswirbel bzw. Röhrenknochen; ragt 2–3 cm aus der Schnittfläche
+	bone.mesh = _disc_mesh(0.016 if head else 0.014, 0.055 if head else 0.045, Color(0.86, 0.8, 0.68), 0.6)
+	bone.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(bone)
+	bone.global_transform = Transform3D(basis, at + up * (0.02 if head else 0.016))
+
+
+static var _disc_cache := {}
+
+
+static func _disc_mesh(r: float, h: float, col: Color, rough: float) -> CylinderMesh:
+	var key := "%.3f_%.3f_%s" % [r, h, col.to_html()]
+	if _disc_cache.has(key):
+		return _disc_cache[key]
+	var cm := CylinderMesh.new()
+	cm.top_radius = r
+	cm.bottom_radius = r * 1.05
+	cm.height = h
+	cm.radial_segments = 12
+	cm.rings = 1
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.roughness = rough
+	cm.material = mat
+	_disc_cache[key] = cm
+	return cm
 
 
 static var _cap_cache := {}
@@ -401,8 +448,9 @@ static func _spawn_piece(s: Node3D, sk: Skeleton3D, b: int, dir: Vector3) -> Rig
 	# Blut am Schnitt des losen Teils + Tropfspur
 	var bfx = Effects.blood_fx
 	var p := sk.get_bone_parent(b)
+	var back := (_bone_world(sk, p).origin - world.origin).normalized() if p >= 0 else Vector3.UP
+	_cut_face(rb, world.origin, back, 0.07 if bn == "f" else 0.05, bn == "f")   # B-045: Schnittfläche am Teil
 	if bfx != null:
-		var back := (_bone_world(sk, p).origin - world.origin).normalized() if p >= 0 else Vector3.UP
 		bfx._jet(rb, world.origin, back, rng.randf_range(0.8, 1.4))
 	var tree := rb.get_tree()
 	for k in 8:
@@ -412,19 +460,21 @@ static func _spawn_piece(s: Node3D, sk: Skeleton3D, b: int, dir: Vector3) -> Rig
 	return rb
 
 
-static func _drip(rb: RigidBody3D) -> void:
+# Parameter untypisiert: gebundene, inzwischen freigegebene Teile ergaben sonst „Cannot convert argument 1 from Object
+# to Object“ bei jedem Zeitgeber (abschluss_099)
+static func _drip(rb) -> void:
 	if not is_instance_valid(rb) or rb.freeze or Effects.blood_fx == null:
 		return
 	Effects.blood_fx._floor_splat(rb.global_position, rng.randf_range(0.12, 0.28), "x_blood0%d" % rng.randi_range(1, 3), 2.5)
 
 
-static func _freeze(rb: RigidBody3D) -> void:
+static func _freeze(rb) -> void:
 	if is_instance_valid(rb):
 		rb.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
 		rb.freeze = true
 
 
-static func _remove(rb: RigidBody3D) -> void:
+static func _remove(rb) -> void:
 	_pieces.erase(rb)
 	if is_instance_valid(rb):
 		stats["removed"] += 1

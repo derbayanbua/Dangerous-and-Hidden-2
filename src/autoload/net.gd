@@ -1073,6 +1073,7 @@ func server_command(line: String, from := 0) -> String:
 			print("Closing game. Wait please.")
 			leave(false)
 			get_tree().quit.call_deferred()
+			_hard_exit_after(10.0)
 			return "Closing game. Wait please."
 	return "unknown command"
 
@@ -3541,9 +3542,30 @@ func _wd_spawn() -> void:
 func _wd_forward(l: String) -> void:
 	if l.strip_edges().to_lower() == "quit":
 		_wd_quit = true
+		# hängt der Server beim Beenden, nach 15 s hart beenden (Wächter endet danach im nächsten Takt)
+		var pid := _wd_pid
+		get_tree().create_timer(15.0, true, false, true).timeout.connect(func():
+			if _wd_quit and pid > 0 and pid == _wd_pid and OS.is_process_running(pid):
+				print("AUTORESTART: Server reagiert nicht auf quit – beendet")
+				OS.kill(pid))
 	if _wd_io:
 		_wd_io.store_string(l + "\n")
 		_wd_io.flush()
+
+
+## Dedizierter Server/Wächter: „quit“ muss den Prozess sicher beenden. Hängt das Beenden der Engine (z. B. am Thread der
+## Standardeingabe, der in read_string_from_stdin blockiert), beendet ein eigener Thread den Prozess nach `sec` Sekunden
+## (Szenenbaum/Zeitgeber laufen beim Beenden nicht mehr). Gemessen: Kindprozess blieb nach „quit“ dauerhaft stehen.
+var _exit_guard: Thread
+
+
+func _hard_exit_after(sec: float) -> void:
+	if _exit_guard != null:
+		return
+	_exit_guard = Thread.new()
+	_exit_guard.start(func():
+		OS.delay_msec(int(sec * 1000.0))
+		OS.kill(OS.get_process_id()))
 
 
 ## Wächter-Takt (_process): Ausgabe des Servers durchreichen, Ende erkennen und neu starten
@@ -3561,6 +3583,7 @@ func _wd_pump() -> void:
 			print("AUTORESTART: Server beendet (quit) – Wächter endet")
 			_wd_pid = 0
 			get_tree().quit()
+			_hard_exit_after(10.0)
 			return
 		_wd_restarts += 1
 		print("AUTORESTART: Server-Prozess %d unerwartet beendet – Neustart %d" % [_wd_pid, _wd_restarts])

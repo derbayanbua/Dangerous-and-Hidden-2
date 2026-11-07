@@ -107,6 +107,15 @@ func _run() -> void:
 
 	isolate_enemies(["e_gate", "e_cp1"])
 
+	# B-047: Kameraden folgen zu Missionsbeginn nicht (Standard Halten bis „Folgen“)
+	var mate_start := {}
+	var all_hold := true
+	for mm in m.squad.members:
+		if mm != hale:
+			mate_start[mm] = mm.global_position
+			all_hold = all_hold and m.squad.brain_of(mm).order == SquadBrain.Order.HOLD
+	check(all_hold, "B-047: Kameraden halten zu Missionsbeginn")
+
 	# --- Bewegung (moderne Steuerung: Normaltempo, Shift = Sprint, leise = geduckt) ---
 	var start_pos := hale.global_position
 	var start_yaw := hale.look_yaw
@@ -286,6 +295,11 @@ func _run() -> void:
 
 	# --- Squad: Folgen, Halten, Bewegen ---
 	isolate_enemies([])     # Befehlstest ohne Gefecht (Sprint trägt den Anführer sonst in Feindreichweite)
+	var stayed := 0.0
+	for mm in mate_start:
+		if mm.alive and m.squad.brain_of(mm).order == SquadBrain.Order.HOLD:
+			stayed = maxf(stayed, mm.global_position.distance_to(mate_start[mm]))
+	check(stayed < 2.0, "B-047: ohne Folgen-Befehl bleiben Kameraden stehen", "max %.1f m" % stayed)
 	await tap("order_follow")
 	var target_pos := hale.global_position + hale.forward() * 25.0
 	Input.action_press("run")
@@ -298,10 +312,15 @@ func _run() -> void:
 		tt += 0.1
 	Input.action_release("move_forward")
 	Input.action_release("run")
-	await seconds(7.0)
-	var max_d := 0.0
-	for mm in m.squad.alive_members():
-		max_d = maxf(max_d, mm.global_position.distance_to(hale.global_position))
+	# B-047: Kameraden standen bis „Folgen“ am Start → längerer Weg; bis 20 s auf Ankunft warten
+	var max_d := INF
+	var waited := 0.0
+	while waited < 20.0 and max_d >= 14.0:
+		await seconds(1.0)
+		waited += 1.0
+		max_d = 0.0
+		for mm in m.squad.alive_members():
+			max_d = maxf(max_d, mm.global_position.distance_to(hale.global_position))
 	check(max_d < 14.0, "Trupp folgt dem Anführer", "max. Abstand %.1f m" % max_d)
 	await tap("order_hold")
 	var held_ok := true

@@ -15,8 +15,8 @@ const MAX_SPLATS := 64          ## Wand-/Bodenspritzer (Ringpuffer)
 const MAX_POOLS := 24           ## Lachen (älteste blendet aus)
 const MAX_JETS := 6
 const MAX_SPRAYS := 12          ## gleichzeitige Partikel-Spritzer
-const MAX_WOUNDS := 48          ## Kleidungs-Decals an Figuren (Ringpuffer über alle Figuren)
-const MAX_WOUNDS_PER := 8       ## je Figur
+const MAX_WOUNDS := 96          ## Kleidungs-Decals an Figuren (Ringpuffer über alle Figuren; B-045: Wunde = Kern + Fleck)
+const MAX_WOUNDS_PER := 16      ## je Figur
 const MAX_TRAILS := 48          ## Tropfspur-Flecken laufender Verwundeter (Ringpuffer)
 const SCAN_S := 1.0
 const TRAIL_S := 0.25
@@ -31,7 +31,7 @@ var jets: Array[Dictionary] = []
 var sprays: Array = []
 var wounds: Array = []
 var trails: Array = []
-var stats := {"sprays": 0, "jets": 0, "splats": 0, "pools": 0, "wounds": 0, "trails": 0, "edge": 0, "extra_hits": 0}   ## Zähler für Tests
+var stats := {"sprays": 0, "jets": 0, "splats": 0, "pools": 0, "wounds": 0, "trails": 0, "edge": 0, "extra_hits": 0, "exit_wounds": 0}   ## Zähler für Tests
 var _tex := {}
 var _scan := 0.0
 var _trail_t := 0.0
@@ -116,31 +116,77 @@ func hit(pos: Vector3, normal: Vector3, dir: Vector3, zone: StringName, victim: 
 		return
 	var head := zone == &"head"
 	var limb := zone == &"arm" or zone == &"leg"
-	var strength: float = 1.6 if head else (0.6 if limb else 1.0)
+	# B-045: Wundbild nach Kaliber (Waffe des Treffers aus der Ballistik, Meta _gore_w) und Zone
+	var w = null
+	if victim != null and is_instance_valid(victim) and Time.get_ticks_msec() - int(victim.get_meta("_rd_hit_ms", -100000)) <= 100:
+		w = victim.get_meta("_gore_w") if victim.has_meta("_gore_w") else null
+	var prof := wound_profile(w, String(zone))
+	var strength: float = float(prof["blood"])
 	var dead := victim != null and is_instance_valid(victim) and not bool(victim.get("alive"))
 	if dead:
 		strength *= 1.2
-	# Austritt (Schussrichtung) kräftig, Eintritt (zum Schützen) schwächer
-	_spray(parent, pos, dir, strength, 28.0)
-	_spray(parent, pos, (-dir + normal * 0.3).normalized(), strength * 0.45, 40.0)
-	# Spritzer an Wand/Boden hinter dem Getroffenen
-	var space := parent.get_world_3d().direct_space_state
-	var reach := 2.0 + 1.5 * strength
-	var q := PhysicsRayQueryParameters3D.create(pos + dir * 0.25, pos + dir * reach, WORLD_MASK)
-	var h := space.intersect_ray(q)
-	if not h.is_empty():
-		var tn: String = "x_blood04" if randf() < 0.5 else "x_blood00"
-		_splat(h.position, h.normal, (0.45 + 0.35 * strength) * randf_range(0.8, 1.2), tn)
-	for i in (3 if head else 2):
-		_floor_splat(pos + dir * randf_range(0.4, 1.4) * strength + Vector3(randf_range(-0.3, 0.3), 0, randf_range(-0.3, 0.3)),
-			randf_range(0.25, 0.55) * strength, "x_blood0%d" % randi_range(1, 3), 3.0)
-	# kurzer pulsierender Strahl bei schweren Treffern (Kopf immer, Rumpf tödlich oder jeder zweite)
-	if victim is Node3D and (head or (zone != &"" and not limb and (dead or randf() < 0.5))):
-		_jet(victim as Node3D, pos, (dir * 0.6 + normal * 0.4).normalized(), randf_range(1.2, 2.0) if head else randf_range(0.5, 1.6))
-	# Blut auf der Kleidung: Einschuss (zum Schützen) und Austritt (Schussrichtung), am nächsten Knochen
+	if victim != null and is_instance_valid(victim):
+		victim.set_meta("_bleed", maxf(float(victim.get_meta("_bleed", 0.0)), strength))
+	# Eintritt (zum Schützen) schwach; Austritt (Schussrichtung) nur bei Durchschuss, dann kräftig und weit
+	_spray(parent, pos, (-dir + normal * 0.3).normalized(), strength * 0.4, 40.0)
+	var exit_pos: Vector3 = pos + dir * float(prof["depth"])
+	if bool(prof["exit"]):
+		_spray(parent, exit_pos, dir, strength * 1.2, 22.0)
+		# Spritzer an Wand/Boden hinter dem Getroffenen
+		var space := parent.get_world_3d().direct_space_state
+		var reach := 2.0 + 1.8 * strength
+		var q := PhysicsRayQueryParameters3D.create(exit_pos + dir * 0.1, exit_pos + dir * reach, WORLD_MASK)
+		var h := space.intersect_ray(q)
+		if not h.is_empty():
+			var tn: String = "x_blood04" if randf() < 0.5 else "x_blood00"
+			var fall := 1.0 - clampf(h.position.distance_to(exit_pos) / reach, 0.0, 0.7)   # nah = großer Fleck
+			_splat(h.position, h.normal, (0.35 + 0.4 * strength) * fall * randf_range(0.85, 1.15), tn)
+	else:
+		_spray(parent, pos, (dir * 0.3 - Vector3.UP).normalized(), strength * 0.35, 30.0)   # Steckschuss: läuft am Körper herab
+	var drops := clampi(int(round(1.0 + 2.0 * strength)), 1, 5)
+	for i in drops:
+		var reach_f: float = (randf_range(0.5, 1.6) if bool(prof["exit"]) else randf_range(0.0, 0.4)) * strength
+		_floor_splat(pos + dir * reach_f + Vector3(randf_range(-0.3, 0.3), 0, randf_range(-0.3, 0.3)),
+			randf_range(0.18, 0.4) * clampf(strength, 0.5, 1.8), "x_blood0%d" % randi_range(1, 3), 3.0)
+	# kurzer pulsierender Strahl bei schweren Treffern (Kopf mit Gewehrkaliber, Rumpf tödlich oder starke Wunde)
+	if victim is Node3D and ((head and strength >= 1.0) or (zone != &"" and not limb and (dead or strength >= 1.0 and randf() < 0.5))):
+		_jet(victim as Node3D, exit_pos if bool(prof["exit"]) else pos, (dir * 0.6 + normal * 0.4).normalized(),
+			randf_range(1.2, 2.0) if head else randf_range(0.5, 1.6) * strength)
+	# Blut auf der Kleidung: Einschuss (klein, dunkler Kern) und – bei Durchschuss – größere Austrittswunde
 	if victim is Node3D:
-		wound(victim as Node3D, pos, normal if normal.length() > 0.01 else -dir, 0.16 + 0.06 * strength)
-		wound(victim as Node3D, pos + dir * 0.18, dir, 0.2 + 0.08 * strength)
+		wound(victim as Node3D, pos, normal if normal.length() > 0.01 else -dir, float(prof["size"]), "entry")
+		if bool(prof["exit"]):
+			wound(victim as Node3D, exit_pos, dir, float(prof["exit_size"]), "exit")
+
+
+## B-045 [D]: Wundbild je Kaliber und Zone. Kaliberklasse aus items.sav-Werten (v0, Schaden):
+## Pistole (v0 < 300 m/s), MP (Pistolenpatrone, Automat), Gewehr (v0 ≥ 650 m/s oder Schaden ≥ 55), MG (Gewehr + Automat),
+## Kanone (Schaden ≥ 90). blood = Blutmenge (Spritzer/Tropfen/Lache), size/exit_size = Durchmesser der Kleidungswunde [m],
+## exit = Durchschuss (Austrittswunde), depth = Körperdicke bis zum Austritt [m]. Ohne Waffe: Gewehr.
+static func wound_profile(w, zone: String) -> Dictionary:
+	var cls := "rifle"
+	if w is WeaponData:
+		var wd := w as WeaponData
+		if wd.damage >= 90.0:
+			cls = "cannon"
+		elif wd.muzzle_velocity >= 650.0 or wd.damage >= 55.0:
+			cls = "mg" if wd.is_automatic() else "rifle"
+		elif wd.is_automatic():
+			cls = "smg"
+		else:
+			cls = "pistol"
+	var base: Array = {"pistol": [0.5, 0.07, false], "smg": [0.7, 0.08, false], "rifle": [1.0, 0.09, true],
+		"mg": [1.1, 0.1, true], "cannon": [1.7, 0.16, true]}[cls]
+	var head := zone == "head" or zone == "helmet"
+	var limb := zone == "arm" or zone == "leg"
+	var zk := 1.6 if head else (0.55 if limb else 1.0)
+	var exit: bool = bool(base[2]) or (limb and cls == "smg")       # MP durchschlägt nur Glieder
+	var depth := 0.16 if head else (0.1 if limb else 0.22)
+	var blood: float = float(base[0]) * zk
+	if Settings.blood_level >= Settings.BLOOD_GORE:
+		blood *= 1.25
+	return {"cls": cls, "blood": blood, "size": float(base[1]) * (0.8 if limb else 1.0), "exit": exit,
+		"exit_size": float(base[1]) * (2.2 if cls in ["rifle", "mg", "cannon"] else 1.5) * (0.8 if limb else 1.0), "depth": depth}
 
 
 # --- Blut auf der Kleidung (Decal auf dem Skin-Mesh, hängt am Knochen → folgt Animation/Ragdoll) ---------------
@@ -187,17 +233,33 @@ func _wound_anchor(victim: Node3D, pos: Vector3) -> Node3D:
 	return hb_best if hb_best != null else victim
 
 
-## Figurenmeshes auf Renderebene 20 legen (zusätzlich, bestehende Ebenen bleiben) – nur sie empfangen Kleidungsblut
+## Figurenmeshes auf Renderebene 20 legen – nur sie empfangen Kleidungsblut. B-045: Ebene 1 wird dabei entfernt, damit
+## Boden-Decals (Lachen, Spritzer, cull_mask 1) die liegende Leiche nicht rot einfärben (Kameras sehen alle 20 Ebenen).
 func _mark_meshes(victim: Node3D) -> void:
 	for mi in victim.find_children("*", "VisualInstance3D", true, false):
-		if not (mi is Decal) and not (mi is GPUParticles3D):
-			(mi as VisualInstance3D).layers |= WOUND_LAYER
+		if not (mi is Decal) and not (mi is GPUParticles3D) and not (mi is Light3D):
+			(mi as VisualInstance3D).layers = ((mi as VisualInstance3D).layers & ~1) | WOUND_LAYER
 
 
 ## Blutfleck auf der Kleidung. normal = von der Körperoberfläche nach außen.
-func wound(victim: Node3D, pos: Vector3, normal: Vector3, size: float) -> Decal:
+func wound(victim: Node3D, pos: Vector3, normal: Vector3, size: float, kind := "") -> Decal:
 	if level() < 2 or victim == null or not is_instance_valid(victim) or not victim.is_inside_tree():
 		return null
+	if kind != "":
+		# B-045: Wunde = dunkler Kern (Loch, x_blood01) + umgebender Blutfleck; Austritt größer und ausgefranst
+		var core := _wound_decal(victim, pos, normal, size * (0.45 if kind == "entry" else 0.6), "x_blood01",
+			Color(0.16, 0.01, 0.01), "Wound_" + kind + "_core")
+		if core:
+			core.set_meta("wound_part", true)
+		var d := _wound_decal(victim, pos, normal, size * (2.2 if kind == "entry" else 2.6),
+			"x_blood0%d" % (4 if randf() < 0.5 else 0), Color(0.5, 0.03, 0.02), "Wound_" + kind)
+		if kind == "exit":
+			stats["exit_wounds"] = int(stats.get("exit_wounds", 0)) + 1
+		return d
+	return _wound_decal(victim, pos, normal, size, "x_blood0%d" % (4 if randf() < 0.5 else 0), Color(0.55, 0.04, 0.03), "BloodWound")
+
+
+func _wound_decal(victim: Node3D, pos: Vector3, normal: Vector3, size: float, tn: String, col: Color, nm: String) -> Decal:
 	var mine: Array = []
 	for w in wounds:
 		if is_instance_valid(w) and w.get_meta("owner_soldier", 0) == victim.get_instance_id():
@@ -207,9 +269,9 @@ func wound(victim: Node3D, pos: Vector3, normal: Vector3, size: float) -> Decal:
 	_mark_meshes(victim)
 	var anchor := _wound_anchor(victim, pos)
 	var d := Decal.new()
-	d.name = "BloodWound"
-	d.texture_albedo = tex("x_blood0%d" % (4 if randf() < 0.5 else 0))
-	d.modulate = Color(0.55, 0.04, 0.03)
+	d.name = nm
+	d.texture_albedo = tex(tn)
+	d.modulate = col
 	d.albedo_mix = 0.95
 	d.cull_mask = WOUND_LAYER
 	d.upper_fade = 0.3
@@ -226,7 +288,8 @@ func wound(victim: Node3D, pos: Vector3, normal: Vector3, size: float) -> Decal:
 	var x := ref.cross(up).normalized()
 	d.global_transform = Transform3D(Basis(x, up, x.cross(up)).orthonormalized().rotated(up, randf() * TAU), pos)
 	wounds.append(d)
-	stats["wounds"] += 1
+	if not nm.ends_with("_core"):
+		stats["wounds"] += 1
 	while wounds.size() > MAX_WOUNDS:
 		_drop_wound(wounds[0])
 	return d
@@ -541,7 +604,8 @@ func _scan_soldiers() -> void:
 	for c in get_tree().get_nodes_in_group("corpses"):
 		if c is Node3D and not c.has_meta("_blood_pool"):
 			c.set_meta("_blood_pool", true)
-			_pool_for(c as Node3D, randf_range(1.1, 1.6), 0.0)
+			_mark_meshes(c as Node3D)
+			_pool_for(c as Node3D, death_pool_size(c as Node3D), 0.0)
 	for s in get_tree().get_nodes_in_group("soldiers"):
 		if not (s is Node3D) or not bool(s.get("alive")) or s.has_meta("_blood_pool"):
 			continue
@@ -563,7 +627,44 @@ func _on_died(soldier: Node, _attacker: Node) -> void:
 	if level() < 2 or not (soldier is Node3D) or soldier.has_meta("_blood_pool"):
 		return
 	soldier.set_meta("_blood_pool", true)
-	_pool_for(soldier as Node3D, randf_range(1.2, 1.8), 1.0)   # nach dem Fallen
+	_mark_meshes(soldier as Node3D)       # B-045: Lache färbt die Leiche nicht ein
+	_pool_for(soldier as Node3D, death_pool_size(soldier as Node3D), 1.0)   # nach dem Fallen
+
+
+## B-045 [D]: Lachengröße nach Blutverlust – stärkste Wunde (Meta _bleed aus hit), sonst Waffe/Zone des tödlichen
+## Treffers (Messer/Splitter/Skript), Explosion kräftig; Durchmesser 0,5–1,6 m.
+func death_pool_size(s: Node3D) -> float:
+	var bleed := float(s.get_meta("_bleed", 0.0))
+	var now := Time.get_ticks_msec()
+	if now - int(s.get_meta("_gore_ms", -100000)) <= 600:
+		var w = s.get_meta("_gore_w") if s.has_meta("_gore_w") else null
+		bleed = maxf(bleed, float(wound_profile(w, String(s.get_meta("_gore_zone", "torso")))["blood"]))
+	for e in Ragdoll._recent:
+		if now - int(e[2]) <= 600 and (e[0] as Vector3).distance_to(s.global_position) < float(e[1]):
+			bleed = maxf(bleed, 1.4)
+	if bleed <= 0.0:
+		bleed = 1.0
+	return clampf(0.5 + 0.5 * bleed, 0.5, 1.6) * randf_range(0.95, 1.05)
+
+
+## B-045: Lache am Stumpf (EXTRA GORE), folgt dem Stumpf-Anhänger (BoneAttachment) nach `delay` s
+func stump_pool(s: Node3D, at: Node3D, size: float, delay := 0.6) -> void:
+	if level() < 2 or s == null or at == null:
+		return
+	var sid := s.get_instance_id()
+	var aid := at.get_instance_id()
+	s.set_meta("_stump_pool", true)       # ersetzt die gewöhnliche Todeslache (keine zwei Lachen)
+	for d in pools:
+		if is_instance_valid(d) and int(d.get_meta("owner_soldier", 0)) == sid:
+			d.queue_free()
+	get_tree().create_timer(delay, false).timeout.connect(func() -> void:
+		var a := instance_from_id(aid) as Node3D
+		if a == null or not is_instance_valid(a):
+			return
+		var d := _floor_splat(a.global_position, size, "x_blood05", 2.5, randf_range(5.0, 8.0), true)
+		if d != null:
+			d.set_meta("owner_soldier", sid)
+			d.set_meta("pool_max", size))
 
 
 ## Körpermitte: Rumpf-Trefferzone (folgt dem Todesclip), sonst Figurenursprung
@@ -585,12 +686,13 @@ func _pool_for(s: Node3D, size: float, delay: float) -> void:
 	var d := _floor_splat(body_center(s), size, "x_blood05", 2.5, grow, true)
 	if d != null:
 		d.set_meta("owner_soldier", s.get_instance_id())
+		d.set_meta("pool_max", size)
 		d.set_meta("follow_until", Time.get_ticks_msec() + int(grow * 1000.0))
 
 
 func _pool_later(id: int, size: float) -> void:
 	var s := instance_from_id(id) as Node3D
-	if s != null and is_instance_valid(s):
+	if s != null and is_instance_valid(s) and not s.has_meta("_stump_pool"):
 		_pool_for(s, size, 0.0)
 
 
@@ -613,7 +715,7 @@ func _splat(pos: Vector3, normal: Vector3, size: float, tn: String, grow := 0.0,
 		return null
 	var d := Decal.new()
 	d.texture_albedo = tex(tn)
-	d.modulate = Color(0.75, 0.06, 0.05) if pool else Color(0.9, 0.12, 0.1)
+	d.modulate = Color(0.5, 0.035, 0.03) if pool else Color(0.75, 0.08, 0.06)   # B-045: dunkler (geronnen)
 	d.albedo_mix = 1.0
 	d.cull_mask = 1
 	d.upper_fade = 0.2

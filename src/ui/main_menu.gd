@@ -868,44 +868,48 @@ func _page_display() -> void:
 	var ri := Settings.RESOLUTIONS.find(Settings.resolution)
 	_cycle(Rect2(67, y, 412, 32), tr("AUFLÖSUNG:") + " " + tr(Settings.resolution_name(Settings.resolution)), func():
 		Settings.resolution = Settings.RESOLUTIONS[(maxi(ri, 0) + 1) % Settings.RESOLUTIONS.size()])
-	y += 38
+	y += 35
 	_yesno(y, "VOLLBILD", Settings.fullscreen, func(v: bool): Settings.fullscreen = v)
-	y += 38
+	y += 35
 	_cycle(Rect2(67, y, 412, 32), tr("VSYNC:") + " " + tr(_pick(Settings.VSYNC_NAMES, Settings.vsync_mode)), func():
 		Settings.vsync_mode = (clampi(Settings.vsync_mode, 0, 3) + 1) % 4, true, "bvsync")
-	y += 38
+	y += 35
 	var fi := Settings.FPS_STEPS.find(Settings.max_fps)
 	_cycle(Rect2(67, y, 412, 32), tr("BILDRATE:") + " " + (tr("UNBEGRENZT") if Settings.max_fps == 0 else "MAX. %d" % Settings.max_fps), func():
 		Settings.max_fps = Settings.FPS_STEPS[(maxi(fi, 0) + 1) % Settings.FPS_STEPS.size()], true, "bfps")
-	y += 38
+	y += 35
 	_cycle(Rect2(67, y, 412, 32), tr("KANTENGLÄTTUNG:") + " " + tr(_pick(Settings.AA_NAMES, Settings.aa_mode)), func():
 		Settings.aa_mode = (clampi(Settings.aa_mode, 0, Settings.AA_NAMES.size() - 1) + 1) % Settings.AA_NAMES.size(), true, "baa")
-	y += 38
+	y += 35
 	_cycle(Rect2(67, y, 412, 32), tr("TEXTUREN:") + " " + tr(_pick(Settings.TEXTURE_NAMES, Settings.texture_quality)), func():
 		Settings.texture_quality = (clampi(Settings.texture_quality, 0, 2) + 1) % 3, true, "btex")
-	y += 38
+	y += 35
 	_cycle(Rect2(67, y, 412, 32), tr("ANISOTROPE FILTERUNG:") + " " + tr(_pick(Settings.ANISO_NAMES, Settings.anisotropy)), func():
 		Settings.anisotropy = (clampi(Settings.anisotropy, 0, 4) + 1) % 5, true, "baniso")
-	y += 38
+	y += 35
 	var scales := [1.0, 0.85, 0.7, 0.5]
 	var si := scales.find(snappedf(Settings.render_scale, 0.05))
 	_cycle(Rect2(67, y, 412, 32), tr("3D-RENDERSKALIERUNG: %d %%") % int(Settings.render_scale * 100.0), func():
 		Settings.render_scale = scales[(maxi(si, 0) + 1) % scales.size()])
-	y += 38
+	y += 35
 	var fovs := [60.0, 70.0, 80.0, 90.0, 100.0]
 	var fo := fovs.find(Settings.fov)
 	_cycle(Rect2(67, y, 412, 32), tr("SICHTFELD: %d°") % int(Settings.fov), func():
 		Settings.fov = fovs[(maxi(fo, 0) + 1) % fovs.size()])
-	y += 38
+	y += 35
 	_yesno(y, "BEI INAKTIVEM FENSTER PAUSIEREN", Settings.pause_unfocused, func(v: bool): Settings.pause_unfocused = v)
-	y += 38
+	y += 35
 	# B-013: Grafikstufe Niedrig … 4K Ultra (ersetzt den früheren Schalter „Zusatzeffekte“)
 	_cycle(Rect2(67, y, 412, 32), "GRAFIKSTUFE: " + String(_pick(Settings.QUALITY_NAMES, Settings.quality)).to_upper(), func():
 		Settings.quality = (Settings.quality + 1) % Settings.QUALITY_NAMES.size(), true, "bquality")
-	y += 38
+	y += 35
 	# BEWUSSTE ABWEICHUNG ([D]): dreistufig; „AUS“ = Original BLUTFLECKEN NEIN
 	_cycle(Rect2(67, y, 412, 32), tr("BLUT:") + " " + tr(_pick(Settings.BLOOD_NAMES, Settings.blood_level)), func():
 		Settings.blood_level = (clampi(Settings.blood_level, 0, Settings.BLOOD_NAMES.size() - 1) + 1) % Settings.BLOOD_NAMES.size(), true, "bblood")
+	y += 35
+	# B-041: Sichtweite CLASSIC (Originalnebel) / NEU (volle Reichweite, Ferndetails)
+	_cycle(Rect2(67, y, 412, 32), tr("SICHTWEITE:") + " " + tr(_pick(Settings.VIEW_NAMES, Settings.view_mode)), func():
+		Settings.view_mode = (Settings.view_mode + 1) % Settings.VIEW_NAMES.size(), true, "bviewmode")
 	_cycle(Rect2(67, 670, 412, 33), text(2410), func(): options_page = "graphics")
 	_label(Rect2(67, 638, 412, 26), "Texturänderung wirkt beim nächsten Laden einer Mission.", 11, TEXT_COLOR)
 

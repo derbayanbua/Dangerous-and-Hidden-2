@@ -202,7 +202,18 @@ func _turret_of(seat: Node3D) -> Dictionary:
 	var vert: Node3D = null
 	var barrel: Node3D = null
 	var muzzle: Node3D = null
-	for n in seat.find_children("*", "Node3D", true, false):
+	# Sitz unter der Lafette (Opel Blitz Flak 38 la_opelfaf: HORT02 › SEAT02, VERT02 › BARREL02_00, B-043): Schütze dreht
+	# mit; die Richtteile hängen dann am Eltern-HORT statt unter dem Sitz
+	var root: Node3D = seat
+	if seat.find_children("HORT*", "Node3D", true, false).is_empty() and seat.find_children("VERT*", "Node3D", true, false).is_empty():
+		var p := seat.get_parent()
+		while p is Node3D and p != custom_visual:
+			if String(p.name).to_upper().begins_with("HORT"):
+				hort = p
+				root = p
+				break
+			p = p.get_parent()
+	for n in root.find_children("*", "Node3D", true, false):
 		var nm := String(n.name).to_upper()
 		if hort == null and nm.begins_with("HORT"):
 			hort = n

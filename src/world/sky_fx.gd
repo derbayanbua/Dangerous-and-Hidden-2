@@ -19,7 +19,12 @@ const CLIMATES := {
 	"snow": [0.62, 1.15, 0.30, Color(0.55, 0.57, 0.62)],
 	"desert": [0.18, 0.7, 0.45, Color(0.62, 0.55, 0.48)],
 	"jungle": [0.55, 1.1, 0.40, Color(0.42, 0.46, 0.46)],
+	"alpine": [0.50, 1.05, 0.35, Color(0.52, 0.55, 0.60)],   # B-041: Alpen (Quellwolken, kühler)
 }
+## B-041: Dunst am Horizont je Klimazone [Stärke CLASSIC, Stärke NEU] (feuchte Luft/Staub; NEU ohne Nebel stärker,
+## damit der Kartenrand im Dunst verschwindet statt vor dem Himmel zu enden) [E]
+const HAZE := {"temperate": [0.25, 0.55], "snow": [0.3, 0.6], "desert": [0.2, 0.45], "jungle": [0.35, 0.7],
+	"alpine": [0.15, 0.4]}
 static var _mask_cache := {}
 
 var env: Environment
@@ -68,7 +73,16 @@ static func _mission_key(m: Node) -> String:
 
 ## Klimazone (Annahme nach Missionsname): ARCTIC/NORWAY/Nordlicht = Schnee, AFRICA/Sandsturm = Wüste, BURMA = Dschungel
 static func detect_climate(m: Node) -> String:
+	# B-041: zuerst der Original-Kartenordner (eindeutig), dann der Missionsname
+	var om = m.get("orig_mission")
+	var f := String(om).to_lower() if om != null else ""
+	for pair in [["arctic", "snow"], ["norway", "snow"], ["alps", "alpine"], ["ardens", "temperate"], ["africa", "desert"],
+			["afrika", "desert"], ["burma", "jungle"], ["normandy", "temperate"], ["czech", "temperate"], ["london", "temperate"]]:
+		if f.begins_with(pair[0]):
+			return pair[1]
 	var k := _mission_key(m)
+	if k.contains("al1_") or k.contains("al2_") or k.contains("alps"):
+		return "alpine"
 	for w in ["arctic", "norway", "a1_", "a2_", "a3_", "nordlicht", "nw", "blizzard"]:
 		if k.contains(w):
 			return "snow"
@@ -112,6 +126,13 @@ func apply() -> void:
 	material.set_shader_parameter("octaves", [3, 4, 5, 6, 7][q])
 	material.set_shader_parameter("light_steps", [1, 1, 2, 3, 4][q])
 	material.set_shader_parameter("night", 1.0 if night else 0.0)
+	# B-041: Horizontdunst in Nebel-/Missionsfarbe, Sonnenhof in Horizontnähe, Sterne bei klarer Nacht
+	var vd = preload("res://src/world/view_distance.gd")
+	var neu: bool = vd.is_new()
+	var hz: Array = HAZE.get(climate, [0.25, 0.55])
+	material.set_shader_parameter("haze_color", env.fog_light_color)
+	material.set_shader_parameter("haze", float(hz[1] if neu else hz[0]) if vd.enabled() else 0.0)
+	material.set_shader_parameter("stars", 1.0 if night and float(c[0]) < 0.6 else 0.0)
 	env.sky.sky_material = material
 	# Radiance (Umgebungslicht/Reflexe) schrittweise aktualisieren: bewegte Wolken kosten sonst jedes Bild einen Cubemap-Pass
 	env.sky.process_mode = Sky.PROCESS_MODE_INCREMENTAL
@@ -137,7 +158,7 @@ func _set_shadows(on: bool) -> void:
 		shadow_decal = Decal.new()
 		shadow_decal.name = "CloudShadows"
 		shadow_decal.size = Vector3(SHADOW_PERIOD * 2.0, 900.0, SHADOW_PERIOD * 2.0)
-		shadow_decal.cull_mask = 1
+		shadow_decal.cull_mask = 1 | (1 << 19)   # B-045: Figuren liegen nach Treffern nur auf Ebene 20
 		shadow_decal.upper_fade = 0.05
 		shadow_decal.lower_fade = 0.05
 		add_child(shadow_decal)

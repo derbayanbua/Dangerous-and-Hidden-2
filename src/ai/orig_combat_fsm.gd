@@ -252,6 +252,7 @@ func _st_choose() -> void:
 			p = pick_flank_point(brain, target_pos, brain.soldier.global_position, rng)
 		else:
 			p = pick_leash_point(brain, target_pos, rng)
+	p = _reach(p)
 	if p.is_finite() and brain._in_leash(p):
 		move_point = p
 		_gait(true)
@@ -306,7 +307,7 @@ func _st_advance() -> void:
 		return
 	if _dist() >= CLOSE_DIST:
 		# 0x5541F0 → Wegpunkt hockend/laufend (Gang 0x2008, Haltung 1) → 10; keiner → 2 [B]
-		var p := pick_advance_point(brain, brain.soldier.global_position, target_pos, rng)
+		var p := _reach(pick_advance_point(brain, brain.soldier.global_position, target_pos, rng))
 		if p.is_finite() and brain._in_leash(p):
 			move_point = p
 			_go(p, Soldier.Stance.CROUCH, Soldier.MoveMode.RUN)
@@ -397,6 +398,14 @@ func _st_search_arrived() -> void:
 		_enter(S_AIM)
 	else:
 		_enter(S_LOST, _rand_ms(LOST_MS))
+
+
+## B-044 [E]: gewählte Position nur, wenn das Navigationsnetz von hier aus hinführt (Original: Wegpunkte des Netzes sind
+## per Definition erreichbar; Navmesh-Stichproben/Deckungspunkte konnten auf Netzinseln liegen → 12 s Lauf auf der Stelle).
+func _reach(p: Vector3) -> Vector3:
+	if not p.is_finite() or brain == null or not brain.b044_fix():
+		return p
+	return brain.reachable_point(p)
 
 
 func _go(p: Vector3, stance: int, mode: int) -> void:

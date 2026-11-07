@@ -14,6 +14,8 @@ var effects_root: Node3D
 var env: Environment
 var sun: DirectionalLight3D
 var sky_fx: Node3D        ## src/world/sky_fx.gd (B-013: Wolkenhimmel, Wolkenschatten)
+const ViewDistanceScript := preload("res://src/world/view_distance.gd")
+var view_stats := {}      ## B-041: zuletzt angewandte Sichtweite (ViewDistance.apply)
 var squad: SquadManager
 var controller: PlayerController
 var rig: CameraRig
@@ -210,11 +212,30 @@ func _setup_environment() -> void:
 	sun.shadow_blur = 1.5
 	add_child(sun)
 	_configure_environment(env, sun)
+	# B-041: Sichtweite CLASSIC (Originalnebel) / NEU (ohne Nebel) – nach der Missionsabstimmung, vor den Grafikstufen
+	view_stats = ViewDistanceScript.apply(self, env)
+	_view_mode_applied = int(view_stats.get("mode", -1))
+	if not Settings.changed.is_connected(_on_view_settings):
+		Settings.changed.connect(_on_view_settings)
 	Settings.apply_to_world(env, sun)
 	# B-013: Wolkenhimmel + Wolkenschatten (übernimmt die eben eingestellten Missionsfarben)
 	sky_fx = preload("res://src/world/sky_fx.gd").new()
 	add_child(sky_fx)
 	sky_fx.setup(self, env, sun)
+
+
+## B-041: Sichtweite im Spiel umgeschaltet → Nebel/Kamera sofort; Fernausblendung/LOD erst beim nächsten Laden.
+var _view_mode_applied := -1
+
+func _on_view_settings() -> void:
+	var md: int = ViewDistanceScript.mode()
+	if md == _view_mode_applied or env == null:
+		return
+	_view_mode_applied = md
+	if md == Settings.VIEW_CLASSIC and not view_stats.is_empty() and String(view_stats.get("source", "")) == "neu" \
+			and String(view_stats.get("folder", "")) == "":
+		env.fog_enabled = true    # eigene Karte: Missionsnebel wieder an (Dichte blieb erhalten)
+	view_stats = ViewDistanceScript.apply(self, env)
 
 
 func _bake_navigation() -> void:

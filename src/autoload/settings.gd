@@ -33,6 +33,14 @@ var vsync: bool:
 var quality := 2:          ## 0..4, siehe QUALITY_NAMES
 	set(v):
 		quality = clampi(v, 0, QUALITY_NAMES.size() - 1)
+## B-041 Sichtweite: 0 CLASSIC = Nebel/Sichtweite wie im Original (extra.json: FOG-Licht/view_distance),
+## 1 NEU = kein Nebel, volle Reichweite, Ferndetails nach Entfernung (src/world/view_distance.gd). Profiloption.
+const VIEW_NAMES := ["CLASSIC", "NEU"]
+const VIEW_CLASSIC := 0
+const VIEW_NEW := 1
+var view_mode := 0:
+	set(v):
+		view_mode = clampi(v, 0, VIEW_NAMES.size() - 1)
 var render_scale := 1.0    ## 0.5..1.0 (FSR 1 bei < 1)
 var fov := 70.0
 var mouse_sensitivity := 0.12
@@ -74,7 +82,7 @@ const DETAIL_PRESETS := [
 ## Wie im Original gehören die Menü-Optionen zum Profil (Options.bin im Profilordner); Setup-Werte
 ## (Auflösung, VSync, Kantenglättung …) sind rechnerweit wie beim Original-setup.exe.
 const PROFILE_KEYS := {
-	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models", "quality"],
+	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models", "quality", "view_mode"],
 	"audio": ["master_volume", "music_volume", "sfx_volume", "speech_volume"],
 	"controls": ["mouse_sensitivity", "invert_y"],
 	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"],
@@ -148,6 +156,8 @@ func _ready() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--fps"):
 			show_fps = a != "--fps=0"                  # --fps[=1] (Kommandozeile, nicht gespeichert)
+		elif a.begins_with("--view_mode="):
+			view_mode = int(a.get_slice("=", 1))       # B-041 (Tests/Bilder), nicht gespeichert
 		elif a.begins_with("--language="):
 			language = a.get_slice("=", 1)             # Kommandozeile (Tests), nicht gespeichert
 	if available_languages().find(language) < 0:
@@ -167,7 +177,7 @@ func load_settings() -> void:
 func load_from_config(cfg: ConfigFile) -> void:
 	_load_key(cfg, "display", "resolution")
 	_load_key(cfg, "display", "fullscreen")
-	for k in ["quality", "render_scale", "fov", "gamma", "shadows"]:
+	for k in ["quality", "render_scale", "fov", "gamma", "shadows", "view_mode"]:
 		_load_key(cfg, "graphics", k)
 	for k in ["mouse_sensitivity", "invert_y"]:
 		_load_key(cfg, "controls", k)
@@ -285,6 +295,7 @@ func save_settings() -> void:
 	if _cfg.has_section_key("display", "vsync"):
 		_cfg.erase_section_key("display", "vsync")   # F-017: Altfeld nicht wieder schreiben
 	_cfg.set_value("graphics", "quality", quality)
+	_cfg.set_value("graphics", "view_mode", view_mode)
 	_cfg.set_value("graphics", "render_scale", render_scale)
 	_cfg.set_value("graphics", "fov", fov)
 	_cfg.set_value("controls", "mouse_sensitivity", mouse_sensitivity)
@@ -541,7 +552,8 @@ func apply_to_world(env: Environment, sun: DirectionalLight3D) -> void:
 		env.sdfgi_cascades = 6 if q >= 4 else 4
 		env.ssr_enabled = q >= 4
 		env.glow_enabled = q >= 1
-		env.volumetric_fog_enabled = q >= 2
+		# B-041: Originalmissionen tragen Meta „b041_no_volfog“ (Volumennebel ist künstlicher Zusatznebel)
+		env.volumetric_fog_enabled = q >= 2 and not env.has_meta("b041_no_volfog")
 	var rs_q: int = [0, 1, 2, 2, 3][q]    # RenderingServer-Qualitätsstufen (sehr niedrig … hoch/ultra)
 	RenderingServer.environment_set_ssao_quality([RenderingServer.ENV_SSAO_QUALITY_VERY_LOW,
 		RenderingServer.ENV_SSAO_QUALITY_LOW, RenderingServer.ENV_SSAO_QUALITY_MEDIUM,
@@ -558,6 +570,7 @@ func apply_to_world(env: Environment, sun: DirectionalLight3D) -> void:
 	var vp := get_viewport()
 	vp.positional_shadow_atlas_size = [2048, 2048, 4096, 4096, 8192][q]
 	if high_models:
-		vp.mesh_lod_threshold = 0.0 if q >= 2 else 1.0
+		# B-041: Sichtweite NEU nutzt die automatische Mesh-LOD in der Ferne (Schwelle 1 px = kaum sichtbar)
+		vp.mesh_lod_threshold = 0.0 if q >= 2 and not preload("res://src/world/view_distance.gd").is_new() else 1.0
 	_apply_aa(vp)
 	vp.scaling_3d_mode = _scaling_mode(vp.scaling_3d_scale)

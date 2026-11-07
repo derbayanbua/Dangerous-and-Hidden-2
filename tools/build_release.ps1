@@ -19,6 +19,9 @@ if (-not $Out) { $Out = "$proj\build\release\DangerousHidden2_v$version" }
 "== Dangerous and Hidden 2 – Release-Build v$version -> $Out"
 
 if (-not (Test-Path "$proj\orig_cache\textures")) { throw "orig_cache fehlt – erst die Originaldaten konvertieren (tools\convert_all.ps1)." }
+# Fehlerhafte Sammelordner (z. B. „arctic1,arctic2,…“ aus einem als ein String übergebenen Missions-Array) nicht mitspiegeln
+$bad = @(Get-ChildItem -LiteralPath "$proj\orig_cache" -Directory | Where-Object { $_.Name -match '[,;]' })
+if ($bad) { throw "orig_cache enthält fehlerhafte Ordner: $($bad.Name -join ' | ') – mit rd /s /q `"\\?\<Pfad>`" löschen." }
 
 # 1) Import + Skriptprüfung (unter der Test-Sperre der Agenten)
 $lock = "$proj\test_output\.godot_lock"

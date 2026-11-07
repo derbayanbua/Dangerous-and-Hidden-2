@@ -385,11 +385,16 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			return null
 		# --- Bereiche / Abfragen ---
 		"_PLAYERINRANGE":
-			var r := float(vm.value(args[0]))
+			# B-036b [B] hd2.exe 0x41E3F0 Fall 0 (0x41F0A4/0x41F1D8): Einzelspieler zählt ALLE lebenden Soldaten der
+			# Spielerliste (Spiel+0x1C, dieselbe Liste wie _AllPlayersDead/_GetDistToActivePlayer = Trupp), nicht nur den
+			# aktiven. Rückgabe = ANZAHL mit d² < r² (r ganzzahlig, Literale sind beim Kompilieren __ftol), nicht 0/1 –
+			# Skripte wie czech1 cuttrebissky „_PlayerInRange(7)>1“ bzw. „==1“ (alps2/czech3) hängen davon ab.
+			var r := float(int(vm.value(args[0])))
+			var cnt := 0
 			for p in _players():
-				if p.global_position.distance_to(_pos(vm.me)) <= r:
-					return 1
-			return 0
+				if p.global_position.distance_squared_to(_pos(vm.me)) < r * r:
+					cnt += 1
+			return cnt
 		"_ALLPLAYERSINRANGE":
 			var r2 := float(vm.value(args[0]))
 			var ps := _players()
@@ -845,6 +850,9 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			if b11 and victim:
 				b11.script_attack(victim)
 			elif victim and victim.alive and (not (vm.me is Soldier) or victim == vm.me):
+				# B-036b: Skripttod – alten Schützen nicht stehen lassen (a3 r_ar3_kill_player.scr tötete sas_7, Bericht nannte
+				# fälschlich den letzten Kameraden-Treffer „durch sas_2“ als Ursache)
+				victim.last_attacker = null
 				victim.die(null)     # aus einem Objekt-/Dummy-Skript (z. B. AFRICA1 Flugzeug): Akteur stirbt
 			return null
 		# --- Zwischensequenzen ---
@@ -2261,7 +2269,7 @@ func _ready() -> void:
 	anim.name = "LsAnim"
 	add_child(anim)
 	_cut_cam = Camera3D.new()
-	_cut_cam.far = 3000.0
+	_cut_cam.far = maxf(3000.0, preload("res://src/world/view_distance.gd").camera_far())   # B-041
 	add_child(_cut_cam)
 	var layer := CanvasLayer.new()
 	layer.layer = 30
