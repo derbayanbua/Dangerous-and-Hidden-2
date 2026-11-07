@@ -42,6 +42,21 @@ var ignore_circumvention := false
 var _human_tries := 0
 var _climb_retry := 0.0
 var _climb_dir := Vector3.ZERO
+## B-044 [E]: Wegfolge-Korrektur (nur EnemyBrain schaltet sie ein). NavigationAgent3D schaltet den nächsten Pfadpunkt erst
+## weiter, wenn der 3D-Abstand < path_desired_distance ist; liegt der Fußpunkt des Soldaten 0,3–0,6 m über/unter der
+## Netzfläche, wird das nie erreicht → der Soldat kreist mit Laufabsicht um den Punkt (gemessen: v 0,1–0,8 m/s, Abstand
+## zum Punkt konstant 0,6–0,7 m, Festhäng-Erkennung greift nicht, HUMAN_Move wartet bis zum Zeitlimit).
+## Abhilfe: Lenkpunkt = erster Pfadpunkt ab dem aktuellen Index mit waagrechtem Abstand ≥ STEER_SKIP (ohne Sprung über
+## Höhenwechsel > 0,8 m = Leiter/Kletterstelle), dazu Fortschrittswächter: kommt der Soldat dem Laufziel PROGRESS_S lang
+## nicht um PROGRESS_MIN näher, neuer Pfad, beim zweiten Mal Abbruch (wie die bisherige Festhäng-Erkennung).
+var path_follow_fix := false
+const STEER_SKIP := 0.45
+const PROGRESS_S := 6.0
+const PROGRESS_MIN := 0.5
+var _prog_best := INF
+var _prog_t := 0.0
+var _prog_repaths := 0
+var progress_aborts := 0          ## Zähler (Test/Messung)
 
 
 func setup(s: Soldier) -> void:
@@ -98,6 +113,10 @@ func move_to(pos: Vector3, mode: int = Soldier.MoveMode.WALK) -> void:
 	soldier.move_mode = mode
 	if _move_target.is_finite() and _move_target.distance_to(pos) < 0.5 and _repath > 0.0:
 		return
+	if not _move_target.is_finite() or _move_target.distance_to(pos) > 1.0:
+		_prog_best = INF
+		_prog_t = 0.0
+		_prog_repaths = 0
 	_move_target = pos
 	agent.target_position = pos
 	_repath = 0.5
@@ -132,6 +151,10 @@ func update_movement(delta: float, face_move := true) -> void:
 		stop_moving()
 		return
 	var next := agent.get_next_path_position()
+	if path_follow_fix:
+		next = _steer_point(next)
+		if _progress_check(delta):
+			return
 	var dir := next - soldier.global_position
 	dir.y = 0
 	if direct_when_off_mesh:
@@ -198,6 +221,47 @@ func update_movement(delta: float, face_move := true) -> void:
 	if _stuck_time > 2.5 and not (ignore_circumvention and _stuck_time < 10.0 and _blocked_by_human() != null):
 		_stuck_time = 0.0
 		stop_moving()
+
+
+## B-044: Lenkpunkt mit waagrechtem Abstand (siehe path_follow_fix).
+func _steer_point(next: Vector3) -> Vector3:
+	var path := agent.get_current_navigation_path()
+	var i := agent.get_current_navigation_path_index()
+	if i < 0 or i >= path.size():
+		return next
+	var p := soldier.global_position
+	while i + 1 < path.size() and Vector2(path[i].x - p.x, path[i].z - p.z).length() < STEER_SKIP \
+			and absf(path[i + 1].y - path[i].y) < 0.8:
+		i += 1
+	return path[i]
+
+
+## B-044: Fortschrittswächter; true = Bewegung abgebrochen.
+func _progress_check(delta: float) -> bool:
+	if soldier.is_climbing() or _climb_retry > 0.0:
+		_prog_t = 0.0
+		return false
+	var d := Vector2(_move_target.x - soldier.global_position.x, _move_target.z - soldier.global_position.z).length()
+	if d < _prog_best - PROGRESS_MIN:
+		_prog_best = d
+		_prog_t = 0.0
+		return false
+	_prog_t += delta
+	if _prog_t < PROGRESS_S:
+		return false
+	if ignore_circumvention and _blocked_by_human() != null and _prog_t < 10.0:
+		return false
+	_prog_t = 0.0
+	_prog_best = d
+	if _prog_repaths < 1:
+		_prog_repaths += 1
+		agent.target_position = _move_target + Vector3(0.01, 0.0, 0.0)    # neuen Pfad ab der aktuellen Lage erzwingen
+		_detour_sign = -_detour_sign
+		_detour = 1.0
+		return false
+	progress_aborts += 1
+	stop_moving()
+	return true
 
 
 func _end_pass_through(s: Soldier, other: Soldier) -> void:
@@ -293,8 +357,55 @@ func engage(target: Soldier, delta: float) -> bool:
 	err += dist / 80.0
 	soldier.extra_spread = err
 	var can_shoot := _track_time >= reaction_time and facing_error(aim_p) < 0.12
+	if can_shoot and check_fire_line and friend_in_fire_line(aim_p):
+		can_shoot = false
 	_handle_bursts(w, can_shoot, delta, dist)
 	return true
+
+
+## B-036c: Schusslinienprüfung gegen eigene Leute. Original [B Daten]: Spielerereignis „FRIEND_IN_FIRE_LINE(_S)“
+## (Namentabelle hd2.exe 0x83CDDC, Eintrag bei 0x83CF98) mit eigenen Sprachsätzen „Friendly In Line Of Fire“
+## (speech.txt 91300177 …) – die Trupp-KI hält also das Feuer, wenn ein Kamerad in der Schusslinie steht, und meldet
+## es. Geometrie (Abstand zur Linie, Prüfhöhen, Takt) im Original nicht dekodiert [E]: lebender Soldat derselben Seite
+## mit Körperachse (0,3/0,9/1,5 m) < FIRE_LINE_R zur Linie Auge → Zielpunkt, zwischen 0,6 m und Zielabstand − 0,8 m.
+const FIRE_LINE_R := 0.55
+const EV_FRIEND_IN_FIRE_LINE := 112      ## Ereignisnummer analog EV_FRIENDLY_FIRE 102 (+10 Einträge) [P]
+var check_fire_line := false     ## SquadBrain schaltet ein (Ereignis „Plr event“ = Spielerseite)
+var fire_line_blocks := 0                ## Zähler (Test/Messung)
+var _fl_t := 0.0
+var _fl_blocked := false
+
+
+func friend_in_fire_line(aim_p: Vector3) -> bool:
+	var now := Time.get_ticks_msec() / 1000.0
+	if now - _fl_t < 0.15:
+		return _fl_blocked
+	_fl_t = now
+	_fl_blocked = false
+	var a := soldier.eye_position()
+	var ab := aim_p - a
+	var dl := ab.length()
+	if dl < 1.0:
+		return false
+	var dir := ab / dl
+	for n in soldier.get_tree().get_nodes_in_group("team_%d" % soldier.team):
+		var f := n as Soldier
+		if f == null or f == soldier or not f.alive:
+			continue
+		var fp := f.global_position
+		if (fp - a).length() > dl + 1.0:
+			continue
+		for h: float in [0.3, 0.9, 1.5]:
+			var p := fp + Vector3.UP * h
+			var t := (p - a).dot(dir)
+			if t < 0.6 or t > dl - 0.8:
+				continue
+			if (a + dir * t).distance_to(p) < FIRE_LINE_R:
+				_fl_blocked = true
+				fire_line_blocks += 1
+				OrigAudio.speak_event(soldier, EV_FRIEND_IN_FIRE_LINE, 8.0)
+				return true
+	return false
 
 
 func _handle_bursts(w: Weapon, can_shoot: bool, delta: float, dist: float) -> void:

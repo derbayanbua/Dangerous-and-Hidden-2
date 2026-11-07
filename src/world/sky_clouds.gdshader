@@ -23,6 +23,10 @@ uniform vec3 cloud_dark : source_color = vec3(0.45, 0.48, 0.55);
 uniform int octaves = 5;
 uniform int light_steps = 2;
 uniform float night = 0.0;
+// B-041: Horizontdunst (Farbe = Nebel-/Missionsfarbe), Sterne bei klarer Nacht
+uniform vec3 haze_color : source_color = vec3(0.7, 0.72, 0.75);
+uniform float haze = 0.3;
+uniform float stars = 0.0;
 
 float hash(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
@@ -115,6 +119,22 @@ void sky() {
 			float fade = smoothstep(0.0, 0.18, dir.y);   // zum Horizont ausblenden (Nebel/Ferne)
 			col = mix(col, lit * sky_energy, d * fade);
 		}
+		// Sterne (nur klare Nacht, über dem Dunst)
+		if (stars > 0.5 && !AT_CUBEMAP_PASS) {
+			vec2 sp = dir.xz / (dir.y + 0.35) * 220.0;
+			float s = hash(floor(sp));
+			float tw = 0.6 + 0.4 * sin(TIME * 2.0 + s * 40.0);
+			col += vec3(step(0.9965, s) * tw * 0.8) * smoothstep(0.05, 0.3, dir.y) * night;
+		}
 	}
+	// B-041: Dunstband am Horizont (Luftperspektive): Himmel und Bodenhälfte laufen in die Dunstfarbe; zur Sonne hin
+	// aufgehellt (Vorwärtsstreuung, abends warm). Lässt den Kartenrand ohne Nebel nicht hart vor dem Himmel enden.
+	float hb = exp(-abs(dir.y) * 9.0) * haze;
+	vec3 hz = haze_color * sky_energy;
+	if (LIGHT0_ENABLED) {
+		float fw = pow(max(sun_dot, 0.0), 6.0) * (1.0 - night);
+		hz += LIGHT0_COLOR * LIGHT0_ENERGY * fw * 0.35 * clamp(1.0 - LIGHT0_DIRECTION.y * 2.0, 0.3, 1.0);
+	}
+	col = mix(col, hz, clamp(hb, 0.0, 1.0));
 	COLOR = col;
 }

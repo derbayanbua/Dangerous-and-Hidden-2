@@ -17,7 +17,11 @@ enum ROE { FIRE_AT_WILL, HOLD_FIRE, ON_MY_LEAD }
 const ORDER_NAMES := ["Folgen", "Halten", "Bewegen", "Deckung"]
 
 var squad: SquadManager
-var order: int = Order.FOLLOW
+## B-047: Standard HALTEN – zu Missionsbeginn bleiben Kameraden stehen, bis „Folgen“ befohlen wird. Original: bei
+## Truppbildung wird keine Folge-Bindung (Soldat +0x2CC, 0x5A91A0) gesetzt; Aufrufer sind nur Befehle („Folgt mir“/
+## „Neu sammeln“), Spielstand-Laden (0x594DD0, Block 8000) und Teamwechsel; Soldatenwechsel löst sie (0x4593E0) [P].
+var order: int = Order.HOLD
+var _hold_init := false          ## Startplatz erst im ersten Takt übernehmen (Akteure werden nach setup platziert)
 var roe: int = ROE.FIRE_AT_WILL
 var hold_pos := Vector3.ZERO
 var hold_yaw := 0.0
@@ -45,6 +49,7 @@ func setup(s: Soldier) -> void:
 	super.setup(s)
 	reaction_time = 0.5
 	accuracy_skill = 0.6
+	check_fire_line = true          # B-036c: kein Feuer durch Kameraden (FRIEND_IN_FIRE_LINE)
 	direct_when_off_mesh = true     # Befehle auch abseits des Navigationsnetzes ausführen (Ersatz, kein Originalverhalten)
 	if Game.cli.has("no_direct_off_mesh"):    # B-010b Gegenprobe (test_a1/Löser a1 ohne Schalter)
 		direct_when_off_mesh = false
@@ -56,6 +61,7 @@ func setup(s: Soldier) -> void:
 
 func set_order(o: int, pos := Vector3.ZERO, quiet_mode := false) -> void:
 	order = o
+	_hold_init = true
 	_cover = Vector3.INF
 	quiet = quiet_mode
 	strict_hold = false
@@ -131,6 +137,10 @@ func clear_tasks() -> void:
 func _physics_process(delta: float) -> void:
 	if not enabled or soldier == null or not soldier.alive or soldier.is_player_controlled:
 		return
+	if not _hold_init:
+		_hold_init = true
+		hold_pos = soldier.global_position
+		hold_yaw = soldier.look_yaw
 	_under_fire = maxf(_under_fire - delta, 0.0)
 	_report_cooldown = maxf(_report_cooldown - delta, 0.0)
 	perception.forget_dead()
@@ -512,7 +522,8 @@ func _do_suppress(delta: float) -> void:
 		if not w.is_reloading():
 			soldier.reload()
 		return
-	_handle_bursts(w, facing_error(suppress_point) < 0.12, delta, distance_to(suppress_point))
+	_handle_bursts(w, facing_error(suppress_point) < 0.12 and not friend_in_fire_line(suppress_point), delta,
+			distance_to(suppress_point))
 
 
 ## Aktion an einem Objekt: hingehen (leise bei stillem Befehl), dann benutzen bzw. Erste Hilfe leisten.
@@ -705,6 +716,7 @@ func serialize() -> Dictionary:
 
 func deserialize(d: Dictionary) -> void:
 	order = int(d.get("order", Order.FOLLOW))
+	_hold_init = true
 	roe = int(d.get("roe", ROE.FIRE_AT_WILL))
 	quiet = bool(d.get("quiet", false))
 	strict_hold = bool(d.get("strict", false))

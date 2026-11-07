@@ -28,6 +28,7 @@ $suites = @(
   @{ name = "test_ai";       args = "--headless -- --mission=a1_blizzard --autoplay=test_ai" },
   @{ name = "test_ai_fsm";   args = "--headless -- --mission=a1_blizzard --autoplay=test_ai --phase=fsm" },
   @{ name = "test_ai_ap6";   args = "--headless -- --mission=a1_blizzard --autoplay=test_ai --phase=ap6" },
+  @{ name = "test_b044";     args = "--headless -- --mission=a1_blizzard --autoplay=test_b044" },   # B-044 Gegner-Stillstand
   @{ name = "test_orig_save"; args = "--headless -- --mission=a1_blizzard --autoplay=test_orig_save" },
   @{ name = "test_orig_save_a2"; args = "--headless -- --mission=a2_erkundung --autoplay=test_orig_save --phase=a2" },
   @{ name = "test_orig_cmds"; args = "--headless -- --mission=a1_blizzard --autoplay=test_orig_cmds" },
@@ -59,6 +60,7 @@ $suites = @(
   @{ name = "test_af6";      args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" },
   @{ name = "test_af_air";   args = "--headless -- --mission=af2_flugschau --autoplay=test_af_air" },
   @{ name = "test_items";    args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_items" },
+  @{ name = "test_vehicle_types"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_vehicle_types"; timeout = 2400 },
   @{ name = "test_tank";     args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_tank" },
   @{ name = "test_water";    args = "--headless -- --mission=nw1_dampfleitung --autoplay=test_water" },
   @{ name = "test_orig_vehicles_cz1"; args = "--headless -- --mission=cz1_eintrittsgeld --autoplay=test_orig_vehicles" },
@@ -72,6 +74,9 @@ $suites = @(
   @{ name = "test_weapons_orig"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_weapons_orig" },
   @{ name = "test_animations"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_animations" },
   @{ name = "test_ragdoll";  args = "--headless -- --mission=m01_funkfeuer --autoplay=test_ragdoll" },
+  @{ name = "test_b045";     args = "--headless -- --mission=m01_funkfeuer --autoplay=test_b045" },
+  @{ name = "test_b041";     args = "--headless -- --mission=a2_erkundung --autoplay=test_b041 --phase=classic" },
+  @{ name = "test_b041_neu"; args = "--headless -- --mission=a2_erkundung --autoplay=test_b041 --phase=neu --view_mode=1" },
   @{ name = "test_tools_mines"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_tools_mines" },
   @{ name = "test_tools_mines_mp"; args = "--headless -- --autoplay=test_tools_mines --phase=mp"; mp = $true },
   # test_inventory: sp + mp (zweiprozessig mit test_inventory_client)
@@ -79,7 +84,8 @@ $suites = @(
   @{ name = "test_net";      args = "--headless -- --autoplay=test_net"; mp = $true },
   @{ name = "test_mp_modes"; args = "--headless -- --autoplay=test_mp_modes"; mp = $true },
   # B-009, MP-Bots zurückgestellt (Auftraggeber 24.10.2026): test_bots vorerst nicht Teil der Gesamtsuite
-  # @{ name = "test_bots";     args = "--headless -- --autoplay=test_bots"; mp = $true },
+  # 06.11.2026 (abschluss_099): im -Full-Lauf wieder dabei – BotGoals/BotBrain-Kartenhinweise prüfen
+@{ name = "test_bots";     args = "--headless -- --autoplay=test_bots"; mp = $true; group = "full"; timeout = 2400 },   # nav-Phase über alle MP-Karten > 15 min
   @{ name = "test_lan_e2e";  args = "--headless -- --autoplay=test_lan_e2e --profiles_dir=user://test_lan_host --noimport"; mp = $true },
   @{ name = "test_mp_features"; args = "--headless -- --autoplay=test_mp_features --profiles_dir=user://test_mp_features --noimport"; mp = $true },
   @{ name = "test_mp_weapons"; args = "--headless -- --autoplay=test_mp_weapons --phase=all"; mp = $true },

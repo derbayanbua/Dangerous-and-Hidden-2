@@ -137,7 +137,7 @@ func _test_map(id: String) -> void:
 				if _reachable(nav_map, snapped[best], snapped[j]):
 					reach += 1
 				elif notes.size() < 10:
-					var pth := NavigationServer3D.map_get_path(nav_map, snapped[best], snapped[j], true)
+					var pth := _path(nav_map, snapped[best], snapped[j])
 					notes.append("%s %s nicht erreichbar (von %s, Pfad endet %s)" % [pts[j][0], _v(pts[j][1]),
 						_v(snapped[best]), _v(pth[pth.size() - 1]) if pth.size() > 0 else "-"])
 	var n_pts := pts.size()
@@ -263,8 +263,22 @@ static func _fill_poly(img: Image, p: PackedVector2Array, c: Color) -> void:
 
 
 func _reachable(nav_map: RID, a: Vector3, b: Vector3) -> bool:
-	var path := NavigationServer3D.map_get_path(nav_map, a, b, true)
+	var path := _path(nav_map, a, b)
 	return path.size() > 0 and _near(path[path.size() - 1], b, REACH, 1.0)
+
+
+## B-010b: map_get_path bricht nach 4096 durchsuchten Polygonen ab (Godot-Standard path_search_max_polygons) und
+## liefert dann den nächsten erreichten Punkt → lange Wege über feine Netze galten fälschlich als „nicht erreichbar“.
+## Messung daher ohne Grenze; `--nav_max_polys=4096` = alter Stand.
+func _path(nav_map: RID, a: Vector3, b: Vector3) -> PackedVector3Array:
+	var q := NavigationPathQueryParameters3D.new()
+	q.map = nav_map
+	q.start_position = a
+	q.target_position = b
+	q.path_search_max_polygons = int(Game.cli.get("nav_max_polys", "0"))
+	var r := NavigationPathQueryResult3D.new()
+	NavigationServer3D.query_path(q, r)
+	return r.path
 
 
 ## Zonenmittelpunkt kann in der Luft liegen (Kugelzone): Boden darunter

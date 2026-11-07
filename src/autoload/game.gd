@@ -147,7 +147,8 @@ func _register_mp_maps(texts) -> void:
 	for e in [["a1_blizzard", "ARCTIC1", 0], ["a2_erkundung", "ARCTIC2", 1], ["a3_rendezvous", "ARCTIC3", 2]] + ORIG_CAMPAIGN:
 		var mid: String = "mp_arena_" + String(e[0])
 		MISSIONS[mid] = {"title": "Arena: " + String(MISSIONS.get(e[0], {}).get("title", e[1])),
-			"script": "res://src/missions/mp_arena.gd", "orig": e[1], "k": e[2], "briefing": ""}
+			"script": "res://src/missions/mp_arena.gd", "orig": e[1], "k": e[2], "briefing": "",
+			"sp_mission": String(e[0])}   # B-046: Coop spiegelt diese SP-Mission 1:1 (gleicher Ordner/k)
 		MP_MAPS.append(mid)
 
 

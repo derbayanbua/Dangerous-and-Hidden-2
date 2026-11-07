@@ -245,17 +245,43 @@ func _orig_loadout(nm: String) -> Array:
 		if wname.contains(pair[0]):
 			primary = pair[1]
 			break
+	# B-044b: Waffen ohne Namenseintrag (japanische Arisaka 12/Typ 94 3, BAR, ZB 26, Mosin, PPSch, PPS, Tokarev,
+	# Panzerfaust 60) über die items.dat-Nummer (actors.bin/items.dat „weapon_id“) aus der Originaltabelle [B Daten].
+	# Vorher blieben sie unbewaffnet (BURMA1 39/39, BURMA2 62/63 Gegner) -> Panikflucht.
+	var launcher := ""
+	if primary == "" and e.get("weapon_id") != null:
+		var wd := WeaponDB.from_orig(int(e["weapon_id"]))
+		if wd:
+			if wd.slot == WeaponData.Slot.SIDEARM:
+				primary = "p08" if wd.id == &"p08" else String(wd.id)
+				return ["", primary, _orig_nade(e)]
+			elif wd.slot == WeaponData.Slot.LAUNCHER:
+				launcher = String(wd.id)
+			elif wd.slot == WeaponData.Slot.PRIMARY:
+				primary = String(wd.id)
 	if primary == "" and e.is_empty():
 		primary = "kar98k"          # ohne Parameterdatei: Standardwaffe der Wehrmacht
-	var nade := ""
-	for it in e.get("inventory", []):
-		var n := String(it.get("name", "")).to_lower()
-		if n.contains("granat") or n.contains("m24") or n.contains("stiel"):
-			nade = "m24"
+	var nade := _orig_nade(e)
 	# Pistole als Hauptwaffe: in Slot 1 (Seitenwaffe)
 	if primary == "p08":
 		return ["", "p08", nade]
+	if launcher != "":
+		return [primary, "", nade, launcher]
 	return [primary, "", nade]
+
+
+## Handgranate im items.dat-Inventar: Stielhandgranate (Name) oder Granaten-Nummer 60–63 (z. B. japanische Typ 97 = 63).
+func _orig_nade(e: Dictionary) -> String:
+	for it in e.get("inventory", []):
+		var n := String(it.get("name", "")).to_lower()
+		if n.contains("granat") or n.contains("m24") or n.contains("stiel"):
+			return "m24"
+		var id := int(it.get("item", -1))
+		if String(it.get("kind", "")) == "weapon" and id in [60, 61, 62, 63]:
+			var g := WeaponDB.from_orig(id)
+			if g and g.slot == WeaponData.Slot.GRENADE:
+				return String(g.id)
+	return ""
 
 
 ## items.dat-Inventar des Akteurs: Tasche/Rucksack (Slots 1/5, ohne Waffen/Munition) als Leicheninhalt,

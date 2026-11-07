@@ -59,6 +59,13 @@ var _used := {}
 var _slot_t := 0.0
 var _slot_pos := Vector3.INF
 var _hold_t := 0.0
+var _hold_pick_t := -100.0       ## Zeitpunkt der letzten Halteplatzwahl (Mindestabstand bei Ereignissen)
+var _hold_threat := Vector3.INF  ## Bedrohungslage bei der letzten Wahl
+var _hold_owner := -99           ## Besitzer der Zielzone bei der letzten Wahl
+var _emp = null                  ## Waffenstellung aus Kartenhinweis (OrigEmplacement; Platz beansprucht/besetzt)
+var _emp_t := 0.0
+var _emp_cool := -100.0          ## nach dem Verlassen erst ab dieser Zeit wieder besetzen
+var emp_mounts := 0              ## Statistik: Stellungen besetzt
 var _spot := Vector3.INF
 var _spot_t := 0.0
 var _shots_here := 0
@@ -172,6 +179,15 @@ func _physics_process(delta: float) -> void:
 	super._physics_process(delta)
 	if not enabled or soldier == null or not soldier.alive or suspended:
 		return
+	if _emp != null and soldier.mounted != null and soldier.mounted == _emp:
+		# selbst besetzte Kartenstellung: nach Ruhe bzw. spätestens nach 120 s wieder verlassen (Ziel weiterverfolgen)
+		_emp_t += delta
+		if (_emp_t > 45.0 and perception.best_target() == null) or _emp_t > 120.0:
+			_emp.dismount()
+			_emp = null
+			_emp_cool = now() + 60.0
+			hold_pos = Vector3.INF
+			_hold_t = 0.0
 	if soldier.vehicle != null or soldier.mounted != null:
 		return
 	var wants := has_move_target() and not soldier.is_climbing() and soldier.heal_time_left <= 0.0
@@ -221,6 +237,19 @@ func update_movement(delta: float, face_move := true) -> void:
 		_turn_towards_dir(dir, delta, 6.0)
 
 
+var _bad_holds: Array = []      ## [[Halteplatz, gültig bis]] – nach Festhängen aufgegebene Halteplätze
+
+
+func _near_bad_hold(p: Vector3) -> bool:
+	if not p.is_finite():
+		return false
+	var t := now()
+	for e in _bad_holds:
+		if float(e[1]) > t and BotNav.flat(e[0], p) < 3.0:
+			return true
+	return false
+
+
 ## Festhängen nicht behebbar: Ziel (Führer) bzw. Platz (Mitglied) bzw. Deckung (Gefecht) aufgeben
 func _give_up() -> void:
 	if state == State.COMBAT:
@@ -230,6 +259,10 @@ func _give_up() -> void:
 		_blacklist[_goal_key()] = now() + 45.0
 		_reselect_goal(true)
 	else:
+		if hold_pos.is_finite():
+			_bad_holds.append([hold_pos, now() + 45.0])
+			if _bad_holds.size() > 6:
+				_bad_holds.pop_front()
 		_slot_pos = Vector3.INF
 		_slot_t = 0.0
 		hold_pos = Vector3.INF
@@ -575,22 +608,53 @@ func _hold_in_area(delta: float) -> void:
 		_goal_t = minf(_goal_t, 3.0)       # kurz umsehen, dann weitersuchen
 		return
 	_hold_t -= delta
+	# Ereignisse (nur auf Karten mit Hinweisen): neue Bedrohungsrichtung oder Besitzwechsel der Zielzone → neu wählen
+	# ohne Kartenhinweise wie vor bot_hints: Bedrohung erst bei der Wahl ermitteln (nicht jedes Physikbild)
+	var hints := BotGoals.map_has_hints()
+	var gthr := _group_threat() if hints or not hold_pos.is_finite() or _hold_t <= 0.0 else Vector3.INF
+	var zown := int(Net.zone_owner[goal_zone]) if goal_zone >= 0 and goal_zone < Net.zone_owner.size() else -1
+	if hints and now() - _hold_pick_t > 4.0 and hold_pos.is_finite() and _emp == null \
+			and ((gthr.is_finite() and (not _hold_threat.is_finite() or BotNav.flat(gthr, _hold_threat) > 15.0)) or zown != _hold_owner):
+		_hold_t = 0.0
 	if not hold_pos.is_finite() or _hold_t <= 0.0 or (rmin > 3.0 and BotNav.flat(hold_pos, center) < rmin - 0.5):
 		_hold_t = randf_range(20.0, 35.0)
-		var threat := _group_threat()
+		_hold_pick_t = now()
+		if not hints:
+			gthr = _group_threat()
+		_hold_threat = gthr
+		_hold_owner = zown
+		var threat := gthr
 		if not threat.is_finite() and m:
 			threat = BotGoals.threat_dir_point(self, m, center)
 		var h := BotGoals.hold_spot(self, center, z, rmin, rmax, threat)
 		if not h.is_finite():
 			h = BotSquad.spread_point(self, BotNav.closest(soldier, center), BotSquad.MIN_SPACING, 10.0)
+		if _near_bad_hold(h):
+			# derselbe Platz war eben physisch nicht erreichbar (Festhängen → _give_up): hier halten statt erneut anlaufen
+			h = BotNav.closest(soldier, soldier.global_position)
+		_emp = null
+		if not is_leader() and now() > _emp_cool:
+			# Mitglieder besetzen eine freie Waffenstellung der Karte (Flak/MG) nahe dem Ziel
+			var e = BotGoals.map_emplacement(self, center, rmax + 10.0)
+			if e:
+				_emp = e
+				h = BotNav.closest(soldier, e.gunner_spot())
 		hold_pos = h
 		BotSquad.claim(self, hold_pos)
+	if _emp != null and is_instance_valid(_emp) and distance_to(hold_pos) < 2.0 and _emp.can_ai_mount(soldier):
+		stop_moving()
+		_emp.mount(soldier)
+		if soldier.mounted == _emp:
+			_emp_t = 0.0
+			emp_mounts += 1
+			return
+		_emp = null
 	if distance_to(hold_pos) > 1.2:
 		soldier.stance_request = Soldier.Stance.STAND
 		move_to(hold_pos, Soldier.MoveMode.JOG)
 	else:
 		stop_moving()
-		soldier.stance_request = Soldier.Stance.CROUCH
+		soldier.stance_request = BotGoals.spot_stance(hold_pos, Soldier.Stance.CROUCH)
 		var face := _group_threat()
 		if not face.is_finite() and m:
 			face = BotGoals.threat_dir_point(self, m, center)
@@ -626,7 +690,7 @@ func _camp(delta: float, rmin: float, rmax: float, high: bool) -> void:
 		move_to(_spot, Soldier.MoveMode.SNEAK if near else Soldier.MoveMode.JOG)
 	else:
 		stop_moving()
-		soldier.stance_request = Soldier.Stance.CROUCH
+		soldier.stance_request = BotGoals.spot_stance(_spot, Soldier.Stance.CROUCH)
 		var to := center - soldier.global_position
 		soldier.look_yaw = rotate_toward(soldier.look_yaw, atan2(-to.x, -to.z) + sin(_state_time * 0.3) * 0.5, delta * 1.5)
 

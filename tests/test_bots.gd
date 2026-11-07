@@ -226,7 +226,16 @@ func _phase_dm() -> void:
 			var bb := _brain(s)
 			print("BOT %s %s %s ziel %s %s" % [s.soldier_name, bb.state_name() if bb else "-", str(s.global_position.snapped(Vector3.ONE)),
 				bb.goal_kind if bb else "", str(bb.goal.snapped(Vector3.ONE)) if bb and bb.goal.is_finite() else "-"])
-	check(Ballistics.shots_fired > shots0, "KI-Soldaten schießen", str(Ballistics.shots_fired - shots0))
+	# Abschuss mit Messer/Granate vor dem ersten Schuss (Schleicher) ist ebenfalls Kampf – Ursache mit ausgeben
+	var causes := []
+	for e in Net.kill_feed:
+		causes.append("%s→%s:%s" % [e.get("kname", ""), e.get("vname", ""), str(e.get("cause", ""))])
+	var weapon_kill := false
+	for e in Net.kill_feed:
+		if not bool(e.get("suicide", false)) and str(e.get("cause", "")) not in ["", "fall"]:
+			weapon_kill = true
+	check(Ballistics.shots_fired > shots0 or weapon_kill, "KI-Soldaten kämpfen (Schüsse oder Waffenabschuss)",
+		"%d Schüsse, %s" % [Ballistics.shots_fired - shots0, str(causes)])
 	check(deaths >= 1, "Gefecht der KI-Soldaten mit Verlusten", "%d Tote nach %d s Spielzeit" % [deaths, t])
 	metrics.append("DM mp_arctic2_mp: %d Schüsse, %d Tote nach %d s" % [Ballistics.shots_fired - shots0, deaths, t])
 	await _leave()

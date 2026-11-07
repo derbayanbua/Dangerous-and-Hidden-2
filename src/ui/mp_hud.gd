@@ -475,7 +475,7 @@ func _set_spectating(on: bool) -> void:
 		if _spec_cam == null:
 			_spec_cam = Camera3D.new()
 			_spec_cam.name = "SpectatorCam"
-			_spec_cam.far = 1200.0
+			_spec_cam.far = preload("res://src/world/view_distance.gd").camera_far()   # B-041
 			m.add_child(_spec_cam)
 		var sp: Array = m.mp_spawns() if m and m.has_method("mp_spawns") else []
 		_spec_cam.global_position = (sp[0]["pos"] as Vector3) + Vector3.UP * 3.0 if not sp.is_empty() else Vector3(0, 5, 0)

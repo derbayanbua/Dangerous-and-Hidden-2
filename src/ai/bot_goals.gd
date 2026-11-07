@@ -337,6 +337,82 @@ static func hunt_point(b: Node, m: Node) -> Vector3:
 
 # --- Stellungen -------------------------------------------------------------------------------------
 
+const HINT_BONUS := 2.5          ## Vorzug ausgewiesener Kartenstellungen gegenüber Zufallspunkten
+static var use_map_hints := true  ## Messschalter (Tests: Vorher/Nachher); Karten ohne Hinweise unberührt
+
+const WALL_PENALTY := 2.0         ## Zufallshalteplatz < 0,45 m an einer Wand (nur Karten mit Hinweisen)
+
+
+static func map_has_hints() -> bool:
+	var m = Game.current_mission()
+	return use_map_hints and m != null and m.has_method("bot_hints")
+
+
+## Wand (Ebene 1) in Brusthöhe näher als d in einer von 8 Richtungen
+static func wall_close(space: PhysicsDirectSpaceState3D, p: Vector3, d: float) -> bool:
+	var o := p + Vector3.UP * 0.9
+	for k in 8:
+		var a := TAU * float(k) / 8.0
+		if not space.intersect_ray(PhysicsRayQueryParameters3D.create(o, o + Vector3(cos(a), 0, sin(a)) * d, 1)).is_empty():
+			return true
+	return false
+
+
+## Optionale Kartenhinweise: Mission.bot_hints(center, radius) -> [{pos, kind, stance, high?}]; ohne Methode leer
+static func map_hints(center: Vector3, radius: float) -> Array:
+	var m = Game.current_mission()
+	if not use_map_hints or m == null or not m.has_method("bot_hints"):
+		return []
+	return m.bot_hints(center, radius)
+
+
+## Freie Waffenstellung, die die Karte als Hinweis ausweist (Schlüssel "emplacement"); ohne Kartenhinweis nie
+## (Gegner/Bots besetzen Stellungen sonst nicht selbst). Nicht, wenn ein Kamerad dort schon Platz beansprucht.
+static func map_emplacement(b: Node, center: Vector3, radius: float) -> Node:
+	for h in map_hints(center, radius):
+		var e = h.get("emplacement")
+		if e == null or not is_instance_valid(e) or not e.has_method("can_ai_mount") or not e.can_ai_mount(b.soldier):
+			continue
+		if BotSquad.too_close(b, e.gunner_spot(), 2.0):
+			continue
+		return e
+	return null
+
+
+## Wegfolge der Karte (Graben, Flanke) zwischen from und to, wenn der Umweg über das Netz klein ist; sonst leer.
+## Optional über Mission.bot_route_via(from, to) -> [[Vector3, …], …]
+static func map_route(s: Soldier, from: Vector3, to: Vector3, direct_len: float) -> PackedVector3Array:
+	var m = Game.current_mission()
+	var best := PackedVector3Array()
+	if not use_map_hints or m == null or not m.has_method("bot_route_via"):
+		return best
+	var best_c := direct_len * 1.3 + 12.0
+	for seq in m.bot_route_via(from, to):
+		var a: Vector3 = seq[0]
+		var z: Vector3 = seq[seq.size() - 1]
+		if BotNav.flat(a, from) < 6.0 or BotNav.flat(z, to) < 6.0:
+			continue
+		var c1 := BotNav.path_cost(s, from, a)
+		if c1 >= best_c:
+			continue
+		var inner := 0.0
+		for i in range(1, seq.size()):
+			inner += (seq[i] as Vector3).distance_to(seq[i - 1])
+		var c := c1 + inner + BotNav.path_cost(s, z, to)
+		if c < best_c:
+			best_c = c
+			best = PackedVector3Array(seq)
+	return best
+
+
+## Haltung an einer ausgewiesenen Kartenstellung (Mission.bot_hint_stance), sonst fallback
+static func spot_stance(pos: Vector3, fallback: int) -> int:
+	var m = Game.current_mission()
+	if not use_map_hints or m == null or not m.has_method("bot_hint_stance") or not pos.is_finite():
+		return fallback
+	var st: int = m.bot_hint_stance(pos)
+	return st if st >= 0 else fallback
+
 ## Halteplatz nahe center (in der Zone z, falls angegeben): gedeckt gegen threat, Abstand zu Kameraden, erreichbar
 static func hold_spot(b: Node, center: Vector3, z: Dictionary, rmin: float, rmax: float, threat: Vector3) -> Vector3:
 	var s: Soldier = b.soldier
@@ -352,6 +428,21 @@ static func hold_spot(b: Node, center: Vector3, z: Dictionary, rmin: float, rmax
 		if BotSquad.too_close(b, q, BotSquad.MIN_SPACING + 1.0):
 			continue
 		var sc := BotNav.cover_score(space, q, teye) - q.distance_to(s.global_position) * 0.03
+		if map_has_hints() and wall_close(space, q, 0.45):
+			sc -= WALL_PENALTY            # nur auf Karten mit Hinweisen: nicht ohne Grund an die Wand drücken
+		if sc > best_s:
+			best_s = sc
+			best = q
+	# optionale Kartenhinweise (Gräben, Deckung, Fenster …): gleiche Prüfungen, Bonus für die ausgewiesene Stellung
+	for h in map_hints(center, rmax):
+		var q := BotNav.closest(s, h.pos)
+		if BotNav.flat(q, h.pos) > 1.2 or absf(q.y - h.pos.y) > 1.5 or absf(q.y - center.y) > 4.5:
+			continue
+		if BotNav.flat(q, center) < rmin or (not z.is_empty() and not in_zone(z, q)):
+			continue
+		if BotSquad.too_close(b, q, BotSquad.MIN_SPACING + 1.0):
+			continue
+		var sc := BotNav.cover_score(space, q, teye) - q.distance_to(s.global_position) * 0.03 + HINT_BONUS
 		if sc > best_s:
 			best_s = sc
 			best = q
@@ -390,6 +481,24 @@ static func overwatch_spot(b: Node, look_at: Vector3, rmin: float, rmax: float, 
 		if prefer_high:
 			sc += clampf(q.y - look_at.y, 0.0, 8.0) * 0.6
 		sc -= absf(dist - mid) * 0.04
+		scored.append([sc, q])
+	# optionale Kartenhinweise: ausgewiesene Fenster-/Graben-/Hochstände mit Sichtlinie (Augenhöhe nach Haltung)
+	for h in map_hints(look_at, rmax * 1.3):
+		var q := BotNav.closest(s, h.pos)
+		if BotNav.flat(q, h.pos) > 1.2 or absf(q.y - h.pos.y) > 1.5:
+			continue
+		var dist := BotNav.flat(q, look_at)
+		if dist < rmin * 0.7 or (avoid.is_finite() and BotNav.flat(q, avoid) < 12.0):
+			continue
+		if BotSquad.too_close(b, q, BotSquad.MIN_SPACING + 2.0):
+			continue
+		var eye := q + Vector3.UP * (1.5 if int(h.get("stance", 1)) == 0 else 1.0)
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(eye, look_at + Vector3.UP * 1.0, 1))
+		if not hit.is_empty() and (hit.position as Vector3).distance_to(look_at) > 2.5:
+			continue
+		var sc := BotNav.cover_score(space, q, teye) + HINT_BONUS - absf(dist - mid) * 0.04
+		if prefer_high:
+			sc += clampf(q.y - look_at.y, 0.0, 8.0) * 0.6 + (1.5 if h.get("high", false) else 0.0)
 		scored.append([sc, q])
 	scored.sort_custom(func(x, y): return float(x[0]) > float(y[0]))
 	for k in mini(scored.size(), 3):

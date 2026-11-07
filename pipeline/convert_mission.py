@@ -338,16 +338,21 @@ def phobj_break_models(scene):
 
 
 def convert(mission):
-    mdir = mission.upper()
+    mdir = mission.strip().upper()
+    # Genau EIN Missionsordner – eine Liste ("ARCTIC1,ARCTIC2,…", z. B. aus powershell -File) erzeugte sonst
+    # orig_cache\arctic1,arctic2,…\models (build_komma, 06.11.2026)
+    if not (mdir.isascii() and mdir.replace("_", "").isalnum()):
+        sys.exit("Ungültiger Missionsname %r – genau eine Mission angeben (z. B. ARCTIC1)" % mission)
     out = os.path.join(CACHE, mdir.lower())
-    os.makedirs(os.path.join(out, "models"), exist_ok=True)
     textures = Textures(os.path.join(CACHE, "textures"))
 
     def mission_file(name):
         return read_file("missions/%s/%s" % (mdir, name), ["Missions.dta"])
 
-    # 1. Statische Szene (scene.4ds)
-    scene = fmt_4ds.read_model(mission_file("scene.4ds"), quiet=True)
+    # 1. Statische Szene (scene.4ds) – Ausgabeordner erst anlegen, wenn die Mission im Archiv existiert
+    scene_data = mission_file("scene.4ds")
+    os.makedirs(os.path.join(out, "models"), exist_ok=True)
+    scene = fmt_4ds.read_model(scene_data, quiet=True)
     n = model_to_gltf(scene, textures, "../textures/", os.path.join(out, "scene.glb"))
     print("scene.glb: %d Frames, %d Meshes" % (len(scene["frames"]), n))
 

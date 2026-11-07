@@ -21,6 +21,7 @@ var human = null
 ## B-032: Kampagnenkette (--chain_in=<json> Werte des Vorgängers, über Game --game_values vorbelegt; --chain_out=<json>
 ## schreibt die SaveGameValue-Werte am Ende), Zielverlauf (Fehlschläge mit Zeit), Alarme, Zeitlimits
 var _chain_in := {}
+var _game_t := 0.0            ## Spielzeit seit Missionsstart (B-032b)
 var _obj_seen := {}            ## Originalzielindex → letzter Zustand
 var _obj_log: Array[String] = []
 var _alarms := 0
@@ -45,6 +46,7 @@ func _ready() -> void:
 func _physics_process(_d: float) -> void:
 	if m == null or not is_instance_valid(m):
 		return
+	_game_t += _d      # Spielzeit (skaliert mit Engine.time_scale) für Zeitlimit-Messungen (B-032b)
 	# B-032: Alarm (Originalmissionen offline senden kein Events.alarm_raised, B-031) – Zeitpunkt des ersten Alarms
 	if m.alarm_raised and _first_alarm < 0.0:
 		_first_alarm = (Time.get_ticks_msec() - _t0) / 1000.0
@@ -116,6 +118,11 @@ func _run() -> void:
 	if rt.in_cutscene:
 		rt.end_cutscene()
 	await seconds(2.0)
+	# B-032b: Gegenprobe Fehlschlagpfad (--fail_probe=<skript>:signal:<n> | <skript>:death) statt Lösen
+	if Game.cli.has("fail_probe"):
+		await _fail_probe(String(Game.cli["fail_probe"]))
+		_report()
+		return
 	var finished := false
 	# TUTORIAL: streng geordneter Parcours mit Fehlschlag beim Verlassen der Hindernisbahn -> eigener Stationsablauf
 	if mid == "training":
@@ -924,6 +931,54 @@ func _check_chain_in() -> void:
 ## B-032: Zeitlimits/Alarmpfade statisch – Skripte, die nach Delay-Schleifen bzw. OnAlarm ein Ziel scheitern lassen
 func _print_static_limits() -> void:
 	var fail_re := RegEx.create_from_string("setobjectivestatus\\s*\\(\\s*(\\d+)\\s*,\\s*3\\s*\\)")
+	var hdr_re := RegEx.create_from_string("^\\s*(whenever\\s+\\w+\\s*\\(.*|onsignal\\s*\\(\\s*\\d+\\s*\\)|ondeath\\s*\\(\\s*\\)|onalarm\\s*\\(.*\\)|onuse\\s*\\(.*\\)|onhit\\s*\\(.*\\)|label\\s+\\w+)")
+	var tmr_re := RegEx.create_from_string("setinterfacetimer\\s*\\(\\s*(\\d+)\\s*\\)")
+	var dl_re := RegEx.create_from_string("delay\\s*\\(\\s*(\\d+)\\s*\\)")
+	var out_re := RegEx.create_from_string("(sendsignal\\s*\\([^;]*\\)|setobjectivestatus\\s*\\(\\s*\\d+\\s*,\\s*3\\s*\\))")
+	var seen := {}
+	for vm in rt.vms:
+		if seen.has(vm.name):
+			continue
+		seen[vm.name] = true
+		var lines := _src(vm.name).split("\n")
+		# B-032b: jede Fehlschlag-Anweisung mit ihrem Auslöser (umgebender Handler/Label), nicht nur die erste je Skript
+		for i in lines.size():
+			var code := lines[i].split("//")[0]
+			var fm2 := fail_re.search(code)
+			if fm2 == null:
+				continue
+			var hdr := "Skriptanfang"
+			for j in range(i, -1, -1):
+				var hm := hdr_re.search(lines[j].split("//")[0])
+				if hm:
+					hdr = hm.get_string(1).strip_edges()
+					break
+			print("FEHLSCHLAG|%s|Ziel %s|%s Z.%d|Auslöser %s" % [mid, fm2.get_string(1), vm.name, i + 1, hdr])
+		# B-032b: Zeitlimits belegt = SetInterfaceTimer(ms > 0) + folgende Delays bis zur Folgeaktion
+		for i in lines.size():
+			var tm := tmr_re.search(lines[i].split("//")[0])
+			if tm == null or int(tm.get_string(1)) <= 0:
+				continue
+			var total := 0
+			var follow := "keine Folgeaktion"
+			for j in range(i + 1, mini(i + 40, lines.size())):
+				var c := lines[j].split("//")[0]
+				for d in dl_re.search_all(c):
+					total += int(d.get_string(1))
+				var om := out_re.search(c)
+				if om:
+					follow = om.get_string(1)
+					break
+				if lines[j].begins_with("}"):
+					break      # Ende des Handlers (Spalte 0)
+			var hdr2 := "Skriptanfang"
+			for j in range(i, -1, -1):
+				var hm := hdr_re.search(lines[j].split("//")[0])
+				if hm:
+					hdr2 = hm.get_string(1).strip_edges()
+					break
+			print("ZEITLIMIT|%s|%s Z.%d|Anzeige %.1f s|Delay danach %.1f s|Folge %s|Start %s" % [mid, vm.name, i + 1,
+				int(tm.get_string(1)) / 1000.0, total / 1000.0, follow, hdr2])
 	for vm in rt.vms:
 		var s := _src(vm.name)
 		var fm := fail_re.search(s)
@@ -944,6 +999,61 @@ func _print_static_limits() -> void:
 			kinds.append("Tod/Zustand")
 		print("FEHLSCHLAGPFAD|%s|Ziel %s|%s an %s|%s" % [mid, fm.get_string(1), vm.name,
 			vm.me.name if is_instance_valid(vm.me) else "?", ", ".join(kinds)])
+
+
+## B-032b Gegenprobe: Fehlschlag-Auslöser gezielt auslösen und prüfen, dass ein Ziel wirklich scheitert.
+## spec = <skriptname-teil>:signal:<n> (Signal an das Skript) | <skriptname-teil>:death (Besitzer zerstören/töten).
+## Wartet bis --probe_wait Spielsekunden (Standard 240) auf ein verfehltes Ziel; Zeile FEHLSCHLAG_PROBE.
+func _fail_probe(spec: String) -> void:
+	var parts := spec.to_lower().split(":")
+	var vm_hit = null
+	for vm in rt.vms:
+		if String(vm.name).to_lower().contains(parts[0]):
+			vm_hit = vm
+			break
+	if vm_hit == null:
+		print("FEHLSCHLAG_PROBE|%s|%s|Skript nicht gefunden" % [mid, spec])
+		notes.append("Probe: Skript nicht gefunden")
+		return
+	var before := {}
+	for idx in m.orig_objectives:
+		var o: Objective = m.objective(m.orig_objectives[idx])
+		if o:
+			before[idx] = o.state
+	var t0 := _game_t
+	var own: Node = vm_hit.me if is_instance_valid(vm_hit.me) else null
+	if parts.size() >= 3 and parts[1] == "signal":
+		vm_hit.signal_received(int(parts[2]))
+		print("LOESER Probe: Signal %s an %s" % [parts[2], vm_hit.name])
+	elif parts.size() >= 2 and parts[1] == "death":
+		if own is Vehicle:
+			(own as Vehicle).explode(_lead())
+		elif own is Soldier:
+			(own as Soldier).die(_lead())
+		elif own and own.has_meta("orig_ctl") and own.get_meta("orig_ctl") is OrigInteractive.OrigDestructible:
+			own.get_meta("orig_ctl").destroy()
+		elif own and own.has_meta("script_breakable"):
+			own.get_meta("script_breakable").on_explosion(100.0, _lead())
+		else:
+			vm_hit.fire("ONDEATH")
+		print("LOESER Probe: %s zerstört (%s)" % [own.name if own else "?", vm_hit.name])
+	else:
+		print("FEHLSCHLAG_PROBE|%s|%s|unbekannte Art" % [mid, spec])
+		return
+	var wait := float(Game.cli.get("probe_wait", "240"))
+	var failed := []
+	while _game_t - t0 < wait and failed.is_empty() and not _reported:
+		await get_tree().process_frame
+		for idx in m.orig_objectives:
+			var o: Objective = m.objective(m.orig_objectives[idx])
+			if o and o.state == Objective.State.FAILED and before.get(idx, -1) != Objective.State.FAILED:
+				failed.append(idx)
+	var dt := _game_t - t0
+	var res := ("Ziel %s verfehlt nach %.1f s Spielzeit" % [str(failed), dt]) if not failed.is_empty() else \
+		("KEIN Ziel verfehlt in %.0f s" % dt)
+	print("FEHLSCHLAG_PROBE|%s|%s|%s" % [mid, spec, res])
+	notes.append("Probe %s: %s" % [spec, res])
+	await seconds(2.0)
 
 
 ## Ziele ohne Erfolgspfad: kein SetObjectiveStatus(i, 1) in den Skripten des Einsatzes

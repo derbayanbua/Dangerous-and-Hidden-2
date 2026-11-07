@@ -247,6 +247,14 @@ func _wheels_from_model(visual: Node3D) -> void:
 		w.up_p = (pinv * Vector3.UP).normalized()
 		w.axle_p = (pinv * Vector3.RIGHT).normalized()
 		wheels.append(w)
+	# B-043: Leit-/Treibräder über dem Boden (Halbkette M3 la_halftruck DWH01/06: Unterkante 0,44 m, Laufrollen 0,07 m)
+	# sind keine Aufstandspunkte; als Federrad trugen sie das Heck, die Laufrollen hingen frei und die Wanne lag auf [E]
+	var lowest := INF
+	for w in wheels:
+		lowest = minf(lowest, (w as Wheel).center.y - (w as Wheel).radius)
+	var ground: Array = wheels.filter(func(w): return (w as Wheel).center.y - (w as Wheel).radius <= lowest + 0.2)
+	if kind != Kind.TANK and ground.size() >= 3 and ground.size() < wheels.size():
+		wheels = ground
 
 
 ## Platzhalter-Räder (Übungseinsätze ohne Originalmodell bzw. Modell ohne Rad-Frames)
@@ -517,6 +525,8 @@ func integrate(state: PhysicsDirectBodyState3D) -> void:
 			bcap = maxf(bcap, fmax)
 		if locked:
 			bcap = maxf(bcap, fmax * 0.75)
+		elif handbrake and kind == Kind.TANK:
+			bcap = maxf(bcap, fmax * 0.6)       # B-043: Ketten bremsen beidseitig (kein Driften); vorher bremste nichts
 		var hold := clampf(-vl * m_i / dt, -bcap, bcap)
 		fx += hold
 		var rr := wh.grip.y * wh.load * (1.5 if kind == Kind.TANK else 1.0)

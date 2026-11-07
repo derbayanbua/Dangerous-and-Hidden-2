@@ -122,7 +122,20 @@ func script_move_done() -> bool:
 		script_move(rest.pop_front())
 		_script_route = rest
 		return false
+	if done and _script_target.is_finite():
+		_script_target = Vector3.INF
+		if not script_control:
+			# B-036c: Posten = erreichte Stelle (sonst läuft die Wache in der Delay-Pause zum Spawn zurück)
+			home_pos = soldier.global_position
+			home_yaw = soldier.look_yaw
 	return done
+
+
+## B-036c: HUMAN_Move läuft auch nach HUMAN_SETAIMODE_Defensive/Aggressive (script_control = false) – das Skript führt
+## die Bewegung, solange die eigene KI ruhig ist (Wache/Patrouille). Vorher brach `_guard` (stop_moving am Posten) jeden
+## Skriptweg sofort ab → bu1_01/al2_08 forderten denselben Weg endlos neu an.
+func script_move_active() -> bool:
+	return _script_target.is_finite() and (state == State.GUARD or state == State.PATROL)
 
 
 ## B-033: HUMAN_Move über die Checkpoint-Kanten (CheckpointJoin): Zwischenpunkte nacheinander, Ziel zuletzt.
@@ -262,7 +275,7 @@ func leave_script_control() -> void:
 	elif alarm_pos.is_finite():
 		investigate_pos = alarm_pos
 		set_state(State.SEARCH)
-		move_to(_leash_clamp(alarm_pos), Soldier.MoveMode.RUN)
+		_alarm_move(_leash_clamp(alarm_pos))
 
 
 ## Aktionsradius um den Posten (hd2.exe 0x5478C0 speichert die Startlage in KI +0x180; Radius KI +0x1A4) [B Werte]:
@@ -370,6 +383,7 @@ func _physics_process(delta: float) -> void:
 		return
 	if perception:
 		perception.orig_formula = _orig_rules() or Perception.orig_everywhere()   # B-021; G-004 Option: Wahrnehmungsformel des Originals nur in Originalmissionen offline
+	path_follow_fix = b044_fix()    # B-044: Wegfolge-Korrektur/Fortschrittswächter (AIBrain)
 	if surrendered or captured:
 		_surrender_tick(delta)
 		return
@@ -400,7 +414,7 @@ func _physics_process(delta: float) -> void:
 			and soldier.vehicle.has_method("seat_weapon") and soldier.vehicle.seat_weapon(soldier.seat_index) != null):
 		_mounted_tick(delta)
 		return
-	if script_control:
+	if script_control or script_move_active():
 		_script_tick(delta)
 		return
 	_state_time += delta
@@ -437,6 +451,9 @@ func set_state(s: int) -> void:
 		elif (s == State.GUARD or s == State.PATROL) and state == State.SEARCH:
 			OrigAudio.speak_event(soldier, OrigAudio.EV_E_CANCEL, 4.0)
 	state = s
+	if s != State.GUARD and s != State.PATROL:
+		_script_target = Vector3.INF    # B-036c: Skriptweg endet mit Kampf/Untersuchen/Suche
+		_script_route = []
 	_state_time = 0.0
 	_cover_pos = Vector3.INF
 	_engaged_time = 0.0
@@ -488,8 +505,17 @@ func _investigate(delta: float) -> void:
 		stop_moving()
 		look_at_point(investigate_pos + Vector3.UP, delta, 3.0)
 		return
-	if distance_to(investigate_pos) > 2.0:
-		move_to(_leash_clamp(investigate_pos), Soldier.MoveMode.WALK)
+	var goal := _leash_clamp(investigate_pos)
+	if b044_fix() and distance_to(investigate_pos) > 2.0 and not has_move_target():
+		# B-044: Punkt außerhalb der Leine bzw. ohne Weg → nicht 25 s auf der Stelle „hingehen“, sondern hier umsehen [E]
+		var rp := reachable_point(goal)
+		if not rp.is_finite() or distance_to(rp) < 2.0:
+			goal = soldier.global_position
+		else:
+			goal = rp
+	if distance_to(investigate_pos) > 2.0 and distance_to(goal) > 2.0:
+		if not (b044_fix() and has_move_target()):
+			move_to(goal, Soldier.MoveMode.WALK)
 	else:
 		stop_moving()
 		if _corpse_to_check and is_instance_valid(_corpse_to_check):
@@ -530,7 +556,19 @@ func _combat(delta: float) -> void:
 		if not has_move_target() or arrived(1.5):
 			var away := soldier.global_position - target.global_position
 			away.y = 0.0
-			move_to(soldier.global_position + away.normalized() * 25.0, Soldier.MoveMode.RUN)
+			var fp := soldier.global_position + away.normalized() * 25.0
+			if b044_fix():
+				# abgebrochener Fluchtweg (physisch versperrt, obwohl das Netz einen Weg kennt): Ziel merken und meiden
+				if _flee_goal.is_finite() and distance_to(_flee_goal) > 3.0:
+					_flee_bad.append(_flee_goal)
+					if _flee_bad.size() > 8:
+						_flee_bad.pop_front()
+				fp = _flee_point(away.normalized())
+				_flee_goal = fp
+			if fp.is_finite():
+				move_to(fp, Soldier.MoveMode.RUN)
+			else:
+				soldier.stance_request = Soldier.Stance.CROUCH    # kein erreichbarer Fluchtpunkt: ducken [E]
 		cease_fire()
 		return
 	var visible := perception.best_target()
@@ -671,7 +709,12 @@ func _search(delta: float) -> void:
 			_look_timer = 0.0
 			# zufälliger Punkt um die letzte bekannte Position (HUMAN_MoveRandomRadius)
 			var p := investigate_pos + Vector3(randf_range(-10, 10), 0, randf_range(-10, 10))
-			move_to(_leash_clamp(p), Soldier.MoveMode.WALK)
+			if b044_fix():
+				p = _search_point()
+				if p.is_finite():
+					move_to(p, Soldier.MoveMode.WALK)
+			else:
+				move_to(_leash_clamp(p), Soldier.MoveMode.WALK)
 	# Suchdauer: Originalmissionen defensiv 20–30 s (KI +0x194 = rand·10 + 20, 0x547AF0), Zombie 7–12 s
 	# (rand·5 + 7, 0x547BF0) [B Wert, P Deutung], sonst 40 s
 	if _search_limit < 0.0:
@@ -683,6 +726,81 @@ func _search(delta: float) -> void:
 		_search_limit = -1.0
 		search_time = 0.0
 		set_state(_calm_state())
+
+
+## B-044: Korrekturen gegen Stillstand (nur Originalmissionen offline; `--b044=0` = Stand davor, Messvergleich).
+static func b044_switch() -> bool:
+	return String(Game.cli.get("b044", "1")) != "0"
+
+
+func b044_fix() -> bool:
+	return _orig_rules() and b044_switch()
+
+
+## Punkt aufs Navigationsnetz holen und nur zurückgeben, wenn ein Weg von hier aus hinführt (Pfadende < 2,5 m), sonst INF.
+## Netz noch nicht fertig: Punkt unverändert.
+func reachable_point(p: Vector3) -> Vector3:
+	var map := agent.get_navigation_map()
+	if not map.is_valid() or NavigationServer3D.map_get_iteration_id(map) == 0:
+		return p
+	var q := NavigationServer3D.map_get_closest_point(map, p)
+	if Vector2(q.x - p.x, q.z - p.z).length() > 4.0:
+		return Vector3.INF
+	var path := NavigationServer3D.map_get_path(map, soldier.global_position, q, true)
+	if path.is_empty() or path[path.size() - 1].distance_to(q) > 2.5:
+		return Vector3.INF
+	return q
+
+
+## Flucht (Panik 0x4000002): statt eines festen Punkts 25 m vom Feind weg (lag oft hinter Mauern/außerhalb des Netzes →
+## Soldat lief auf der Stelle) den ersten erreichbaren Punkt im Fächer ±90° um die Fluchtrichtung, 25 bzw. 15 m [E].
+func _flee_point(away: Vector3) -> Vector3:
+	if away.length() < 0.1:
+		away = -soldier.aim_direction()
+		away.y = 0.0
+	for r: float in [25.0, 15.0, 8.0]:
+		for a: float in [0.0, 0.5, -0.5, 1.0, -1.0, 1.57, -1.57, 2.2, -2.2]:
+			var p := reachable_point(soldier.global_position + away.normalized().rotated(Vector3.UP, a) * r)
+			if not p.is_finite() or distance_to(p) <= 4.0:
+				continue
+			var bad := false
+			for q in _flee_bad:
+				if (q as Vector3).distance_to(p) < 6.0:
+					bad = true
+					break
+			if not bad:
+				return p
+	_flee_bad.clear()     # alles versucht: von vorn
+	return Vector3.INF
+
+
+var _flee_goal := Vector3.INF
+var _flee_bad: Array = []
+
+
+## Suche (Zustand „Sucht“): Zufallspunkt um den Suchort; nur erreichbare Punkte, die nicht schon hier liegen (vorher lag der
+## an die Leine geklemmte Punkt oft auf der eigenen Stelle bzw. hinter einer Netzinsel → Soldat stand 15–40 s). Sonst
+## Zufallspunkt im Leinengebiet um den Posten (wie 0x557D10 „Wegpunkt im Leinengebiet“ [B Ablauf, E Auswahl]).
+func _search_point() -> Vector3:
+	for k in 9:
+		var c := investigate_pos if k < 4 else (home_pos if k < 6 else soldier.global_position)
+		var rad := 10.0 if k < 4 else (minf(leash_radius(), 15.0) if k < 6 else 6.0)
+		var p := reachable_point(_leash_clamp(c + Vector3(randf_range(-rad, rad), 0, randf_range(-rad, rad))))
+		if p.is_finite() and distance_to(p) > 2.5:
+			return p
+	return Vector3.INF
+
+
+## Alarm/Geräusch: zum (an die Leine geklemmten) Ort rennen. B-044: ohne Weg dorthin (Netzinsel, Leuchtturmspitze …) nicht
+## loslaufen – die Suche wählt dann erreichbare Punkte (_search_point) [E].
+func _alarm_move(p: Vector3) -> void:
+	if b044_fix():
+		var rp := reachable_point(p)
+		if not rp.is_finite():
+			stop_moving()
+			return
+		p = rp
+	move_to(p, Soldier.MoveMode.RUN)
 
 
 func _calm_state() -> int:
@@ -779,12 +897,12 @@ func _on_heard(pos: Vector3, kind: StringName, source: Node) -> void:
 		investigate_pos = pos
 		alert_level = 1.0
 		set_state(State.SEARCH)
-		move_to(_leash_clamp(pos), Soldier.MoveMode.RUN)
+		_alarm_move(_leash_clamp(pos))
 	elif kind == &"gunshot" or kind == &"explosion" or kind == &"impact":
 		alert_level = 1.0
 		investigate_pos = pos
 		set_state(State.SEARCH)
-		move_to(_leash_clamp(pos), Soldier.MoveMode.RUN)
+		_alarm_move(_leash_clamp(pos))
 
 
 func _on_corpse(c: Soldier) -> void:
@@ -842,7 +960,7 @@ func _on_alarm(pos: Vector3, _by: Node) -> void:
 	perception.sight_range = maxf(_base_sight, 150.0)
 	investigate_pos = pos
 	set_state(State.SEARCH)
-	move_to(_leash_clamp(pos + Vector3(randf_range(-8, 8), 0, randf_range(-8, 8))), Soldier.MoveMode.RUN)
+	_alarm_move(_leash_clamp(pos + Vector3(randf_range(-8, 8), 0, randf_range(-8, 8))))
 
 
 func _shout(pos: Vector3) -> void:
@@ -895,7 +1013,7 @@ func local_alarm(pos: Vector3) -> void:
 		perception.sight_range = maxf(_base_sight, 150.0)
 		investigate_pos = pos
 		set_state(State.SEARCH)
-		move_to(_leash_clamp(pos), Soldier.MoveMode.RUN)
+		_alarm_move(_leash_clamp(pos))
 	if _call_cooldown <= 0.0:
 		_call_cooldown = CALL_OUT_COOLDOWN
 		Events.emit_noise(soldier.global_position, 60.0, soldier, soldier.team, &"alert")

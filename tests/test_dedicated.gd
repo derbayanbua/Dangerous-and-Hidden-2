@@ -204,10 +204,14 @@ func _autorestart_part() -> void:
 	Net.favorites = []
 	_console("quit")
 	var w_gone := func() -> bool: return not OS.is_process_running(_pid)
-	check(await wait_for(w_gone, 90.0), "quit beendet Server und Wächter")
-	for p in [_pid, child.call()]:
-		if int(p) > 0 and OS.is_process_running(int(p)):
-			OS.kill(int(p))
+	check(await wait_for(w_gone, 90.0), "quit beendet Server und Wächter",
+		out_text.substr(maxi(out_text.length() - 600, 0)))   # abschluss_099: Wächterausgabe zur Fehlersuche
+	# Kindprozess des Wächters ist kein eigener Prozess dieses Tests: OS.is_process_running kennt nur selbst gestartete
+	# PIDs (Windows) → immer beenden, sonst hält der verwaiste Server die geerbten Pipes und den Port offen
+	if OS.is_process_running(_pid):
+		OS.kill(_pid)
+	if int(child.call()) > 0:
+		OS.kill(int(child.call()))
 
 
 ## Exportierter Build (Spieltest): kein Projektpfad – die EXE startet sich selbst; im Editor-Binary: --path

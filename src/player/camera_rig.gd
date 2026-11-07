@@ -71,7 +71,7 @@ func _ready() -> void:
 	_pivot.add_child(_arm)
 	camera = Camera3D.new()
 	camera.near = 0.05
-	camera.far = 1200.0
+	camera.far = preload("res://src/world/view_distance.gd").camera_far()   # B-041 Sichtweite
 	_arm.add_child(camera)
 	camera.current = true
 	_fov = base_fov()

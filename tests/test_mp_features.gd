@@ -106,6 +106,33 @@ func _run() -> void:
 	var ct := LanMenu.config_text(cfg)
 	check(ct.contains("sessionname") and ct.contains("mapname mp_arena_a1_blizzard") and ct.contains("bots 1") and ct.contains("warmup 10")
 		and ct.ends_with("server\n"), "Konfigurationsdatei im ServerLauncher-Stil (inkl. bots)")
+	# B-046: KOOPERATIV freigegeben, Kartenliste = SP-Missionen (gleicher Originalordner/k), keine Original-MP-Karten
+	check(not lm._mode.is_item_disabled(Net.Mode.COOP) and lm._mode.get_item_text(Net.Mode.COOP) == "KOOPERATIV",
+		"LAN-Menü: Stil KOOPERATIV auf Kampagnenkarte wählbar")
+	lm._mode.select(Net.Mode.COOP)
+	lm._mode.item_selected.emit(Net.Mode.COOP)
+	var coop_maps: Array = lm._style_maps()
+	var sp_ok := coop_maps.size() == Game.CAMPAIGN_ORDER.size()
+	var sp_bad := []
+	for cid in coop_maps:
+		var ce: Dictionary = Game.MISSIONS[cid]
+		var sp_id := String(ce.get("sp_mission", ""))
+		var se: Dictionary = Game.MISSIONS.get(sp_id, {})
+		if not Game.CAMPAIGN_ORDER.has(sp_id) or ce.has("mp_mode") or (se.has("k") and int(ce["k"]) != int(se["k"])) \
+				or Game.orig_folder(sp_id).to_upper() != String(ce["orig"]).to_upper():
+			sp_ok = false
+			sp_bad.append(cid)
+	for sp_id in Game.CAMPAIGN_ORDER:
+		if not coop_maps.has("mp_arena_" + String(sp_id)):
+			sp_ok = false
+			sp_bad.append(sp_id)
+	check(sp_ok and lm._map_choice.item_count == coop_maps.size(), "Coop-Kartenliste = alle SP-Missionen, Einträge zeigen auf SP-Missionsdaten",
+		"%d/%d %s" % [coop_maps.size(), Game.CAMPAIGN_ORDER.size(), str(sp_bad)])
+	check(lm._coop_lives != null and int(lm._coop_lives.value) == int(Net.style_defaults(Net.Mode.COOP)["coop_lives"]),
+		"Coop: einzige Abweichung Spielerzahl/Leben (Coop-Standards gesetzt)")
+	lm._mode.select(1)
+	lm._mode.item_selected.emit(1)
+	lm._bots.value = 1
 	# Serverliste: LISTE NEU EINLESEN (T2325) leert und sucht neu, HALT (T2326) hält an
 	var rb: Button = lm.find_child("RereadButton", true, false)
 	var ub: Button = lm.find_child("UpdateButton", true, false)

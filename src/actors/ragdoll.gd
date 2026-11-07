@@ -200,6 +200,7 @@ func _build() -> bool:
 		# Prüfwert: Körper beim Bau in der Ruhelage des Knochens (Gelenkrahmen relativ zur T-Haltung)
 		build_dev = maxf(build_dev, pb.global_position.distance_to(sk.global_transform * sk.get_bone_global_rest(sk.find_bone(bn)).origin))
 	_restore_local_poses(saved)
+	_prepare_fk()
 	sk.force_update_all_bone_transforms()
 	Gore.after_ragdoll_build(self)        # B-037: Gore-Maske hinter den Simulator, abgetrennte Körper ohne Kollision
 	return bodies.size() >= 6
@@ -219,10 +220,150 @@ func _restore_local_poses(saved: Array) -> void:
 		sk.set_bone_pose_scale(i, saved[i][2])
 
 
+# --- B-045: Darstellung per Vorwärtskinematik (keine gestreckten Leichen) -------------------------------------------
+## Ursache der Verzerrung (B-045, gemessen bis +207 % Knochenabstand): Der PhysicalBoneSimulator3D setzt nur die
+## 11 simulierten Knochen auf die Weltlage ihrer Körper; die Zwischenknochen ohne Körper (b, c1, d1, d, e, f1, g, k)
+## behalten die Pose des Todesclips. Die Gelenke der Körper wurden aber in der T-Ruhelage angelegt – Oberarm h/l hängt
+## physikalisch an c über die Ruhekette c→d1→d→g/k, das Skelett jedoch über die Clip-Pose dieser Knochen. Beides passt
+## nicht zusammen → Schulter/Arm, Rumpf und Hals wurden gedehnt; zusätzlich geben die weichen Jolt-Gelenke unter Wucht nach.
+## Lösung: eigener Modifier hinter dem Simulator baut die Pose als Vorwärtskinematik: Becken a = Körperlage, jeder
+## simulierte Knochen nur mit der DREHUNG seines Körpers (relativ zum Elternknochen, auf Gelenkwinkel begrenzt),
+## Position immer = Ruhe-Abstand zum Elternknochen; Zwischenknochen in Ruhedrehung (genau die Annahme der Gelenke),
+## Endknochen (Hände, Füße, Finger) mit ihrer Clip-Drehung. Knochenabstände sind damit konstruktiv konstant, der Körper
+## darf trotzdem frei fliegen (Becken folgt der Physik). Gleiche Rechnung beim Einfrieren (Endpose).
+const LIMIT_SLACK := 12.0               ## Grad über der größten Gelenkgrenze, ab der die Darstellung begrenzt [E]
+var _fk: FkPose
+var _fk_mid := {}                       ## Knochenindex → true: Zwischenknochen mit simuliertem Nachfahren
+var _fk_lim := {}                       ## Knochenindex → größter Gelenkwinkel [rad]
+var fk_clamped := 0                      ## Zahl begrenzter Gelenkwinkel (Test/Statistik)
+
+
+func _prepare_fk() -> void:
+	_fk_mid.clear()
+	_fk_lim.clear()
+	for bn in bodies:
+		var bi := sk.find_bone(bn)
+		var lim: Array = BONES[bn].get("lim", [])
+		if not lim.is_empty():
+			var mx := 0.0
+			for ax in lim:
+				mx = maxf(mx, maxf(absf(float(ax[0])), absf(float(ax[1]))))
+			_fk_lim[bi] = deg_to_rad(mx + LIMIT_SLACK)
+		var p := sk.get_bone_parent(bi)
+		while p >= 0 and not bodies.has(sk.get_bone_name(p)):
+			_fk_mid[p] = true
+			p = sk.get_bone_parent(p)
+	if _fk == null or not is_instance_valid(_fk):
+		_fk = FkPose.new()
+		_fk.name = "RagdollFK"
+		_fk.rd = self
+		sk.add_child(_fk)
+	sk.move_child(_fk, sim.get_index() + 1)   # direkt hinter dem Simulator (Gore-Maske bleibt letzte)
+
+
+## Lokale Posen [Position, Drehung] aller Knochen aus den Physikkörpern (nur im Zustand ACTIVE sinnvoll)
+func fk_local_poses() -> Array:
+	var n := sk.get_bone_count()
+	var out := []
+	out.resize(n)
+	var world := []
+	world.resize(n)
+	var inv_sk := sk.global_transform.affine_inverse()
+	for i in n:
+		_fk_bone(i, out, world, inv_sk)
+	return out
+
+
+func _fk_bone(i: int, out: Array, world: Array, inv_sk: Transform3D) -> Transform3D:
+	if world[i] != null:
+		return world[i]
+	var par := sk.get_bone_parent(i)
+	var rest := sk.get_bone_rest(i)
+	var pb: PhysicalBone3D = bodies.get(sk.get_bone_name(i))
+	var t: Transform3D
+	if par < 0:
+		if pb != null:
+			t = (inv_sk * pb.global_transform * pb.body_offset.affine_inverse()).orthonormalized()
+		else:
+			t = Transform3D(Basis(sk.get_bone_pose_rotation(i)), sk.get_bone_pose_position(i))
+		out[i] = [t.origin, t.basis.get_rotation_quaternion()]
+		world[i] = t
+		return t
+	var pw := _fk_bone(par, out, world, inv_sk)
+	var q: Quaternion
+	if pb != null:
+		var tb := (inv_sk * pb.global_transform * pb.body_offset.affine_inverse()).basis.orthonormalized()
+		q = (pw.basis.orthonormalized().inverse() * tb).get_rotation_quaternion().normalized()
+		var rq := rest.basis.get_rotation_quaternion()
+		var rel := rq.inverse() * q
+		if rel.w < 0.0:
+			rel = -rel
+		var lim := float(_fk_lim.get(i, PI))
+		if rel.get_angle() > lim:
+			rel = Quaternion.IDENTITY.slerp(rel, lim / rel.get_angle())
+			q = rq * rel
+			fk_clamped += 1
+	elif _fk_mid.has(i):
+		q = rest.basis.get_rotation_quaternion()
+	else:
+		q = sk.get_bone_pose_rotation(i)
+	t = pw * Transform3D(Basis(q), rest.origin)
+	out[i] = [rest.origin, q]
+	world[i] = t
+	return t
+
+
+static var _fk_on := -1
+
+
+## `--ragdoll_fk=0` = Stand vor B-045 (Simulator setzt Knochen direkt, Endpose aus Körperlagen) – nur Vergleichsbilder
+static func fk_enabled() -> bool:
+	if _fk_on < 0:
+		_fk_on = 0 if "--ragdoll_fk=0" in OS.get_cmdline_user_args() else 1
+	return _fk_on == 1
+
+
+## Stand vor B-045 (nur `--ragdoll_fk=0`): Weltlage simulierter Knochen = Körperlage, übrige = Eltern × Clip-Pose
+func _legacy_local_poses() -> Array:
+	var n := sk.get_bone_count()
+	var world := []
+	world.resize(n)
+	var inv_sk := sk.global_transform.affine_inverse()
+	for i in n:
+		var pb: PhysicalBone3D = bodies.get(sk.get_bone_name(i))
+		var par := sk.get_bone_parent(i)
+		if pb != null:
+			world[i] = (inv_sk * pb.global_transform * pb.body_offset.affine_inverse()).orthonormalized()
+		else:
+			world[i] = (Transform3D() if par < 0 else world[par] as Transform3D) * sk.get_bone_pose(i)
+	var out := []
+	for i in n:
+		var par := sk.get_bone_parent(i)
+		var l: Transform3D = (world[i] as Transform3D) if par < 0 else (world[par] as Transform3D).affine_inverse() * (world[i] as Transform3D)
+		out.append([l.origin, l.basis.get_rotation_quaternion()])
+	return out
+
+
+func _apply_fk() -> void:
+	var lp := fk_local_poses()
+	for i in lp.size():
+		sk.set_bone_pose_position(i, lp[i][0])
+		sk.set_bone_pose_rotation(i, lp[i][1])
+
+
+## Modifier hinter dem PhysicalBoneSimulator3D: während der Simulation Pose aus den Körpern per Vorwärtskinematik
+class FkPose extends SkeletonModifier3D:
+	var rd: Ragdoll
+
+	func _process_modification_with_delta(_delta: float) -> void:
+		if rd != null and is_instance_valid(rd) and rd.state == Ragdoll.State.ACTIVE and not rd.bodies.is_empty() and Ragdoll.fk_enabled():
+			rd._apply_fk()
+
+
 ## Andere Skelett-Modifier (Anschlag, IK, Stellungs-IK) abschalten – die Animation läuft weiter (Führungsphase)
 func _quiet_modifiers() -> void:
 	for c in sk.get_children():
-		if c is SkeletonModifier3D and c != sim and not c.has_meta("gore"):
+		if c is SkeletonModifier3D and c != sim and c != _fk and not c.has_meta("gore"):
 			(c as SkeletonModifier3D).active = false
 
 
@@ -236,7 +377,7 @@ func _quiet_skeleton() -> void:
 		for ap in model.find_children("*", "AnimationPlayer", true, false):
 			(ap as AnimationPlayer).active = false
 	for c in sk.get_children():
-		if c is SkeletonModifier3D and c != sim and not c.has_meta("gore"):   # B-037: Gore-Maske bleibt aktiv
+		if c is SkeletonModifier3D and c != sim and c != _fk and not c.has_meta("gore"):   # B-037: Gore-Maske bleibt aktiv
 			(c as SkeletonModifier3D).active = false
 
 
@@ -512,7 +653,7 @@ func freeze() -> void:
 	drive_total = 0.0
 	_late_push.clear()
 	_quiet_skeleton()                 # auch bei vorzeitigem Einfrieren in der Führungsphase
-	var world := _world_bone_poses()
+	var local := fk_local_poses() if fk_enabled() else _legacy_local_poses()   # B-045: Endpose per Vorwärtskinematik
 	sim.physical_bones_stop_simulation()
 	sim.active = false
 	_active.erase(self)
@@ -520,12 +661,13 @@ func freeze() -> void:
 	stats["frozen"] += 1
 	var authoritative := not Net.is_online or Net.is_authority()
 	var origin: Vector3 = soldier.global_position
+	var ai := sk.find_bone("a")
+	var sk_before := sk.global_transform
 	if authoritative:
-		var wa: Transform3D = world[sk.find_bone("a")]
-		origin = _ground_below(wa.origin)
+		origin = _ground_below(sk_before * (local[ai][0] as Vector3))
 		if soldier.has_method("pin_corpse"):
 			soldier.call("pin_corpse", origin)
-	_set_world_poses(world)
+	_set_local_poses(local, sk_before)
 	settled_at = soldier.global_position
 	frozen_pose = export_pose()
 	_place_search_points()
@@ -534,46 +676,19 @@ func freeze() -> void:
 		Net.corpse_settled(soldier, frozen_pose)
 
 
-func _world_bone_poses() -> Array:
-	var n := sk.get_bone_count()
-	var world := []
-	world.resize(n)
-	var skg := sk.global_transform
-	for i in n:
-		world[i] = null
-	for i in n:
-		_world_of(i, world, skg)
-	return world
-
-
-func _world_of(i: int, world: Array, skg: Transform3D) -> Transform3D:
-	if world[i] != null:
-		return world[i]
-	var bn := sk.get_bone_name(i)
-	var t: Transform3D
-	var pb: PhysicalBone3D = bodies.get(bn)
-	if pb != null and state == State.ACTIVE:
-		t = pb.global_transform * pb.body_offset.affine_inverse()
-	else:
-		var par := sk.get_bone_parent(i)
-		var base := skg if par < 0 else _world_of(par, world, skg)
-		t = base * sk.get_bone_pose(i)
-	world[i] = t.orthonormalized()
-	return world[i]
-
-
-func _set_world_poses(world: Array) -> void:
-	var inv_sk := sk.global_transform.affine_inverse()
+## Lokale Posen (aus fk_local_poses, Skelettraum zur Zeit sk_before) fest setzen; ist das Skelett durch pin_corpse
+## mitgewandert, wird die Wurzel so umgerechnet, dass die Weltlage gleich bleibt.
+func _set_local_poses(local: Array, sk_before: Transform3D) -> void:
+	var shift := sk.global_transform.affine_inverse() * sk_before
 	for i in sk.get_bone_count():
-		var par := sk.get_bone_parent(i)
-		var wi: Transform3D = world[i]
-		var base: Transform3D = inv_sk
-		if par >= 0:
-			var wp: Transform3D = world[par]
-			base = wp.affine_inverse()
-		var local: Transform3D = base * wi
-		sk.set_bone_pose_position(i, local.origin)
-		sk.set_bone_pose_rotation(i, local.basis.get_rotation_quaternion())
+		var p: Vector3 = local[i][0]
+		var q: Quaternion = local[i][1]
+		if sk.get_bone_parent(i) < 0:
+			var t := shift * Transform3D(Basis(q), p)
+			p = t.origin
+			q = t.basis.get_rotation_quaternion()
+		sk.set_bone_pose_position(i, p)
+		sk.set_bone_pose_rotation(i, q)
 	sk.force_update_all_bone_transforms()
 
 

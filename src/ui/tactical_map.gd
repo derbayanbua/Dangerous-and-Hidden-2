@@ -66,6 +66,7 @@ func setup(m: Mission) -> void:
 	_cam = Camera3D.new()
 	_cam.projection = Camera3D.PROJECTION_ORTHOGONAL
 	_cam.far = 600.0
+	_cam.set_meta("b041_keep_far", true)   # B-041: Sichtweite setzt nur Spielkameras
 	m.add_child(_cam)
 	_overlay = Control.new()
 	_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)

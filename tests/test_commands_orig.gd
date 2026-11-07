@@ -194,15 +194,30 @@ func _run() -> void:
 	var far0 := mates[0].global_position.distance_to(goal)
 	await menu(KEY_KP_0, [1, 3])
 	lead.look_pitch = 0.0
-	await walk("move_back", 4.0)
-	await seconds(16.0)
+	# Spur je 2 s (abschluss_099: einmaliger, nicht nachstellbarer Fehlschlag – bei Wiederholung Ursache im Log sichtbar)
+	Input.action_press("move_back")
+	# abschluss_099: Kameraden mit Feindsicht (~60 m, Gegner der Karte) gehen geduckt (0,7 m/s) → bis 40 s warten,
+	# geprüft wird, dass der Befehl besteht und das Ziel erreicht wird (nicht die Laufgeschwindigkeit)
+	for k in 20:
+		if k == 2:
+			Input.action_release("move_back")
+		await seconds(2.0)
+		if k >= 9 and mates.all(func(s2): return Vector2(s2.global_position.x - goal.x, s2.global_position.z - goal.z).length() < 4.0):
+			break
+		for s in mates:
+			var bq := sq.brain_of(s)
+			var tq: Soldier = bq.perception.best_target() if bq.perception else null
+			print("DORTHIN_SPUR t=%d %s d=%.1f st=%d mode=%d v=%.1f tgt=%s stam=%.0f enemy=%s" % [k, s.soldier_name,
+				Vector2(s.global_position.x - goal.x, s.global_position.z - goal.z).length(), s.stance, s.move_mode,
+				Vector2(s.velocity.x, s.velocity.z).length(), bq.has_move_target(), s.stamina,
+				(tq.soldier_name + " %.0f m" % s.global_position.distance_to(tq.global_position)) if tq else "-"])
 	var there := true
 	info = []
 	for s in mates:
 		var d := Vector2(s.global_position.x - goal.x, s.global_position.z - goal.z).length()
 		info.append("%s %d %.1f m" % [s.soldier_name, sq.brain_of(s).order, d])
 		there = there and sq.brain_of(s).order == SquadBrain.Order.MOVE and d < 4.0
-	check(there and far0 > 8.0, "Bewegung › Dorthin: nach 20 s am Fadenkreuzpunkt, Befehl besteht",
+	check(there and far0 > 8.0, "Bewegung › Dorthin: nach 20–40 s am Fadenkreuzpunkt, Befehl besteht",
 		"Start %.1f m; %s" % [far0, ", ".join(info)])
 
 	# --- Feuer einstellen / Feuer frei (Angriff) ---

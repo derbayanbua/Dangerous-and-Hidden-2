@@ -25,6 +25,9 @@ Tarnung, Fahrzeuge, Original-Missionsabläufe.
   Es wird kein Code des Originals verwendet.
 - Texturen und Sounds sind aus dem Original und müssen manuel exportiert und Importiert werden
 - LAN Modus mit BOTs ist implementiert
+- **Mehrspieler – Koop (KOOPERATIV):** im LAN- und Internet-Menü wählbar. Die Kartenliste sind die
+  Einzelspieler-Missionen (Einträge „Arena: …“) 1:1 – gleiche Karten, Skripte, Ziele und Gegner; nur mehrere
+  menschliche Spieler statt Trupp-KI. Abweichend sind lediglich Spielerzahl und Leben (Standard 6 Spieler).
 
 ## Screenshots (v0.9.8)
 

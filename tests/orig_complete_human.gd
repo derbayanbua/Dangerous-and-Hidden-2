@@ -261,6 +261,9 @@ func _go_objective_targets() -> bool:
 						return true
 					tt += maxf(game_time - t0, 1.0)
 				_hunt_target = null
+				# B-036b: danach wieder folgen lassen – sonst bleiben Kameraden zurück (a3: sas_7 blieb in der Basis und
+				# fiel der Originalfalle r_ar3_kill_player.scr zum Opfer, nicht dem Eigenbeschuss)
+				_press("order_follow")
 				continue
 			var vkey := "%s|%s" % [idx, fr.get_instance_id()]
 			if _obj_visited.has(vkey):

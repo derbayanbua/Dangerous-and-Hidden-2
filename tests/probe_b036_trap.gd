@@ -113,8 +113,13 @@ func _run() -> void:
 			(rh["collider"] as Node).get_path() if rh["collider"] is Node else str(rh["collider"]),
 			(rh["position"] as Vector3).distance_to(at + Vector3(0, 1.2, 0)),
 			(rh["collider"] as CollisionObject3D).collision_layer if rh["collider"] is CollisionObject3D else -1]])
+	# B-036b: Soldat vor der Abfrage an --at stellen (sonst stand er noch am Start → can_interact=false als Artefakt)
+	s.global_position = at
+	s.velocity = Vector3.ZERO
+	await frames(3)
+	var rad := float(Game.cli.get("radius", "6"))
 	for n in get_tree().get_nodes_in_group("interactables"):
-		if (n as Node3D).global_position.distance_to(at) < 6.0:
+		if (n as Node3D).global_position.distance_to(at) < rad:
 			print("TRAP Benutzbar %s (%s) bei %s, offen=%s, gesperrt=%s, can_interact=%s, enabled=%s, floor_y=%s, Soldat y=%.2f" % [
 				n.name, n.get_class(), (n as Node3D).global_position, n.get("is_open"), n.get("locked"),
 				(n as Interactable).can_interact(s), n.get("enabled"), n.get("floor_y"), s.global_position.y])

@@ -613,12 +613,16 @@ static func _swap_textures(state: GLTFState) -> void:
 		var hq: Image = _hq_cache.get(key)
 		_hq_mutex.unlock()
 		if hq == null:
+			var orig_img := (imgs[i] as ImageTexture).get_image()
 			for s in sfx:
 				if s == "":
 					break
 				var p := "%s/textures%s/%s" % [cache_root(), s, file]
-				if FileAccess.file_exists(p):
+				if FileAccess.file_exists(p) and not _hq_rejected(s, file):
 					hq = Image.load_from_file(p)
+					if hq and not _hq_fits(orig_img, hq):
+						hq = null       # B-042: falsche Proportion/Alpha verloren → nächste Stufe
+						continue
 					if hq:
 						hq.generate_mipmaps()
 						if comp:
@@ -630,8 +634,52 @@ static func _swap_textures(state: GLTFState) -> void:
 		if hq:
 			(imgs[i] as ImageTexture).set_image(hq)
 			swapped[i] = true
+			_hq_mutex.lock()
+			hq_stats["swapped"] += 1
+			_hq_mutex.unlock()
 	if comp:
 		_compress_state_images(state, swapped)
+
+
+## B-042: Ablehnungsliste je Stufe (tools/b042_texcheck.py --write → textures<stufe>/_reject.txt: Farbabweichung,
+## Seitenverhältnis, Alpha verloren). Abgelehnte Dateien fallen auf die nächste Stufe zurück (4K → HD → Original).
+static var _reject := {}
+static var hq_stats := {"swapped": 0, "rejected": 0, "unfit": 0}
+
+static func _hq_rejected(suffix: String, file: String) -> bool:
+	_hq_mutex.lock()
+	if not _reject.has(suffix):
+		var names := {}
+		var f := FileAccess.open("%s/textures%s/_reject.txt" % [cache_root(), suffix], FileAccess.READ)
+		if f:
+			while not f.eof_reached():
+				var line := f.get_line()
+				if line != "" and not line.begins_with("#"):
+					names[line.get_slice("\t", 0)] = true
+		_reject[suffix] = names
+	var r: bool = (_reject[suffix] as Dictionary).has(file)
+	if r:
+		hq_stats["rejected"] += 1
+	_hq_mutex.unlock()
+	return r
+
+
+## B-042: KI-Fassung passt zum Original (gleiches Seitenverhältnis ±1 %, Alphakanal erhalten)?
+static func _hq_fits(orig: Image, hq: Image) -> bool:
+	if orig == null or hq == null or orig.get_width() == 0 or orig.get_height() == 0:
+		return hq != null
+	var ro := float(hq.get_width()) / orig.get_width()
+	var rh := float(hq.get_height()) / orig.get_height()
+	var ok := absf(ro - rh) <= 0.01 * maxf(ro, rh)
+	var oa := orig.get_format() in [Image.FORMAT_RGBA8, Image.FORMAT_LA8, Image.FORMAT_RGBA4444, Image.FORMAT_RGBAF, Image.FORMAT_RGBAH]
+	var ha := hq.get_format() in [Image.FORMAT_RGBA8, Image.FORMAT_LA8, Image.FORMAT_RGBA4444, Image.FORMAT_RGBAF, Image.FORMAT_RGBAH]
+	if oa and not ha and orig.detect_alpha() != Image.ALPHA_NONE:
+		ok = false
+	if not ok:
+		_hq_mutex.lock()
+		hq_stats["unfit"] += 1
+		_hq_mutex.unlock()
+	return ok
 
 
 ## B-039: übrige (nicht getauschte) Bilder des glTF komprimieren; Normalenkarten (materials[].normalTexture) als BC5.

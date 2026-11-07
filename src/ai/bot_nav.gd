@@ -11,6 +11,7 @@ const COVER_DETOUR := 6.0        ## höchstens so weit neben dem Weg
 const PROGRESS_DIST := 1.5       ## Fortschritt = so weit bewegt
 
 var waypoints := PackedVector3Array()
+var route_vias := 0              ## Statistik: Routen über eine Wegfolge der Karte
 var wp_i := 0
 var dest := Vector3.INF          ## Ziel der aktuellen Route
 var reachable := true            ## Ziel liegt (nahezu) am Ende des Netzpfads
@@ -127,6 +128,14 @@ func plan(s: Soldier, to: Vector3, threat: Vector3, use_cover: bool) -> bool:
 		return reachable
 	reachable = ends_near(pts, to)
 	path_len = length(pts)
+	if use_cover and reachable and path_len > 30.0:
+		# optionale Wegfolge der Karte (Graben als Annäherung, Flanke) bei kleinem Umweg
+		var via := BotGoals.map_route(s, from, to, path_len)
+		if via.size() >= 2:
+			waypoints.append_array(via)
+			waypoints.append(to)
+			route_vias += 1
+			return reachable
 	if use_cover and path_len > COVER_SEG * 1.6:
 		var space := s.get_world_3d().direct_space_state
 		var acc := 0.0
