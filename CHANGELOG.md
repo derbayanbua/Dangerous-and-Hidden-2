@@ -1,6 +1,6 @@
 # Changelog
 
-Versionierung: ab 0.10.1 ([D]) – jeder Commit nach GitHub zählt die letzte Stelle hoch und bekommt einen Tag.
+
 
 ## 0.10.2 (09.11.2026)
 
