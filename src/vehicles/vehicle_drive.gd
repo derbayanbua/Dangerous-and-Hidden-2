@@ -652,6 +652,11 @@ func _engine(dt: float) -> void:
 		var om := maxf(rpm, rpm_max * 0.3) * TAU / 60.0
 		var f := p / om * ratio / drive_radius
 		f = minf(f, power_w / maxf(absf(speed), 2.5))       # Kupplung/Leistungsgrenze beim Anfahren
+		# af1_finale [E]: Panzer kriechen (Wandler/Kupplungsschlupf) mit voller Motorleistung bis ~1 m/s herab – sonst
+		# kam der Panzer III (AFRICA1 panzer01, 1. Gang 35,5) nicht aus seiner 14°-Stellungsgrube (51 kN < Hangabtrieb +
+		# Rollwiderstand). Begrenzt weiter durch den Kettengrip (Antriebsschlupfregelung 80 %).
+		if kind == Kind.TANK and gear == 1:
+			f = maxf(f, 0.9 * power_w / maxf(absf(speed), 1.0))
 		if rpm_w > rpm_max:
 			f *= clampf((rpm_limit - rpm_w) / maxf(rpm_limit - rpm_max, 1.0), 0.0, 1.0)
 		drive_force = f * accel * (1.0 if gear > 0 else -1.0)

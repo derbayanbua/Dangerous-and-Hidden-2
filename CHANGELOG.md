@@ -2,6 +2,19 @@
 
 Versionierung: ab 0.10.1 ([D]) – jeder Commit nach GitHub zählt die letzte Stelle hoch und bekommt einen Tag.
 
+## 0.10.2 (09.11.2026)
+
+- Afrika 1 schließt wieder ab: Verstärkungspanzer blieb in seiner Grube stecken (zu wenig Zugkraft, gegenseitiges Warten
+  mit dem BMW-Gespann). Panzer mit Kriechgang im 1. Gang, Skriptfahrten fahren nach 1,5 s Blockade langsam weiter [E].
+  Test `test_af1_finale`.
+- Zwischensequenzen: eigene Figur sichtbar statt nur der Ego-Waffe, solange das Skript die Kamera führt
+  (`CameraRig._script_camera`). Test `test_af1_cutscene`.
+- Performance große Karten: Animationsauswahl ferner Figuren (> 60/120 m) und KI ferner Wachen/Patrouillen gestaffelt
+  (`--anim_lod=0`, `--ai_lod=0`), Animationszeit −40…−73 % (`docs/status/perf_gross.md`).
+- Gegner-KI (`docs/status/ai_orig2.md`, `--ai_orig2=0`): Granatauslöser nach Original 0x552200, defensive Stellungswahl
+  über das Fußwegenetz (0x557D10), Rückzug unter 25 % Gesundheit [E] (`--ai_retreat=0`); 0x58C330 = Waffe in Anschlag.
+- Test `test_tools_mines` robuster gegen zufällige Spawnpunkte.
+
 ## 0.10.1 (08.11.2026)
 
 **Einzelspieler-KI (Abgleich mit dem Original, `docs/AI_AUDIT_ENEMY.md`, `docs/AI_AUDIT_ALLY.md`)**

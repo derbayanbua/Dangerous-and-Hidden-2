@@ -66,6 +66,7 @@ var face_move := true            ## Körper in Laufrichtung drehen (EnemyBrain.u
 var history: Array[int] = []     ## Zustandsfolge (Test/Debug)
 var last_pause_ms := 0.0         ## zuletzt gezogene Feuerpause (Test)
 var action7_count := 0           ## Aktion-7-Aufträge (Test)
+var retreats := 0                ## ai_orig2: Rückzüge zum Posten (Test)
 var _action7_lock := 0.0
 var _state_s := 0.0
 var _stance := Soldier.Stance.STAND
@@ -203,6 +204,9 @@ func _aim_only(delta: float) -> void:
 	brain.soldier.trigger = false
 
 
+## AP-48e (08.11.2026) 0x58C330 dekodiert [B]: Nachricht Art 4/Befehl 0x14 → 0x5ABE30 → 0x77F3D0(1): Mensch+0x5C = 1
+## (Waffe in Anschlag; 0x15 = absetzen, HUD-Symbol 0x491640) + virtueller Aufruf +8 (Aktion 1, Nullvektoren). Also KEINE
+## Streu-/Schussformel – das Schießen liegt außerhalb des Automaten (weiter offen). Nachbau: aiming = true (unten, deckt sich).
 ## AP-48b: Schuss-/Zielaktion 0x58C330 [B Aufruf in 3/4/5/7, P Bedeutung „Feuern“]: bei Sicht auf das Ziel feuern, auch
 ## in der Bewegung; sonst nur anvisieren. Keine zweite Reaktionssperre (Original: Teil der Zustandsfolge [P]) – nur der
 ## Blickfehler begrenzt den ersten Schuss. Gibt true zurück, wenn gefeuert werden durfte.
@@ -299,6 +303,21 @@ func _st_choose() -> void:
 		_hold_reaim()
 		return
 	var p := Vector3.INF
+	# ai_orig2 Rückzug [E – im Original nicht gefunden; Original kennt nur aggressiv → defensiv unter 50 % (0x5484B0) und
+	# Flucht bei Panik]: unter 25 % Gesundheit geduckt laufend zurück zum Posten (≥ 5 m entfernt), dort weiter wie Zustand 7.
+	# `--ai_retreat=0` schaltet ab.
+	var s := brain.soldier
+	if ai_orig2() and String(Game.cli.get("ai_retreat", "1")) != "0" and s.health < s.max_health * 0.25 \
+			and brain.distance_to(brain.home_pos) > 5.0:
+		p = _reach(brain.home_pos)
+		if p.is_finite():
+			retreats += 1
+			move_point = p
+			_stance = Soldier.Stance.CROUCH
+			_mode = Soldier.MoveMode.RUN
+			_go(p, _stance, _mode)
+			_enter(S_MOVE)
+			return
 	if _target_ok():
 		if aggressive():
 			p = pick_flank_point(brain, target_pos, brain.soldier.global_position, rng)
@@ -686,6 +705,26 @@ static func pick_advance_point(b: AIBrain, self_pos: Vector3, tpos: Vector3, r: 
 
 ## Nicht aggressiv: 0x557D10 = Wegpunktsuche im Leinengebiet (+0x168 bzw. +0x158) [B Ablauf]. Nachbau: vorhandene
 ## Deckungssuche (verdeckt hockend, Herausschauen möglich) innerhalb der Leine [E Kriterium].
+## ai_orig2 (08.11.2026) 0x553EB0 nicht-aggressiver Zweig dekodiert [B]: Liste +0x168 (bzw. +0x158 bei Flag 0x200) →
+## 0x557D10 = Wegpunkt der Liste mit kleinstem Abstand² zur ZIELPOSITION (+0x148 → +0x20); keine Deckungs-/Sichtprüfung.
+## Listeninhalt = Wegpunkte im Leinengebiet um den Posten [P]. Nachbau: Fußwegenetz-Knoten mit Abstand ≤ Leine zum Posten
+## (Leinengebiet je Posten/Leine einmal gecacht), Rückfall auf die Deckungssuche ohne Netz. `--ai_orig2=0` = alt.
+static func ai_orig2() -> bool:
+	return String(Game.cli.get("ai_orig2", "1")) != "0"
+
+
 static func pick_leash_point(b: EnemyBrain, tpos: Vector3, _r: RandomNumberGenerator) -> Vector3:
+	var net := walk_net(b) if ai_orig2() else null
+	if net:
+		var area: Array = b.leash_nodes(net)
+		var best := -1
+		var bd := 100000.0
+		for k in area:
+			var d2: float = (net.base_pos[k] as Vector3).distance_squared_to(tpos)
+			if d2 < bd:
+				bd = d2
+				best = k
+		if best >= 0:
+			return net.base_pos[best]
 	var p := b.find_cover(tpos + Vector3.UP * 1.5, 9.0, 0.0)
 	return p if p.is_finite() and b._in_leash(p) else Vector3.INF

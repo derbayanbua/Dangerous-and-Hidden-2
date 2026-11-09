@@ -214,6 +214,8 @@ static func _smat(c: Color, metallic: float, rough: float) -> StandardMaterial3D
 
 # --- Animation ---------------------------------------------------------------
 
+var _anim_dt := 1.0 / 60.0
+
 ## stance: 0 stehen, 1 hocken, 2 liegen. speed in m/s, aim_pitch in Rad.
 func update_anim(delta: float, stance: int, speed: float, aim_pitch: float, aiming: bool, lean: float) -> void:
 	if _dead:
@@ -259,6 +261,8 @@ func update_anim(delta: float, stance: int, speed: float, aim_pitch: float, aimi
 	weapon_socket.rotation.x = 0.0 if aiming else 0.25
 	weapon_socket.position = Vector3(0.12 if aiming else 0.16, 0.38 if aiming else 0.3, -0.32)
 	_anim_stance = stance
+	# perf_gross: Soldier staffelt den Aufruf bei fernen KI-Figuren → aufgelaufene Zeit statt fester Physik-dt
+	_anim_dt = delta if delta > 0.0 else get_physics_process_delta_time()
 	_update_orig(speed)
 	_update_hold(delta, speed, aim_pitch, aiming)
 
@@ -1036,14 +1040,14 @@ func _update_orig(speed: float) -> void:
 	# Original-Ganzkörperclips aus anim.sav (BodyAnim): Bewegung je Haltung/Richtung/Gangart, Übergänge, Lehnen,
 	# Springen/Klettern/Leiter, Schwimmen, Treffer, Ergeben/Gefangener, Benutzen
 	if body and _orig_anim and not BodyAnim.table().get("clips", {}).is_empty():
-		var r := body.update(get_physics_process_delta_time(), _soldier, _anim_stance, speed, _lean, global_basis)
+		var r := body.update(_anim_dt, _soldier, _anim_stance, speed, _lean, global_basis)
 		# Schwimmclips liegen mit der Wurzel 0,14 m unter dem Ursprung (Ursprung = Wasserlinie); der Soldat schwimmt
 		# mit dem Ursprung 1,4 m unter der Oberfläche (Soldier._update_swim) -> Figur so weit anheben
 		# Insassen: Ursprung der Sitzclips (!ridic/!spol/!namotorce) = Sitz-Frame SEATnn [P]; Soldier setzt seinen
 		# Ursprung 0,55 m unter den Sitz (Soldier._physics_process) -> Figur wieder auf den Sitz heben
 		var lift := 1.4 if body.state == "swim" else (0.55 if body.state == "vehicle" else 0.0)
 		if not is_equal_approx(orig_figure.position.y, lift):
-			orig_figure.position.y = move_toward(orig_figure.position.y, lift, get_physics_process_delta_time() * 4.0)
+			orig_figure.position.y = move_toward(orig_figure.position.y, lift, _anim_dt * 4.0)
 		var c := String(r.get("clip", ""))
 		if c != "" and _orig_anim.has_animation(c):
 			if r.has("seek"):

@@ -157,6 +157,15 @@ func _in_interior(p: Vector3) -> bool:
 	return false
 
 
+## Originalskript führt die Kamera (CSC-Zwischensequenz oder Fake-Cutscene)
+func _script_camera() -> bool:
+	var m := Game.current_mission()
+	if m == null or not ("ls_runtime" in m):
+		return false
+	var rt = m.get("ls_runtime")
+	return rt != null and is_instance_valid(rt) and rt.has_method("script_camera_active") and rt.script_camera_active()
+
+
 func _build_sector_boxes() -> Array:
 	var out: Array = []
 	var m := Game.current_mission()
@@ -210,6 +219,10 @@ func _apply_head_visibility() -> void:
 ## springt (Scharfschützen-Glitch 16.10.2026). Nicht im Fahrzeug.
 func _want_fpv(z: bool) -> bool:
 	if not is_instance_valid(target) or target.vehicle != null:
+		return false
+	# Zwischensequenz/Skriptkamera: die Szene filmt die eigene Figur von außen (AFRICA1 Soldat stellen) – im Original
+	# ist die Ego-Ansicht dann aus und die Figur vollständig sichtbar; sonst blieb der Körper ausgeblendet
+	if _script_camera():
 		return false
 	if mode == Mode.FIRST or target.using_binoculars or z:
 		return true

@@ -470,6 +470,19 @@ func _run_mp() -> void:
 	me.health = 1000.0
 	me.set_meta("protect_until", 0)
 	me.mines = 2
+	# Zufalls-Spawn: Client kann direkt neben dem Host stehen (Mine läge an ihm → Entschärfen/Annäherung) → Abstand schaffen
+	var cs: Soldier = Net._soldiers.get(cid)
+	if is_instance_valid(cs) and cs.global_position.distance_to(me.global_position) < 15.0:
+		var away := me.global_position - cs.global_position
+		away.y = 0.0
+		away = (away.normalized() if away.length() > 0.1 else Vector3.FORWARD) * 20.0
+		var at := cs.global_position + away
+		var gq := PhysicsRayQueryParameters3D.create(at + Vector3.UP * 20.0, at + Vector3.DOWN * 20.0, 1, me.exclude_rids())
+		var gh := me.get_world_3d().direct_space_state.intersect_ray(gq)
+		if not gh.is_empty():
+			me.global_position = (gh.position as Vector3) + Vector3.UP * 0.3
+			me.velocity = Vector3.ZERO
+			await get_tree().create_timer(0.5).timeout
 	me.apply_selection("mine")
 	await get_tree().create_timer(1.0).timeout
 	check(me.model.prop_name() != "" and not _weapon_visible(me), "Host: Mine in der Hand")
@@ -482,7 +495,20 @@ func _run_mp() -> void:
 		return
 	var mine: PlacedCharge = mines[0]
 	# Host 4 m neben die Mine (Schaden), Mine für den Client markieren (Position kommt über die Aktion „mine“)
-	me.global_position = mine.global_position + Vector3(0.0, 0.3, 4.0)
+	# Seite mit freier Linie Mine → Host (hügeliges Gelände verdeckt sonst die Splitter)
+	var side := Vector3(0.0, 0.3, 4.0)
+	for cand in [Vector3(0, 0, 4), Vector3(4, 0, 0), Vector3(0, 0, -4), Vector3(-4, 0, 0)]:
+		var p: Vector3 = mine.global_position + cand
+		var gq2 := PhysicsRayQueryParameters3D.create(p + Vector3.UP * 3.0, p + Vector3.DOWN * 4.0, 1, me.exclude_rids())
+		var gh2 := me.get_world_3d().direct_space_state.intersect_ray(gq2)
+		if not gh2.is_empty():
+			p.y = (gh2.position as Vector3).y
+		var lq := PhysicsRayQueryParameters3D.create(mine.global_position + Vector3.UP * 0.2, p + Vector3.UP * 0.5, 1,
+			me.exclude_rids())
+		if me.get_world_3d().direct_space_state.intersect_ray(lq).is_empty():
+			side = p + Vector3.UP * 0.3 - mine.global_position
+			break
+	me.global_position = mine.global_position + side
 	var hp0 := me.health
 	# warten, bis die Mine durch den Beschuss des Clients detoniert (Server wertet aus)
 	var wr: WeakRef = weakref(mine)
@@ -493,7 +519,7 @@ func _run_mp() -> void:
 	while Time.get_ticks_msec() - t0 < 240000 and not gone.call():
 		await get_tree().create_timer(0.1).timeout
 		if is_instance_valid(me):
-			me.global_position = mine.global_position + Vector3(0.0, 0.3, 4.0) if is_instance_valid(mine) else me.global_position
+			me.global_position = mine.global_position + side if is_instance_valid(mine) else me.global_position
 	check(gone.call() and PlacedCharge.defused_count == 0, "Server: Schuss des Clients bringt die Mine zur Detonation")
 	await frames(10)
 	check(is_instance_valid(me) and me.health < hp0 - 1.0, "Server: Host in 4 m erhält Explosionsschaden",

@@ -63,6 +63,7 @@ $suites = @(
   @{ name = "test_b017_mp"; args = "--headless -- --autoplay=test_b017 --phase=mp_markers"; mp = $true },
   @{ name = "test_no2_final"; args = "--headless -- --mission=no2_schwerttaenzer --autoplay=test_no2_final --test_timeout=900"; timeout = 1200 },
   @{ name = "test_af6";     args = "--headless -- --mission=af6_raubvoegel --autoplay=test_af6" },
+  @{ name = "test_af1_finale"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_af1_finale" },
   @{ name = "test_af_air";   args = "--headless -- --mission=af2_flugschau --autoplay=test_af_air" },
   @{ name = "test_items";    args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_items" },
   @{ name = "test_vehicle_types"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_vehicle_types"; timeout = 2400 },

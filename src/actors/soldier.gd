@@ -488,7 +488,34 @@ func _physics_process(delta: float) -> void:
 	if lq != _lean_sent:
 		_lean_sent = lq
 		_net("lean", Vector3(lq, 0, 0), Vector3.ZERO, "")
-	model.update_anim(delta, stance, current_speed(), look_pitch, aiming, lean)
+	# perf_gross: Animationsauswahl ferner KI-Figuren gestaffelt (> 60 m jedes 2., > 120 m jedes 4. Bild, aufgelaufene
+	# Zeit); die AnimationPlayer laufen selbst weiter. Spielerfigur immer. `--anim_lod=0` = aus.
+	_anim_acc += delta
+	_anim_n += 1
+	if _anim_n < _anim_every:
+		return
+	_anim_n = 0
+	_anim_every = 1 if is_player_controlled else _anim_lod_interval()
+	model.update_anim(_anim_acc, stance, current_speed(), look_pitch, aiming, lean)
+	_anim_acc = 0.0
+
+
+var _anim_acc := 0.0
+var _anim_n := 0
+var _anim_every := 1
+static var _anim_lod_state := -1
+
+
+func _anim_lod_interval() -> int:
+	if _anim_lod_state < 0:
+		_anim_lod_state = 0 if String(Game.cli.get("anim_lod", "1")) == "0" else 1
+	if _anim_lod_state == 0 or trigger or aiming:
+		return 1
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return 1
+	var d2 := cam.global_position.distance_squared_to(global_position)
+	return 4 if d2 > 14400.0 else (2 if d2 > 3600.0 else 1)
 
 
 func _update_stance(delta: float) -> void:

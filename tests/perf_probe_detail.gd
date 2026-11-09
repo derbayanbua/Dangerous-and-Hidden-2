@@ -62,6 +62,12 @@ func _run() -> void:
 	var load_ms := Time.get_ticks_msec() - t0
 	if Settings.quality != int(Game.cli.get("perf_quality", "2")):
 		Settings.quality = int(Game.cli.get("perf_quality", "2"))
+	# perf_gross: Trupp unverwundbar (wie test_orig_complete)
+	if m.squad:
+		for s in m.squad.members:
+			if is_instance_valid(s):
+				s.max_health = 100000.0
+				s.health = 100000.0
 	# Intro/Zwischensequenz abwarten, dann ruhig stellen
 	await get_tree().create_timer(float(Game.cli.get("perf_wait", "8"))).timeout
 	var dur := float(Game.cli.get("perf_s", "6"))
@@ -124,6 +130,41 @@ func _run() -> void:
 			extra = "  (je Takt 0,15 s ≙ %.3f ms/Bild bei 60 Hz Physik)" % (float(us_ph) / reps / 1000.0 / 9.0)
 		lines.append("DETAIL %s %s  direkt %-18s Knoten %3d  _process %.3f ms  _physics %.3f ms%s" % [mid, tag, cat, arr.size(),
 			float(us_p) / reps / 1000.0, float(us_ph) / reps / 1000.0, extra])
+	# --- 1a. perf_gross: Soldat aufgeschlüsselt (Animation vs. move_and_slide), je Bild über alle Soldaten ---
+	var us_anim := 0
+	var us_slide := 0
+	var us_near := 0
+	var n_near := 0
+	var camp: Vector3 = get_viewport().get_camera_3d().global_position if get_viewport().get_camera_3d() else Vector3.ZERO
+	for r in 10:
+		for s in nodes.get("soldier", []):
+			if not is_instance_valid(s) or not s.alive or s.vehicle != null or s.net_puppet:
+				continue
+			var a := Time.get_ticks_usec()
+			s.model.update_anim(0.0, s.stance, s.current_speed(), s.look_pitch, s.aiming, s.lean)
+			var b := Time.get_ticks_usec()
+			var v: Vector3 = s.velocity
+			s.velocity = Vector3.ZERO
+			s.move_and_slide()
+			s.velocity = v
+			var c := Time.get_ticks_usec()
+			us_anim += b - a
+			us_slide += c - b
+			if r == 0 and s.global_position.distance_to(camp) < 60.0:
+				n_near += 1
+		await get_tree().process_frame
+	var lodn := [0, 0, 0]
+	var lod_cost := 0.0
+	var per := float(us_anim) / 10000.0 / maxf(nodes.get("soldier", []).size(), 1)
+	for s in nodes.get("soldier", []):
+		if is_instance_valid(s) and s.alive and s.has_method("_anim_lod_interval"):
+			var k: int = 1 if s.is_player_controlled else s._anim_lod_interval()
+			lodn[[1, 2, 4].find(k)] += 1
+			lod_cost += per / k
+	lines.append("DETAIL %s %s  anim_lod Takt 1/2/4: %d/%d/%d  update_anim effektiv %.3f ms je Physikbild" % [mid, tag,
+		lodn[0], lodn[1], lodn[2], lod_cost])
+	lines.append("DETAIL %s %s  soldat update_anim %.3f ms  move_and_slide %.3f ms  (je Bild, alle; < 60 m: %d)" % [mid, tag,
+		float(us_anim) / 10000.0, float(us_slide) / 10000.0, n_near])
 	# --- 1b. HUD aufgeschlüsselt (OrigHud-Teilfunktionen, je 20×) ---
 	for h in nodes.get("hud", []):
 		if not is_instance_valid(h):
@@ -161,7 +202,10 @@ func _run() -> void:
 		_out(lines)
 		get_tree().quit(0)
 		return
-	for cat in ["perception", "ai_brains", "hud", "objective_markers", "blood", "effects", "sky", "ls_runtime", "interactive", "charges", "mission", "audio"]:
+	var onoff_cats: Array = ["perception", "ai_brains", "hud", "objective_markers", "blood", "effects", "sky", "ls_runtime", "interactive", "charges", "mission", "audio"]
+	if Game.cli.has("perf_cats"):   # perf_gross: Auswahl, z. B. soldier,ls_anim
+		onoff_cats = Array(String(Game.cli["perf_cats"]).split(","))
+	for cat in onoff_cats:
 		var arr: Array = nodes.get(cat, [])
 		if arr.is_empty():
 			continue

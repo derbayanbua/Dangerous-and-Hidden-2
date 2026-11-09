@@ -307,6 +307,27 @@ func _in_leash(p: Vector3) -> bool:
 	return r == INF or Vector2(p.x - home_pos.x, p.z - home_pos.z).length() <= r
 
 
+## ai_orig2: Leinengebiet als Fußwegenetz-Knotenliste (Original-Liste +0x168/+0x158 [B Nutzung, P Inhalt]), je
+## Posten/Leine einmal berechnet (keine Schleife je Bild). Leine unbegrenzt → leere Liste (Zweig gilt nur nicht-aggressiv).
+var _leash_cache: Array = []
+var _leash_key := ""
+
+
+func leash_nodes(net: LsCheckpoints) -> Array:
+	var r := leash_radius()
+	if r == INF or net == null:
+		return []
+	var key := "%s|%.1f|%d" % [str(home_pos.snapped(Vector3.ONE * 0.5)), r, net.base_pos.size()]
+	if key != _leash_key:
+		_leash_key = key
+		_leash_cache = []
+		for k in net.base_pos.size():
+			var p: Vector3 = net.base_pos[k]
+			if Vector2(p.x - home_pos.x, p.z - home_pos.z).length() <= r and absf(p.y - home_pos.y) < 6.0:
+				_leash_cache.append(k)
+	return _leash_cache
+
+
 ## Punkt auf den Aktionsradius zurückholen
 func _leash_clamp(p: Vector3) -> Vector3:
 	var r := leash_radius()
@@ -417,6 +438,18 @@ func _physics_process(delta: float) -> void:
 	if script_control or script_move_active():
 		_script_tick(delta)
 		return
+	# perf_gross: Tick-Staffelung nach Distanz (nur Ruhezustände Wache/Patrouille, Verhalten unverändert –
+	# der Zustand bekommt die aufgelaufene Zeit). > 60 m jedes 2., > 120 m jedes 4. Bild. `--ai_lod=0` = aus.
+	if (state == State.GUARD or state == State.PATROL) and _ai_lod_on:
+		_lod_acc += delta
+		_lod_n += 1
+		if _lod_n >= _lod_every:
+			_lod_n = 0
+			_lod_every = _lod_interval()
+		else:
+			return
+		delta = _lod_acc
+	_lod_acc = 0.0
 	_state_time += delta
 	_shout_cooldown = maxf(_shout_cooldown - delta, 0.0)
 	match state:
@@ -428,6 +461,31 @@ func _physics_process(delta: float) -> void:
 	if stationary and state != State.GUARD:
 		stop_moving()
 	update_movement(delta, state != State.COMBAT or (orig_fsm != null and orig_fsm.face_move))
+
+
+var _lod_acc := 0.0
+var _lod_n := 0
+var _lod_every := 1
+static var _ai_lod_on: bool:
+	get:
+		if _ai_lod_state < 0:
+			_ai_lod_state = 0 if (Game != null and String(Game.cli.get("ai_lod", "1")) == "0") else 1
+		return _ai_lod_state == 1
+static var _ai_lod_state := -1
+
+
+## perf_gross: Takt nach Abstand zur Kamera (Spieler). Unbekannte Kamera → jedes Bild.
+func _lod_interval() -> int:
+	var vp := soldier.get_viewport()
+	var cam := vp.get_camera_3d() if vp else null
+	if cam == null:
+		return 1
+	var d2 := cam.global_position.distance_squared_to(soldier.global_position)
+	if d2 > 14400.0:
+		return 4
+	if d2 > 3600.0:
+		return 2
+	return 1
 
 
 func set_state(s: int) -> void:
@@ -600,12 +658,29 @@ func _combat(delta: float) -> void:
 	# (|Δy|/Abstand < sin 10° = 0,1736) [B]; Obergrenze 32 m und Abklingzeit bleiben [E].
 	var min_gren := 20.0 if _orig_rules() else 8.0
 	var level_ok := not _orig_rules() or absf(tpos.y - soldier.global_position.y) < 0.1736 * maxf(tdist, 0.1)
-	if _no_los_time > 2.0 and _grenade_cd <= 0.0 and tdist > min_gren and tdist < 32.0 and level_ok and not stationary:
+	var gren_ok := _no_los_time > 2.0
+	if _orig_rules() and OrigCombatFsm.ai_orig2():
+		gren_ok = false
+		if _grenade_cd <= 0.0:
+			if tdist < min_gren or tdist >= 32.0:
+				if _gren_check <= 0.0:
+					_gren_block("abstand")
+					_gren_check = 0.5
+				_gren_check -= delta
+			elif not level_ok:
+				if _gren_check <= 0.0:
+					_gren_block("neigung")
+					_gren_check = 0.5
+				_gren_check -= delta
+			else:
+				gren_ok = _orig_grenade_ok(tpos, delta)
+	if gren_ok and _grenade_cd <= 0.0 and tdist > min_gren and tdist < 32.0 and level_ok and not stationary:
 		_grenade_cd = randf_range(12.0, 20.0)
 		if throw_grenade_at(tpos):
 			stop_moving()
 			_cover_pos = Vector3.INF   # danach neue Deckung wählen
 			return
+		_gren_block("wurf_fehl")
 
 	# AP-3: Originalmissionen offline → Kampfautomat hd2.exe 0x549AE0 (OrigCombatFsm) statt eigener Deckungs-/Flankenlogik.
 	# AP-48f (0.10.1): auch Stellungsposten (stationary, im Original unbekannt) laufen über den Automaten, ohne Ortswechsel
@@ -684,6 +759,61 @@ func _combat(delta: float) -> void:
 			set_state(State.SEARCH)
 		elif _no_los_time > 14.0:
 			set_state(State.SEARCH)
+
+
+## ai_orig2 (08.11.2026): Granatbedingung 0x552200 vollständig dekodiert [B] (≥ 20 m und Neigung < sin 10° prüft _combat):
+##  - Automatenzustand (+0xA8, virtuell +0x10) NICHT 0/2/6/7/9 (Eröffnen, Verloren, Wechsel wählen, Laufen, Nachrücken);
+##  - 0x5AE890: kein Eintrag der Liste +0x7C näher als 2 m (d² < 4) an der eigenen Lage – Liste = eigene Leute [P];
+##  - Ziel ist der vom Spieler gesteuerte Mensch (0x5AC4C0 == Spiel+0x18 → +0x1F8);
+##  - 0x552190: Strahl von eigener Lage + 0,5 m waagrecht zum Ziel + 0,15 m hoch zum Zielpunkt (+0x260 = Kopf [P]) über
+##    0x6F7C90(…, 3) – Wurf nur bei Ergebnis 0 (= frei [P]). Die alte Nachbaubedingung „Ziel ≥ 2 s unsichtbar“ [E] entfällt.
+## Takt: höchstens alle 0,5 s geprüft [E] (ein Strahl, keine Pro-Bild-Kosten).
+var _gren_check := 0.0
+var grenade_checks := 0          ## Zähler (Test/Messung)
+
+
+func _orig_grenade_ok(tpos: Vector3, delta: float) -> bool:
+	_gren_check -= delta
+	if _gren_check > 0.0:
+		return false
+	_gren_check = 0.5
+	var gw: Weapon = soldier.weapons[WeaponData.Slot.GRENADE] if soldier.weapons.size() > WeaponData.Slot.GRENADE else null
+	if gw == null or gw.total_ammo() <= 0:
+		return _gren_block("keine_granate")
+	if orig_fsm == null or orig_fsm.state in [OrigCombatFsm.S_OPEN, OrigCombatFsm.S_LOST, OrigCombatFsm.S_CHOOSE,
+			OrigCombatFsm.S_MOVE, OrigCombatFsm.S_ADVANCE]:
+		return _gren_block("zustand")
+	if not (is_instance_valid(target) and target.is_player_controlled):
+		return _gren_block("kein_spieler")
+	var me := soldier.global_position
+	if not _friends_near(me, 2.0).is_empty():
+		return _gren_block("eigener_2m")
+	grenade_checks += 1
+	var flat := tpos - me
+	flat.y = 0.0
+	var from := me + (flat.normalized() * 0.5 if flat.length() > 0.01 else Vector3.ZERO) + Vector3.UP * 0.15
+	var q := PhysicsRayQueryParameters3D.create(from, tpos + Vector3.UP * 1.6, 1)
+	if not soldier.get_world_3d().direct_space_state.intersect_ray(q).is_empty():
+		return _gren_block("strahl")
+	return true
+
+
+## Messung: Gründe, aus denen 0x552200 den Wurf verweigert (Test/Sonde)
+var gren_blocks := {}
+
+
+func _gren_block(why: String) -> bool:
+	gren_blocks[why] = int(gren_blocks.get(why, 0)) + 1
+	return false
+
+
+func _friends_near(p: Vector3, r: float) -> Array:
+	var out: Array = []
+	for n in get_tree().get_nodes_in_group("soldiers"):
+		var s := n as Soldier
+		if s and s != soldier and s.alive and s.team == soldier.team and s.global_position.distance_squared_to(p) < r * r:
+			out.append(s)
+	return out
 
 
 ## AP-3: ein Schritt des Kampfautomaten 0x549AE0; Zustand 12 abgelaufen („Suche beendet“) → Ruhezustand.

@@ -951,7 +951,12 @@ func _script_drive(delta: float) -> void:
 		ahead.exclude = own
 		ah = space.intersect_ray(ahead)
 	if not ah.is_empty() and (ah["normal"] as Vector3).y < 0.6 and _recover_t <= 0.0:
-		want = 0.0
+		# af1_finale [E]: ein anderes Fahrzeug blockiert nur kurz – zwei Skriptfahrzeuge (AFRICA1 BMW-Gespann vor dem
+		# Panzer in der Grube) warteten sonst ewig aufeinander. Nach 1,5 s ohne Fortschritt langsam weiter (Physik schiebt)
+		if ah["collider"] is Vehicle and _stuck_t > 1.5:
+			want = minf(want, 2.0)
+		else:
+			want = 0.0
 	if Game.cli.has("drive_debug"):
 		_dbg_t -= delta
 		if _dbg_t <= 0.0:
