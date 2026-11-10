@@ -157,7 +157,7 @@ def decode_switch(p: bytes) -> dict:
 def decode_explosive_place(p: bytes) -> dict:
     """Typ 22 Explosive place, Leser 0x60CA30 (Defaults Konstruktor 0x60C230)."""
     d = {"label_text": 7161, "has_timer": True, "required_item": 68, "timer_ms": 0,
-         "explosion_sound": -1, "particle_?": -1, "strength_?": 0, "radius_?": 0,
+         "explosion_sound": -1, "particle": -1, "strength": 0, "radius": 0,
          "armed_at_start": False, "hidden": False}
     for cid, c in subchunks(p):
         if cid == 0x64 and len(c) >= 5:
@@ -170,9 +170,9 @@ def decode_explosive_place(p: bytes) -> dict:
         elif cid == 0x67 and len(c) >= 16:
             a, b, s, r = struct.unpack_from("<4i", c, 0)
             d["explosion_sound"] = a          # +0xA8 (IngameSounds Kategorie 6 "Explosion")
-            d["particle_?"] = b               # +0xAC (Effekt-ID an 0x451DB0)
-            d["strength_?"] = s               # +0xB0 (Explosionsstruktur +0x14)
-            d["radius_?"] = r                 # +0xB4 (Explosionsstruktur +0x10, Std. dort 10.0)
+            d["particle"] = b                 # +0xAC: Partikeleffekt (Effekt-ID an 0x451DB0)
+            d["strength"] = s                 # +0xB0: Explosionsstaerke (Explosionsstruktur +0x14)
+            d["radius"] = r                   # +0xB4: Reichweite in m (Explosionsstruktur +0x10, Std. dort 10.0)
         elif cid == 0x68 and len(c) >= 1:
             d["armed_at_start"] = bool(c[0])  # +0xB8: Init im Zustand 1 statt 0
         elif cid == 0x69 and len(c) >= 1:
@@ -185,13 +185,16 @@ def decode_supply_box(p: bytes) -> dict:
     if len(p) < 105:
         return {"raw_len": len(p)}
     ver = p[0]
-    equip, u120, maxc, u12c, u134 = struct.unpack_from("<5i", p, 1)
+    equip, flags, maxc, stock, drop = struct.unpack_from("<5i", p, 1)
     la = [x for x in struct.unpack_from("<10i", p, 21) if x != -1]
     lb = [x for x in struct.unpack_from("<10i", p, 61) if x != -1]
     return {"version": ver, "equipment_box": bool(equip),   # +0x11C: 0 Munitionskiste, 1 Gegenstandskiste
-            "u120_?": u120, "take_limit": maxc,              # +0x128: Menue aktiv solange Bestand des Soldaten < Wert
-            "u12c_?": u12c, "u134_?": u134,
-            "items_list_a": la, "items_list_b": lb,          # +0xFC/+0x10C-Vektor, Auswahl je Seite (0x5A8820)
+            # +0x120: Startzustandsbits (Init |0x18 an 0x5FBD90), Bit 0 = sichtbar/benutzbar, sonst bis SetActorState
+            "initial_flags": flags, "visible": bool(flags & 1),
+            "take_limit": maxc,                              # +0x128: Menue aktiv solange Bestand des Soldaten < Wert
+            "stock": stock,                                  # +0x12C: Anfangsbestand -> +0x130 (0x5F9908, 0x5F9F47)
+            "airdrop_delay_s": drop,                         # +0x134: Abwurf nach Wert*1000 ms (0x5FCD80), <= 0 kein Abwurf
+            "items_axis": la, "items_allied": lb,            # +0xFC/+0x10C-Vektor, Auswahl je Seite (0x5A8820)
             "label_text": _i32(p, 101)}                      # +0x210
 
 
@@ -664,8 +667,8 @@ def annotate(typ, d, texts, items, sounds):
     elif typ == 7:
         a["active_sound_name"] = sound_of(sounds, 1, d.get("active_sound"))
     elif typ == 9:
-        a["items_list_a_names"] = [item_of(items, i) for i in d.get("items_list_a", [])]
-        a["items_list_b_names"] = [item_of(items, i) for i in d.get("items_list_b", [])]
+        a["items_axis_names"] = [item_of(items, i) for i in d.get("items_axis", [])]
+        a["items_allied_names"] = [item_of(items, i) for i in d.get("items_allied", [])]
     return {k: v for k, v in a.items() if v not in (None, {}, [])}
 
 

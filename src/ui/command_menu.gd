@@ -71,7 +71,7 @@ const EV_ACK := 0x7F          ## „Klar doch!“ / „Verlass dich auf mich!“
 const EV_NEGATIVE := 0x68     ## „Negativ“ / „Das kann ich nicht“ … (leise +1)
 
 ## Annahmen (nicht aus dem Original belegt)
-const ADVANCE_DIST := 15.0    ## „Vorwärts“: so weit vor den Anführer
+const ADVANCE_DIST := 15.0    ## bis 0.10.7 „Vorwärts“-Abstand; seit 0.10.8 Lage des Anführers (0x537C60), ungenutzt
 const SUPPRESS_TIME := 4.0    ## „Deckungsfeuer“: Dauer – Original 0x5382D0 → 0x55D280(0, 4000) [P: 4000 = ms]
 const GRENADE_MIN := 6.0      ## Original 0x535910: Ziel näher als 6 m (36 = 6²) → „Negativ“ (Ereignis 0x68) [B]
 const SHOUT_RADIUS := 25.0    ## Hörweite eines gerufenen Befehls
@@ -412,7 +412,7 @@ func _fill_actions() -> void:
 			# 0x5A6380 = gefangen: Töten, Suchen, Uniform (grau nach Abgabe +0x1A5), Gegenstände nehmen
 			_put(0, 7045, ACT_KILL)
 			_put(1, 7043, ACT_SEARCH)
-			_put(2, 7044, ACT_UNIFORM, not eb.uniform_taken)
+			_put(2, 7044, ACT_UNIFORM, eb.uniform_available())    # Nichtkämpfer (+0x1A5) grau
 			_put(3, 7050, ACT_ITEMS)
 		elif s.team != lead.team:
 			# Gegner: Töten, Leise töten, Gefangennehmen nur wenn er sich ergibt (0x5A6450)
@@ -581,13 +581,17 @@ func execute(code: int, quiet: bool) -> void:
 				b.set_order(SquadBrain.Order.HOLD, Vector3.ZERO, quiet)
 				b.strict_hold = code >= 6
 		4, 5:
-			_move_fanned(rec, lead.global_position + lead.forward() * ADVANCE_DIST, quiet)
+			# 0x537C60: Weg zur Nachrichtenposition = Lage des Anführers (0x5A80E0), Toleranz 1,5 m [B]
+			for s in rec:
+				var b := sq.brain_of(s)
+				b.clear_tasks()
+				b.set_order(SquadBrain.Order.MOVE, lead.global_position, quiet)
 		8, 9:
 			for s in rec:
 				sq.brain_of(s).clear_tasks()
 				sq.brain_of(s).set_order(SquadBrain.Order.COVER, Vector3.ZERO, quiet)
 		10, 11:
-			_move_fanned(rec, _point(POINT_RANGE), quiet)
+			_move_fanned(rec, _point(POINT_RANGE), quiet, lead.global_position)
 		12, 13, 14, 15, 16, 17:
 			var roe := SquadBrain.ROE.ON_MY_LEAD
 			if code >= 16:
@@ -723,14 +727,28 @@ func _has_grenade(s: Soldier) -> bool:
 	return g != null and g.total_ammo() > 0
 
 
-func _move_fanned(rec: Array[Soldier], p: Vector3, quiet: bool) -> void:
+## Streutabelle „Dorthin“ (hd2.exe 0x89AB20, gefüllt 0x45B7D0; 0x10 je Platz, x/y/z): Platz i = Versatz im Rahmen
+## „Blick vom Anführer zum Zielpunkt“ (S_matrix::SetDir, +z = Blickrichtung) [B]; mehr als 6 Empfänger → Platz 5 [D].
+const MOVE_SPREAD := [Vector3(0, 0, 0), Vector3(-4, 0, -2), Vector3(4, 0, -2), Vector3(-2, 0, -8), Vector3(2, 0, -8),
+	Vector3(0, 0, 0)]
+
+
+## Zielpunkt je Platz: x quer (rechts +), z längs (vorwärts +) zur Richtung Anführer → Ziel (0x45B890).
+static func spread_point(p: Vector3, from: Vector3, i: int) -> Vector3:
+	var fwd := Vector3(p.x - from.x, 0.0, p.z - from.z)
+	fwd = fwd.normalized() if fwd.length() > 0.01 else Vector3.FORWARD
+	var right := Vector3(-fwd.z, 0.0, fwd.x)
+	var o: Vector3 = MOVE_SPREAD[mini(i, MOVE_SPREAD.size() - 1)]
+	return p + right * o.x + fwd * o.z
+
+
+func _move_fanned(rec: Array[Soldier], p: Vector3, quiet: bool, from: Vector3) -> void:
 	var sq := _squad()
 	var i := 0
 	for s in rec:
-		var ang := TAU * i / 4.0
 		var b := sq.brain_of(s)
 		b.clear_tasks()
-		b.set_order(SquadBrain.Order.MOVE, p + Vector3(cos(ang), 0, sin(ang)) * (1.5 if i > 0 else 0.0), quiet)
+		b.set_order(SquadBrain.Order.MOVE, spread_point(p, from, i), quiet)
 		i += 1
 
 
@@ -965,7 +983,23 @@ func _redraw() -> void:
 		_orig_style(l, st, vs)
 		l.name = "Item%d" % i
 		_box.add_child(l)
+	# Ziffernblock-Belegung (Num 0 = alle, Num 1–6 = Kameraden ohne den aktiven Soldaten) [D]
+	if menu_id == MAIN:
+		var kl := _mk_label(key_line(), maxi(8, fs - 2), Color(0.75, 0.72, 0.62))
+		_orig_style(kl, OrigFonts.ST_MENU_GREY, vs)
+		kl.name = "KeyLine"
+		_box.add_child(kl)
 	_panel.visible = is_open
+
+
+## Anzeigezeile der Ziffernblock-Namen aus key_labels(): „0 Alle  1 Name  2 Name …“ (freie Tasten entfallen).
+func key_line() -> String:
+	var parts: Array = ["0 Alle"]
+	var kls := key_labels()
+	for n in kls.size():
+		if bool(kls[n][1]):
+			parts.append("%d %s" % [n + 1, kls[n][0]])
+	return "  ".join(parts)
 
 
 ## B-003: Original-Bitmapschrift und Stilfarbe (hd2.exe 0x641E30: 0x2F/0x30 Titel schwarz, 0x31 Zielzeile und 0x34 grau =

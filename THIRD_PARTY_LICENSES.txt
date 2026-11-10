@@ -1,0 +1,17 @@
+DANGEROUS AND HIDDEN 2 (unofficial) - Fremdquellen und Lizenzhinweise
+=====================================================================
+
+1) Wassershader (src/world/water_realistic.gdshader, seit 0.10.8)
+   Aufbau angelehnt an: "Water shader 3D (Godot 4.3)"
+   Urheber: Lesus
+   Quelle:  https://godotshaders.com/shader/water-shader-3d-godot-4-3/
+   Lizenz:  CC0 1.0 Universal (Public Domain Dedication)
+            https://creativecommons.org/publicdomain/zero/1.0/
+   Hinweis: Uebernommen wurden Verfahren (Gerstner-Wellensumme, Beer-Lambert-Tiefenfarbe,
+            Kamm- und Uferschaum); der Shadercode ist eine eigene Umsetzung ohne Texturen
+            der Quelle. CC0 verlangt keine Namensnennung; sie erfolgt freiwillig.
+
+2) Godot Engine
+   Urheber: Juan Linietsky, Ariel Manzur und die Godot-Mitwirkenden
+   Quelle:  https://godotengine.org
+   Lizenz:  MIT (https://godotengine.org/license)

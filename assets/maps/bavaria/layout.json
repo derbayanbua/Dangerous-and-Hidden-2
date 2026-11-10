@@ -1,0 +1,1123 @@
+{
+  "name": "Bavaria",
+  "era": "Bayern, Frühjahr 1945 (gestalterische Interpretation)",
+  "meters_per_reference_pixel": 0.13022598071946395,
+  "boundary": [
+    [
+      746,
+      138
+    ],
+    [
+      1140,
+      697
+    ],
+    [
+      586,
+      1301
+    ],
+    [
+      120,
+      800
+    ]
+  ],
+  "meadow": [
+    [
+      734,
+      245
+    ],
+    [
+      908,
+      454
+    ],
+    [
+      595,
+      780
+    ],
+    [
+      367,
+      542
+    ]
+  ],
+  "rows": [
+    {
+      "id": "reihe_38",
+      "corners": [
+        [
+          778,
+          636
+        ],
+        [
+          835,
+          577
+        ],
+        [
+          1002,
+          744
+        ],
+        [
+          940,
+          802
+        ]
+      ],
+      "units": 6,
+      "ruined": [
+        1,
+        4
+      ],
+      "reference_units": [
+        {
+          "id": "reihe_38_0",
+          "center": [
+            821.2627027027027,
+            622.7962162162163
+          ],
+          "w": 45.38092353436264,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.667780146130326,
+          "kind": "house",
+          "ruined": false,
+          "source_component": 18,
+          "plan_depth_m": 12.24,
+          "previous_d": 83.27885932376859
+        },
+        {
+          "id": "reihe_38_1",
+          "center": [
+            853.7201834862385,
+            653.7660550458714
+          ],
+          "w": 43.20678780674871,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.26429541107166,
+          "kind": "house",
+          "ruined": true,
+          "source_component": 19,
+          "plan_depth_m": 12.24,
+          "previous_d": 82.57318742677415
+        },
+        {
+          "id": "reihe_38_2",
+          "center": [
+            885.7319512195121,
+            685.1724390243902
+          ],
+          "w": 44.42966107257416,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.21008939175394,
+          "kind": "house",
+          "ruined": false,
+          "source_component": 20,
+          "plan_depth_m": 12.24,
+          "previous_d": 83.23343058065711
+        },
+        {
+          "id": "reihe_38_3",
+          "center": [
+            925.8513513513514,
+            707.3918918918919
+          ],
+          "w": 43.04113821641886,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.152389734005396,
+          "kind": "house",
+          "ruined": false,
+          "source_component": 23,
+          "plan_depth_m": 12.24,
+          "previous_d": 83.29780218636074
+        },
+        {
+          "id": "reihe_38_4",
+          "center": [
+            957.6412844036698,
+            738.1623853211009
+          ],
+          "w": 44.23483485525594,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.2642954110716,
+          "kind": "house",
+          "ruined": true,
+          "source_component": 26,
+          "plan_depth_m": 12.24,
+          "previous_d": 83.2585521257792
+        },
+        {
+          "id": "reihe_38_5",
+          "center": [
+            990.5253658536584,
+            769.8117073170731
+          ],
+          "w": 45.0039050081632,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.21008939175394,
+          "kind": "house",
+          "ruined": false,
+          "source_component": 29,
+          "plan_depth_m": 12.24,
+          "previous_d": 84.27148692576066
+        }
+      ]
+    },
+    {
+      "id": "reihe_40",
+      "corners": [
+        [
+          633,
+          788
+        ],
+        [
+          690,
+          732
+        ],
+        [
+          886,
+          928
+        ],
+        [
+          827,
+          989
+        ]
+      ],
+      "units": 6,
+      "ruined": [
+        3
+      ],
+      "reference_units": [
+        {
+          "id": "reihe_40_0",
+          "center": [
+            677.6759260561021,
+            772.175926056102
+          ],
+          "w": 44.131107681408054,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 45.0,
+          "kind": "house",
+          "ruined": false,
+          "source_component": 30,
+          "outline_trim": [
+            {
+              "shared_with": "reihe_40_1",
+              "pixels": 0.9166195333444567,
+              "axis": 0
+            }
+          ],
+          "plan_depth_m": 12.24,
+          "previous_d": 81.90306627407983
+        },
+        {
+          "id": "reihe_40_1",
+          "center": [
+            710.299643087205,
+            803.1937817291341
+          ],
+          "w": 43.31863588606913,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.26429541107166,
+          "kind": "house",
+          "ruined": false,
+          "source_component": 32,
+          "outline_trim": [
+            {
+              "shared_with": "reihe_40_0",
+              "pixels": 0.9161989691868075,
+              "axis": 0
+            }
+          ],
+          "plan_depth_m": 12.24,
+          "previous_d": 84.02958741215986
+        },
+        {
+          "id": "reihe_40_2",
+          "center": [
+            742.1048901568288,
+            834.1136846927787
+          ],
+          "w": 43.43514128108822,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.21008939175394,
+          "kind": "house",
+          "ruined": false,
+          "source_component": 34,
+          "outline_trim": [
+            {
+              "shared_with": "reihe_40_3",
+              "pixels": 0.13315388810170134,
+              "axis": 0
+            }
+          ],
+          "plan_depth_m": 12.24,
+          "previous_d": 83.9622786527512
+        },
+        {
+          "id": "reihe_40_3",
+          "center": [
+            781.8871185968677,
+            856.4218961407156
+          ],
+          "w": 43.70813883013909,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 44.09061955080085,
+          "kind": "house",
+          "ruined": true,
+          "source_component": 35,
+          "outline_trim": [
+            {
+              "shared_with": "reihe_40_2",
+              "pixels": 0.1331696137950722,
+              "axis": 0
+            }
+          ],
+          "plan_depth_m": 12.24,
+          "previous_d": 83.29581521694956
+        },
+        {
+          "id": "reihe_40_4",
+          "center": [
+            813.9845605700712,
+            887.5522565320664
+          ],
+          "w": 43.92468293362663,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.02506598911805,
+          "kind": "house",
+          "ruined": false,
+          "source_component": 37,
+          "plan_depth_m": 12.24,
+          "previous_d": 84.70671934720986
+        },
+        {
+          "id": "reihe_40_5",
+          "center": [
+            846.7138713745272,
+            918.1781841109711
+          ],
+          "w": 44.379259420755716,
+          "d": 93.99046129180407,
+          "height": 6.2,
+          "angle": 43.069412558832994,
+          "kind": "house",
+          "ruined": false,
+          "source_component": 38,
+          "plan_depth_m": 12.24,
+          "previous_d": 83.3267055713684
+        }
+      ]
+    }
+  ],
+  "buildings": [
+    {
+      "id": "haus_2",
+      "center": [
+        201.0005089606829,
+        736.5217067553152
+      ],
+      "w": 114.4,
+      "d": 29.60858223313754,
+      "height": 6,
+      "angle": -45,
+      "kind": "house",
+      "ruined": false,
+      "source_component": 25,
+      "outline_trim": [
+        {
+          "shared_with": "haus_2_shed",
+          "pixels": 2.0914177668624614,
+          "axis": 1
+        }
+      ]
+    },
+    {
+      "id": "haus_2_tail",
+      "center": [
+        228.5836323040122,
+        758.3592788616761
+      ],
+      "w": 41.07456351736987,
+      "d": 36.099999999999994,
+      "height": 4.3,
+      "angle": -45,
+      "kind": "house",
+      "ruined": true,
+      "source_component": 25,
+      "outline_trim": [
+        {
+          "shared_with": "haus_2_shed",
+          "pixels": 0.22543648263012864,
+          "axis": 0
+        }
+      ]
+    },
+    {
+      "id": "haus_2_north_stable",
+      "center": [
+        304.25000000000006,
+        683.7716800153779
+      ],
+      "w": 45.8712806053459,
+      "d": 45.16417382415918,
+      "height": 4.3,
+      "angle": 45.0,
+      "kind": "barn",
+      "ruined": false,
+      "source_component": 21,
+      "outline_trim": [
+        {
+          "shared_with": "haus_2_north_link",
+          "pixels": 0.6764466094067517,
+          "axis": 1
+        },
+        {
+          "shared_with": "haus_2_wing",
+          "pixels": 0.6764466094066096,
+          "axis": 0
+        }
+      ]
+    },
+    {
+      "id": "haus_2_north_link",
+      "center": [
+        277.5,
+        710.0
+      ],
+      "w": 43.7193000900063,
+      "d": 29.63848480983495,
+      "height": 3.1,
+      "angle": 45.0,
+      "kind": "shed",
+      "ruined": false,
+      "source_component": 24,
+      "outline_trim": [
+        {
+          "shared_with": "haus_2_north_stable",
+          "pixels": 0.6764466094067517,
+          "axis": 1
+        },
+        {
+          "shared_with": "haus_2_yard_link",
+          "pixels": 0.6764466094067517,
+          "axis": 1
+        }
+      ]
+    },
+    {
+      "id": "haus_2_wing",
+      "center": [
+        334.70180098735,
+        706.7280240351515
+      ],
+      "w": 115.1,
+      "d": 29.539242404917502,
+      "height": 4.8,
+      "angle": -45,
+      "kind": "barn",
+      "ruined": false,
+      "source_component": 22,
+      "extensions": [
+        {
+          "id": "haus_2_wing_return",
+          "center": [
+            389.1164482765497,
+            701.6749910265627
+          ],
+          "w": 31.0,
+          "d": 37.7,
+          "height": 3.8,
+          "angle": -45,
+          "kind": "shed",
+          "ruined": false,
+          "source_component": 22
+        }
+      ],
+      "outline_trim": [
+        {
+          "shared_with": "haus_2_north_stable",
+          "pixels": 0.6764466094066096,
+          "axis": 1
+        },
+        {
+          "shared_with": "haus_2_barn",
+          "pixels": 1.2843109856758859,
+          "axis": 1
+        }
+      ]
+    },
+    {
+      "id": "haus_2_barn",
+      "center": [
+        343.9540725035618,
+        737.9540725035619
+      ],
+      "w": 84.02438661763955,
+      "d": 27.58574669941291,
+      "height": 4.8,
+      "angle": -45.0,
+      "kind": "barn",
+      "ruined": false,
+      "source_component": 27,
+      "outline_trim": [
+        {
+          "shared_with": "haus_2_wing",
+          "pixels": 1.2843109856758859,
+          "axis": 1
+        }
+      ]
+    },
+    {
+      "id": "haus_2_yard_link",
+      "center": [
+        260.760840007689,
+        737.7391599923112
+      ],
+      "w": 49.376154339498726,
+      "d": 33.143358543987915,
+      "height": 3.2,
+      "angle": 45.0,
+      "kind": "shed",
+      "ruined": false,
+      "source_component": 28,
+      "outline_trim": [
+        {
+          "shared_with": "haus_2_north_link",
+          "pixels": 0.6764466094067517,
+          "axis": 1
+        }
+      ]
+    },
+    {
+      "id": "haus_2_shed",
+      "center": [
+        206.659724009824,
+        795.8191316754186
+      ],
+      "w": 62.13397897755377,
+      "d": 42.78675682618962,
+      "height": 3.1,
+      "angle": 45.0,
+      "kind": "shed",
+      "ruined": true,
+      "source_component": 31,
+      "outline_trim": [
+        {
+          "shared_with": "haus_2",
+          "pixels": 2.0914177668624614,
+          "axis": 0
+        },
+        {
+          "shared_with": "haus_2_tail",
+          "pixels": 0.22543648263012864,
+          "axis": 1
+        }
+      ]
+    },
+    {
+      "id": "haus_18",
+      "center": [
+        328.67444715000414,
+        832.400743376927
+      ],
+      "w": 141.97697232924446,
+      "d": 64.3498677521612,
+      "height": 6.7,
+      "angle": -45.74405920288871,
+      "kind": "house",
+      "ruined": false,
+      "source_component": 33,
+      "outline_trim": [
+        {
+          "shared_with": "haus_18_extension",
+          "pixels": 0.7885251719981443,
+          "axis": 1
+        }
+      ]
+    },
+    {
+      "id": "haus_18_extension",
+      "center": [
+        374.7788092574883,
+        851.7788092574883
+      ],
+      "w": 41.59797974644664,
+      "d": 28.08146601857841,
+      "height": 3.2,
+      "angle": -45.0,
+      "kind": "shed",
+      "ruined": false,
+      "source_component": 36,
+      "outline_trim": [
+        {
+          "shared_with": "haus_18",
+          "pixels": 0.7885916665103845,
+          "axis": 1
+        }
+      ]
+    },
+    {
+      "id": "haus_18_shed",
+      "center": [
+        453.99747468305833,
+        923.5398448916087
+      ],
+      "w": 76.5,
+      "d": 56.5,
+      "height": 6.0,
+      "angle": -45,
+      "kind": "house",
+      "ruined": false,
+      "source_component": 39,
+      "extensions": [
+        {
+          "id": "antenna_annex",
+          "center": [
+            492.57014959678446,
+            899.1093056016134
+          ],
+          "w": 12.599999999999994,
+          "d": 36.5,
+          "height": 3.3,
+          "angle": -45,
+          "kind": "shed",
+          "ruined": false,
+          "source_component": 39
+        },
+        {
+          "id": "antenna_porch",
+          "center": [
+            436.3198051533946,
+            963.8449314192419
+          ],
+          "w": 5.5,
+          "d": 24.5,
+          "height": 2.7,
+          "angle": -45,
+          "kind": "shed",
+          "ruined": false,
+          "source_component": 39
+        }
+      ],
+      "tower_z_fraction": -0.27,
+      "ladder_offset_sign": -1.0
+    },
+    {
+      "id": "haus_16",
+      "center": [
+        419.99056603773585,
+        1025.2169811320755
+      ],
+      "w": 100.59436625184912,
+      "d": 74.05681720462258,
+      "height": 6.0,
+      "angle": 47.48955292199915,
+      "kind": "house",
+      "ruined": false,
+      "source_component": 42
+    },
+    {
+      "id": "haus_16_barn",
+      "center": [
+        475.5,
+        1098.0
+      ],
+      "w": 112.90989538343325,
+      "d": 64.0788453038374,
+      "height": 4.8,
+      "angle": -43.36342295838329,
+      "kind": "barn",
+      "ruined": true,
+      "source_component": 47
+    },
+    {
+      "id": "haus_16_passage",
+      "center": [
+        528.6834090503269,
+        1119.1762409946766
+      ],
+      "w": 60.7,
+      "d": 31.5,
+      "height": 2.7,
+      "angle": -45,
+      "kind": "shed",
+      "ruined": false,
+      "source_component": 49,
+      "extensions": [
+        {
+          "id": "haus_16_passage_return",
+          "center": [
+            558.8768686069923,
+            1125.3987806691182
+          ],
+          "w": 25.4,
+          "d": 20.0,
+          "height": 2.7,
+          "angle": -45,
+          "kind": "shed",
+          "ruined": false,
+          "source_component": 49
+        }
+      ]
+    },
+    {
+      "id": "haus_14",
+      "center": [
+        572.6967895362664,
+        1194.5683709869204
+      ],
+      "w": 60.068965517241395,
+      "d": 62.41379310344814,
+      "height": 5.8,
+      "angle": -46.39718102729638,
+      "kind": "house",
+      "ruined": false,
+      "source_component": 53
+    },
+    {
+      "id": "garden_shed",
+      "center": [
+        600.5000000000001,
+        1043.5000000000002
+      ],
+      "w": 45.84062043356607,
+      "d": 34.52691193458122,
+      "height": 2.5,
+      "angle": -45.0,
+      "kind": "shed",
+      "ruined": false,
+      "source_component": 46
+    },
+    {
+      "id": "garden_barn",
+      "center": [
+        665.5857821953329,
+        973.3334053586863
+      ],
+      "w": 93.53074729811152,
+      "d": 25.781779447885356,
+      "height": 3.0,
+      "angle": -43.31531568210371,
+      "kind": "barn",
+      "ruined": false,
+      "source_component": 41
+    },
+    {
+      "id": "woodland_shed",
+      "center": [
+        704.75,
+        236.25000000000003
+      ],
+      "w": 113.01576464628806,
+      "d": 24.62741699796959,
+      "height": 3.0,
+      "angle": -45.0,
+      "kind": "barn",
+      "ruined": false,
+      "source_component": 6
+    }
+  ],
+  "roof_antenna": {
+    "building_id": "haus_18_shed",
+    "ridge_fraction": 0.5,
+    "yaw_degrees": 0.0,
+    "side_clearance": 1.4
+  },
+  "paths": [
+    {
+      "id": "dorfrand",
+      "width": 2.1004,
+      "points": [
+        [
+          154,
+          804
+        ],
+        [
+          590,
+          1255
+        ]
+      ]
+    },
+    {
+      "id": "haeuserzeile",
+      "width": 2.1004,
+      "points": [
+        [
+          609,
+          1261
+        ],
+        [
+          1110,
+          698
+        ]
+      ]
+    },
+    {
+      "id": "west_path",
+      "width": 1.2602,
+      "points": [
+        [
+          156,
+          775
+        ],
+        [
+          727,
+          178
+        ]
+      ]
+    },
+    {
+      "id": "east_path",
+      "width": 1.2602,
+      "points": [
+        [
+          766,
+          184
+        ],
+        [
+          1095,
+          681
+        ]
+      ]
+    },
+    {
+      "id": "row_lane_38",
+      "width": 1.4703,
+      "points": [
+        [
+          845,
+          544
+        ],
+        [
+          1044,
+          744
+        ]
+      ]
+    },
+    {
+      "id": "row_lane_40",
+      "width": 1.4703,
+      "points": [
+        [
+          710,
+          694
+        ],
+        [
+          921,
+          913
+        ]
+      ]
+    },
+    {
+      "id": "farm_track",
+      "width": 1.0502,
+      "points": [
+        [
+          267,
+          778
+        ],
+        [
+          417,
+          850
+        ],
+        [
+          612,
+          917
+        ],
+        [
+          749,
+          833
+        ]
+      ]
+    },
+    {
+      "id": "meadow_track",
+      "width": 0.85,
+      "points": [
+        [
+          395,
+          571
+        ],
+        [
+          593,
+          758
+        ],
+        [
+          761,
+          578
+        ],
+        [
+          751,
+          298
+        ]
+      ]
+    }
+  ],
+  "occupation_zones": [
+    {
+      "id": "dorfrand",
+      "name": "A – Dorfrand",
+      "pixel": [
+        225,
+        842
+      ],
+      "owner": 0,
+      "radius": 3.8,
+      "capture_time_s": 15
+    },
+    {
+      "id": "suedgarten",
+      "name": "B – Südgarten",
+      "pixel": [
+        635,
+        1158
+      ],
+      "owner": -1,
+      "radius": 3.8,
+      "capture_time_s": 15
+    },
+    {
+      "id": "wiese",
+      "name": "C – Wiese",
+      "pixel": [
+        575,
+        554
+      ],
+      "owner": -1,
+      "radius": 4.6209,
+      "capture_time_s": 15
+    },
+    {
+      "id": "obstgarten",
+      "name": "D – Obstgarten",
+      "pixel": [
+        748,
+        1040
+      ],
+      "owner": -1,
+      "radius": 3.8,
+      "capture_time_s": 15
+    },
+    {
+      "id": "haeuserzeile",
+      "name": "E – Häuserzeile",
+      "pixel": [
+        1071,
+        707
+      ],
+      "owner": 1,
+      "radius": 3.8,
+      "capture_time_s": 15
+    }
+  ],
+  "spawns": [
+    {
+      "pixel": [
+        225,
+        842
+      ],
+      "team": 0
+    },
+    {
+      "pixel": [
+        272,
+        889
+      ],
+      "team": 0
+    },
+    {
+      "pixel": [
+        352,
+        972
+      ],
+      "team": 0
+    },
+    {
+      "pixel": [
+        508,
+        1202
+      ],
+      "team": 0
+    },
+    {
+      "pixel": [
+        982,
+        793
+      ],
+      "team": 1
+    },
+    {
+      "pixel": [
+        1071,
+        707
+      ],
+      "team": 1
+    },
+    {
+      "pixel": [
+        887,
+        597
+      ],
+      "team": 1
+    },
+    {
+      "pixel": [
+        869,
+        937
+      ],
+      "team": 1
+    },
+    {
+      "pixel": [
+        450,
+        565
+      ],
+      "team": 0
+    },
+    {
+      "pixel": [
+        730,
+        342
+      ],
+      "team": 1
+    },
+    {
+      "pixel": [
+        470,
+        850
+      ],
+      "team": 0
+    },
+    {
+      "pixel": [
+        748,
+        1040
+      ],
+      "team": 1
+    },
+    {
+      "pixel": [
+        609,
+        1158
+      ],
+      "team": 0
+    },
+    {
+      "pixel": [
+        841,
+        469
+      ],
+      "team": 1
+    },
+    {
+      "pixel": [
+        575,
+        554
+      ],
+      "team": 0
+    },
+    {
+      "pixel": [
+        939,
+        899
+      ],
+      "team": 1
+    }
+  ],
+  "sight_views": [
+    {
+      "number": 1,
+      "position": [
+        574.6,
+        739.7
+      ],
+      "target": [
+        700,
+        300
+      ]
+    },
+    {
+      "number": 2,
+      "position": [
+        577.5,
+        773.1
+      ],
+      "target": [
+        520,
+        930
+      ]
+    },
+    {
+      "number": 3,
+      "position": [
+        475.4,
+        866.3
+      ],
+      "target": [
+        509.5,
+        842.4
+      ]
+    },
+    {
+      "number": 4,
+      "position": [
+        509.5,
+        842.4
+      ],
+      "target": [
+        518,
+        842
+      ]
+    },
+    {
+      "number": 5,
+      "position": [
+        541.8,
+        872.7
+      ],
+      "target": [
+        830,
+        790
+      ]
+    },
+    {
+      "number": 6,
+      "position": [
+        515.4,
+        912
+      ],
+      "target": [
+        650,
+        1090
+      ]
+    },
+    {
+      "number": 7,
+      "position": [
+        564.5,
+        855.2
+      ],
+      "target": [
+        580,
+        1090
+      ]
+    }
+  ],
+  "sniper_tree": {
+    "pixel": [
+      509.5,
+      842.4
+    ],
+    "stand_height": 3.5
+  },
+  "reference_alignment": {
+    "expected_building_parts": 30,
+    "expected_ruins": 6
+  }
+}

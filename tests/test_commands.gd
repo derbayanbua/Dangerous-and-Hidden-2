@@ -1,4 +1,4 @@
-extends "res://tests/test_systems.gd"
+﻿extends "res://tests/test_systems.gd"
 ## Original-Befehlsmenü (Ziffernblock 0 = an alle, 1–6 = an Soldat n): Struktur/Texte wie hd2.exe-Tabelle,
 ## Bedienung (Ziffern, 0 = zurück/abbrechen, Mausrad + Linksklick), Ausgrauen, Befehle an die Trupp-KI,
 ## leise Varianten, Formation, Taktik-Plan, Aktion (Tür, Erste Hilfe), Sprachausgabe.
@@ -159,9 +159,9 @@ func _run() -> void:
 	check(b0.order == SquadBrain.Order.MOVE and b0.hold_pos.distance_to(goal) < 2.0 and mates[0].global_position.distance_to(goal) < d0 - 3.0,
 		"Bewegung › Dorthin (Fadenkreuzpunkt)", "%.1f → %.1f m" % [d0, mates[0].global_position.distance_to(goal)])
 	await cmd("command_all", [1, 2])
-	var adv := lead.global_position + lead.forward() * CommandMenu.ADVANCE_DIST
+	var adv := lead.global_position      # 0.10.8: Lage des Anführers (0x537C60)
 	check(b0.order == SquadBrain.Order.MOVE and Vector2(b0.hold_pos.x - adv.x, b0.hold_pos.z - adv.z).length() < 2.0,
-		"Bewegung › Vorwärts (vor den Anführer)", "%s vs %s, order %d, cmd %d" % [b0.hold_pos, adv, b0.order, cm.last_command])
+		"Bewegung › Vorwärts (Lage des Anführers)", "%s vs %s, order %d, cmd %d" % [b0.hold_pos, adv, b0.order, cm.last_command])
 	await cmd("command_all", [1, 6])
 	check(b0.order == SquadBrain.Order.COVER, "Bewegung › In Deckung")
 	# leise Variante
@@ -735,7 +735,10 @@ func _persistence(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadMan
 	var there := true
 	info = []
 	for mm in mates:
-		var d2: float = Vector2(mm.global_position.x - goal.x, mm.global_position.z - goal.z).length()
+		# 0.10.8: Platz je Streutabelle 0x89AB20 (bis 8,2 m vom Zielpunkt) → am eigenen Platz und Platz nahe am Ziel
+		var hp: Vector3 = sq.brain_of(mm).hold_pos
+		var d2: float = Vector2(mm.global_position.x - hp.x, mm.global_position.z - hp.z).length()
+		there = there and Vector2(hp.x - goal.x, hp.z - goal.z).length() < 8.5
 		info.append("%s %d %.1f m" % [mm.soldier_name, sq.brain_of(mm).order, d2])
 		there = there and sq.brain_of(mm).order == SquadBrain.Order.MOVE and d2 < 3.5
 	check(there, "Dorthin: nach 20 s am Ziel, Befehl besteht (kein Folgen)", ", ".join(info))

@@ -308,6 +308,8 @@ func _on_weapon_changed(w: Weapon) -> void:
 		_vm_weapon.queue_free()
 	_vm_weapon = null
 	_vm_anim = null
+	_vm_rest.clear()
+	_vm_free.clear()
 	_vm_info = {}
 	_vm_clip = ""
 	_vm_hold = false
@@ -333,6 +335,7 @@ func _on_weapon_changed(w: Weapon) -> void:
 			_vm_anim.animation_finished.connect(_on_vm_finished)
 			for an in _vm_anim.get_animation_list():
 				_vm_anim.get_animation(an).loop_mode = Animation.LOOP_NONE
+			_vm_capture_rest()
 		_vm_play("arm")
 		return
 	if w.data.slot == WeaponData.Slot.GRENADE:
@@ -386,6 +389,7 @@ func _build_tool_vm(tool_key: String) -> void:
 			_vm_anim.animation_finished.connect(_on_vm_finished)
 			for an in _vm_anim.get_animation_list():
 				_vm_anim.get_animation(an).loop_mode = Animation.LOOP_NONE
+			_vm_capture_rest()
 		_vm_play("arm")
 		return
 	_vm_weapon = SoldierModel.prop_instance(target.tool_model_name(tool_key))
@@ -456,10 +460,74 @@ func _vm_play(action: String, duration: float = -1.0) -> bool:
 		return false
 	var length := _vm_anim.get_animation(clip).length
 	var speed: float = length / duration if duration > 0.0 else 1.0
+	_vm_mark_free(clip)
 	_vm_clip = clip
 	_vm_hold = action == "aim"
 	_vm_anim.play(clip, 0.08, speed)
 	return true
+
+
+## 0.10.8 Repetier-Hänger: Waffenteile des FPV-Modells (Verschluss gunlock, Hülse nabojnice, Ladestreifen ramecek …)
+## werden nur von Schuss/Nachladen bewegt; Ruhe/Zielen/Ziehen enthalten diese Spuren nicht. Wurde der Schussclip
+## (K98 1,36 s inkl. Repetieren) durch Zielen/Zoom aus/Nachladen abgelöst, blieb der Verschluss in der letzten Lage
+## stehen (AnimationPlayer schreibt fehlende Spuren nicht). Abhilfe: Ruhelage der Knoten-Spuren beim Aufbau merken,
+## Teile ohne Spur im neuen Clip gleiten zur Ruhelage zurück [D].
+var _vm_rest := {}                 ## NodePath (relativ zur Wurzel des Players) -> [Knoten, Transform3D Ruhelage]
+var _vm_free: Array = []           ## Einträge aus _vm_rest, die der laufende Clip nicht bewegt
+const VM_REST_RATE := 18.0
+
+
+func _vm_capture_rest() -> void:
+	_vm_rest.clear()
+	_vm_free.clear()
+	var root := _vm_anim.get_node_or_null(_vm_anim.root_node)
+	if root == null:
+		return
+	for an in _vm_anim.get_animation_list():
+		var a := _vm_anim.get_animation(an)
+		for i in a.get_track_count():
+			var p := a.track_get_path(i)
+			if p.get_subname_count() > 0:
+				continue      # Skelettknochen: alle Clips führen die Arme vollständig
+			var key := String(p)
+			if _vm_rest.has(key):
+				continue
+			var n := root.get_node_or_null(NodePath(String(p.get_concatenated_names())))
+			if n is Node3D:
+				_vm_rest[key] = [n, (n as Node3D).transform]
+
+
+func _vm_mark_free(clip: String) -> void:
+	_vm_free.clear()
+	if _vm_rest.is_empty():
+		return
+	var a := _vm_anim.get_animation(clip)
+	var used := {}
+	for i in a.get_track_count():
+		used[String(a.track_get_path(i))] = true
+	for key in _vm_rest:
+		if not used.has(key):
+			_vm_free.append(_vm_rest[key])
+
+
+## Waffenteile ohne Spur im laufenden Clip zur Ruhelage führen (nach dem Überblenden ganz).
+func _vm_settle(delta: float) -> void:
+	var k := clampf(delta * VM_REST_RATE, 0.0, 1.0)
+	for e in _vm_free:
+		var n: Node3D = e[0]
+		if is_instance_valid(n):
+			n.transform = n.transform.interpolate_with(e[1], k)
+
+
+## Abweichung der Waffenteile von der Ruhelage (m bzw. rad), nur Teile ohne Spur im laufenden Clip (Tests).
+func vm_part_offset(part: String) -> float:
+	for key in _vm_rest:
+		var e: Array = _vm_rest[key]
+		var n: Node3D = e[0]
+		if is_instance_valid(n) and String(n.name) == part:
+			var r: Transform3D = e[1]
+			return n.transform.origin.distance_to(r.origin) + n.transform.basis.get_rotation_quaternion().angle_to(r.basis.get_rotation_quaternion())
+	return -1.0
 
 
 ## Zielhaltung: letztes Bild der Zielanimation (nach einem Schuss im Zoom wieder einnehmen).
@@ -631,6 +699,7 @@ func _update_viewmodel(delta: float) -> void:
 	_viewmodel.scale = Vector3(s, s, 1.0)
 	if _vm_anim:
 		_vm_idle()
+		_vm_settle(delta)
 		_vm_kick = maxf(_vm_kick - delta * 9.0, 0.0)
 		# [D] (Pistolen-Zoom): die Original-Zielhaltung liegt tiefer – Visierlinie (Oberkante
 		# der Waffe vorn) einmalig vermessen und auf die Bildmitte schieben

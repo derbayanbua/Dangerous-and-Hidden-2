@@ -2,6 +2,20 @@
 
 
 
+## 0.10.8 (10.11.2026)
+
+- **Testkarte „Bavaria (Test)“** im Mehrspieler (Deathmatch, Team-Deathmatch, Eroberung) und als Übungseinsatz.
+- **Neues Wasser** je Klimazone (Wellen, Gischt, Tiefenfarbe, Qualität nach Grafikstufe); Option „WASSER: ORIGINAL“.
+  Quellen und Lizenzen in `THIRD_PARTY_LICENSES.txt` und im Abspann.
+- **Versorgungskisten wie im Original:** anfangs versteckte Kisten erscheinen erst per Skript, jede Kiste hat einen
+  begrenzten Vorrat (im Spielstand), getrennte Inhalte für Achse/Alliierte.
+- **Missionsfiguren:** Nichtkämpfer geben keine Uniform ab, Namen von Wachen/Zivilisten/Verbündeten am Fadenkreuz,
+  „Alle Gegner ausschalten“ zählt nur die vom Original gezählten Gegner, bestimmte Wachen durchschauen jede Tarnung.
+- **Tarnung:** wirkt nur ohne sichtbare Waffen oder Rucksack der eigenen Seite.
+- **Befehle:** „Vorwärts“ zur Lage des Anführers, „Dorthin“ verteilt nach Original-Tabelle, festes Tempo beim Folgen
+  unter 10 m, Ziffernblock-Namen im HUD.
+- Behoben: Verschluss der K98 (und anderer Repetierer) blieb in der Ego-Ansicht beim Zielen/Nachladen hängen.
+
 ## 0.10.7 (10.11.2026)
 
 - **Befehlsmenü Ziffernblock:** Num 0 = alle, Num 1–6 = 1.–6. Kamerad (der aktive Soldat wird übersprungen), Name des

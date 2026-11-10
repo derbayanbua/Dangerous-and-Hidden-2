@@ -143,7 +143,10 @@ func _update_sight(dt: float) -> void:
 			seen = _line_of_sight(space, eye, tpos, t)
 			# AP-6: getarnter Spieler (Feinduniform, Tarnwert > 0) gilt als eigene Seite (0x5A84F0/0x5A0AB0): wahrgenommen
 			# (zählt für −1/Update, OrigDisguise), aber kein Ziel [B]
-			if seen and orig_formula and OrigDisguise.is_cover_active(t):
+			# Listenprüfung (Mensch +0x1A6, `checks_list_flag`): 0x5A0AB0 prüft bei gesetztem Flag vor dem Seitenvergleich,
+			# ob das Ziel in der Spielerliste (0x89AD68+0x1C) steht → feindlich, Uniform wirkungslos [B] (CZECH5 GE_1,
+			# CZECH6 C5_R01…, TUTORIAL T_Pool_Guard_1)
+			if seen and orig_formula and OrigDisguise.is_cover_active(t) and not checks_list():
 				disguise_seen[t] = true
 				seen = false
 			if seen:
@@ -173,6 +176,13 @@ func _update_sight(dt: float) -> void:
 			corpse_seen.emit(c)
 
 
+## Wache mit Listenprüfung (+0x1A6): durchschaut die Feinduniform des Trupps [B 0x5A0AB0]
+func checks_list() -> bool:
+	if soldier == null or not soldier.has_meta("orig_params"):
+		return false
+	return int((soldier.get_meta("orig_params") as Dictionary).get("checks_list_flag", 0)) != 0
+
+
 ## Sichtbarkeitsfaktor pro Sekunde: 1.0 ≈ Erkennung in ~1 s.
 func _visibility(t: Soldier, dist: float, ang: float, half_fov: float) -> float:
 	var stance_k := [1.0, 0.55, 0.25][t.stance] as float
@@ -186,7 +196,7 @@ func _visibility(t: Soldier, dist: float, ang: float, half_fov: float) -> float:
 	var periph := 1.0 if ang < half_fov * 0.4 else 0.45
 	# Tarnung: in Feinduniform auf Distanz unauffällig; aus der Nähe oder nach
 	# eigenem Schuss fällt sie auf (Original: Mission_SetUniformDisguise)
-	if t.disguised and t.seconds_since_shot() > 6.0:
+	if t.disguised and t.seconds_since_shot() > 6.0 and not checks_list() and OrigDisguise.gear_matches(t):
 		if dist > 8.0:
 			return 0.0
 		var odd := 1.0 if (t.stance == Soldier.Stance.PRONE or t.move_mode == Soldier.MoveMode.RUN) else 0.35

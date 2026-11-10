@@ -179,7 +179,14 @@ func _run_ap6(m, rt: LsRuntime, c: Soldier, space: PhysicsDirectSpaceState3D) ->
 				op.disguise_seen.clear()
 				op.visible_now.clear()
 				_blinded.append(op)
+	# 0.10.8 [D]: Tarnung nur mit sichtbarer Feindausrüstung – britische Waffe verrät, deutsche Waffe passt
 	c.put_on_uniform(Color(0.36, 0.38, 0.33), "cap")
+	check(not OrigDisguise.gear_matches(c), "Feinduniform mit britischer Waffe: Tarnung wirkt nicht",
+		str(OrigDisguise.visible_items(c)))
+	TestKit.german_kit(c)
+	check(OrigDisguise.gear_matches(c), "Feinduniform mit deutscher Waffe (ohne Rucksack der eigenen Seite): Tarnung wirkt",
+		str(OrigDisguise.visible_items(c)))
+	c.disguise_value = 100.0
 	check(c.disguised and c.disguise_value == 100.0, "Anziehen: Tarnwert sofort 100")
 	var fwd := w1.aim_direction()
 	fwd.y = 0.0

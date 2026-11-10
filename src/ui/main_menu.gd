@@ -975,8 +975,11 @@ func _page_display() -> void:
 		Settings.blood_level = (clampi(Settings.blood_level, 0, Settings.BLOOD_NAMES.size() - 1) + 1) % Settings.BLOOD_NAMES.size(), true, "bblood")
 	y += 35
 	# B-041: Sichtweite CLASSIC (Originalnebel) / NEU (volle Reichweite, Ferndetails)
-	_cycle(Rect2(67, y, 412, 32), tr("SICHTWEITE:") + " " + tr(_pick(Settings.VIEW_NAMES, Settings.view_mode)), func():
+	_cycle(Rect2(67, y, 204, 32), tr("SICHTWEITE:") + " " + tr(_pick(Settings.VIEW_NAMES, Settings.view_mode)), func():
 		Settings.view_mode = (Settings.view_mode + 1) % Settings.VIEW_NAMES.size(), true, "bviewmode")
+	# 0.10.8: Wasseroptik NEU (je Klimazone) / ORIGINAL (Originaltexturen) [D]
+	_cycle(Rect2(275, y, 204, 32), tr("WASSER:") + " " + tr(_pick(Settings.WATER_NAMES, Settings.water_mode)), func():
+		Settings.water_mode = (Settings.water_mode + 1) % Settings.WATER_NAMES.size(), true, "bwater")
 	_cycle(Rect2(67, 670, 412, 33), text(2410), func(): options_page = "graphics")
 	_label(Rect2(67, 638, 412, 26), "Texturänderung wirkt beim nächsten Laden einer Mission.", 11, TEXT_COLOR)
 
@@ -1376,6 +1379,11 @@ static func rebuild_credits() -> Array:
 			int(Engine.get_version_info()["minor"]), int(Engine.get_version_info()["patch"])]},
 		{"style": "SM", "text": "Nicht verbunden mit den Entwicklern, dem Publisher oder den Rechteinhabern des Originalspiels."},
 		{"style": "SM", "text": "Originaltexte, -grafiken, -klänge und -musik werden nur aus einer vorhandenen Originalinstallation geladen."},
+		el,
+		# 0.10.8: Fremdquellen (Lizenzhinweise vollständig in THIRD_PARTY_LICENSES.txt)
+		{"style": "SM", "text": "FREMDQUELLEN"}, es,
+		{"style": "SM", "text": "Wassershader angelehnt an „Water shader 3D (Godot 4.3)“ von Lesus (godotshaders.com), CC0 1.0"},
+		{"style": "SM", "text": "Lizenzhinweise: THIRD_PARTY_LICENSES.txt"},
 		el, el, el,
 		{"style": "SM", "text": "ORIGINALSPIEL"}, es,
 		{"style": "TI", "text": "HIDDEN & DANGEROUS 2"}, el, el, el,

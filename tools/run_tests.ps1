@@ -1,4 +1,4 @@
-﻿# Führt alle automatisierten Tests headless aus und fasst zusammen (B-025).
+# Führt alle automatisierten Tests headless aus und fasst zusammen (B-025).
 # Aufruf: powershell -File tools\run_tests.ps1 [-Exe build\DangerousHidden2.exe] [-Full] [-Only test_a1,test_sas] [-Exclude test_mp_coop] [-TimeoutSec 900]
 #  - Test-Sperre test_output\.godot_lock/.godot_lock2 (tools\test_lock.ps1): je Suite ein Slot, Mehrspieler-Suiten (mp) beide.
 #    Es läuft immer nur eine Suite gleichzeitig.
@@ -55,6 +55,7 @@ $suites = @(
   @{ name = "test_movies";   args = "--headless -- --autoplay=test_movies --profiles_dir=user://test_movies --noimport" },
   @{ name = "test_movie_skip"; args = "--headless -- --autoplay=test_movie_skip --profiles_dir=user://test_movie_skip --noimport" },
   @{ name = "test_interactive"; args = "--headless -- --mission=a1_blizzard --autoplay=test_interactive" },
+  @{ name = "test_b0108";    args = "--headless -- --mission=al1_waldgeister --autoplay=test_b0108" },
   # Zweiprozessig: startet den Client (test_normandie_doors_client) selbst
   @{ name = "test_normandie_doors"; args = "--headless -- --autoplay=test_normandie_doors"; mp = $true },
   # B-017: Türflügel/Zäune/Wasser/Zielmarker (echte Benutzen-/Vorwärtstaste)
@@ -113,6 +114,13 @@ $suites = @(
   @{ name = "test_net_authority"; args = "--headless -- --autoplay=test_net_authority"; mp = $true },
   # B-029: Coop-Stil (zweiprozessig mit test_mp_coop_client)
   @{ name = "test_mp_coop"; args = "--headless -- --autoplay=test_mp_coop"; mp = $true },
+  # 0.10.8: Testkarte Bavaria (laufen mit und ohne die lokalen Kartenbilder)
+  @{ name = "test_bavaria_map"; args = "--headless -- --mission=bavaria --autoplay=test_bavaria_map"; timeout = 1200 },
+  @{ name = "test_bavaria_details"; args = "--headless -- --mission=bavaria --autoplay=test_bavaria_details"; timeout = 1200 },
+  @{ name = "test_bavaria_ground_mg42"; args = "--headless -- --mission=bavaria_occupation --autoplay=test_bavaria_ground_mg42"; timeout = 1200 },
+  @{ name = "test_bavaria_clipping"; args = "--headless -- --mission=bavaria --autoplay=test_bavaria_clipping"; timeout = 1500 },
+  @{ name = "test_bavaria_integration"; args = "--headless -- --autoplay=test_bavaria_integration"; mp = $true; timeout = 1800 },
+  @{ name = "test_bavaria_mp"; args = "--headless -- --autoplay=test_bavaria_mp"; mp = $true; group = "full"; timeout = 1800 },
   # --- Gruppe "full" (nur mit -Full): lange Läufe ---
   @{ name = "test_stairs";   args = "--headless -- --autoplay=test_stairs --maps=all"; group = "full"; timeout = 3600 },
   @{ name = "test_mp_nav";   args = "--headless -- --autoplay=test_mp_nav --maps=mp"; group = "full"; timeout = 3600 },

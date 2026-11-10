@@ -78,6 +78,8 @@ func _run() -> void:
 		"Nach dem Durchsuchen: Uniform benutzen angeboten")
 	await tap("interact")
 	check(hale.disguised and hale.uniform_color.is_equal_approx(m.enemy_uniform), "Uniform angezogen (Khaki)")
+	TestKit.german_kit(hale)   # 0.10.8 [D]: Tarnung nur ohne sichtbare Ausrüstung der eigenen Seite
+	check(OrigDisguise.gear_matches(hale), "Nur Feindausrüstung sichtbar", str(OrigDisguise.visible_items(hale)))
 	post.global_position = Vector3(-120, 30, -120)
 	post.set_physics_process(false)
 

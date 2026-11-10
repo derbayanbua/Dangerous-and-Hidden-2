@@ -356,7 +356,8 @@ func _follow(leader: Soldier, delta: float) -> void:
 		_unstick_target = Vector3.INF
 	if d > FOLLOW_TOL:
 		# Original 0x5377F0 [B]: Abstand zum Anführer ≥ 10 m → Gangart 0x4000 (rennen), sonst 0x2000, leise 0x1000
-		var mode := Soldier.MoveMode.RUN if d >= 10.0 else leader.move_mode
+		# Unter 10 m festes Tempo 0x2000 (unabhängig vom Anführer); Zuordnung 0x2000 → JOG [P]
+		var mode := Soldier.MoveMode.RUN if d >= 10.0 else Soldier.MoveMode.JOG
 		# Anführer schleicht (geduckt/liegend) bzw. leiser Befehl -> Kameraden schleichen mit
 		if quiet or ((leader.move_mode == Soldier.MoveMode.SNEAK or leader.stance != Soldier.Stance.STAND) and d < 15.0):
 			mode = Soldier.MoveMode.SNEAK    # 0.10.7: leiser Befehl -> immer schleichen (auch bei großem Abstand)

@@ -14,6 +14,7 @@ func _run() -> void:
 	if m == null or m.orig.water.is_empty():
 		_finish()
 		return
+	_water_look(m)
 	isolate_enemies([])
 	var s: Soldier = m.squad.leader()
 	# Minenplatz unter Wasser
@@ -59,3 +60,36 @@ func _run() -> void:
 	check(is_equal_approx(s.air, Soldier.AIR_MAX), "Mit Tauchgerät keine Atemnot")
 	check(s.get_meta("orig_items", []).count(251) == mines_before - 1, "Mine aus dem Inventar verbraucht")
 	_finish()
+
+
+## 0.10.8: Wasseroptik je Klimazone, Qualitätsstufen, Rückfall „Original-Wasser“
+func _water_look(m) -> void:
+	var fx = load("res://src/world/water_fx.gd")
+	var st: Dictionary = fx.stats
+	var with_mat := 0
+	for mi in m.orig.water_meshes:
+		if is_instance_valid(mi) and (mi as MeshInstance3D).material_override is ShaderMaterial:
+			with_mat += 1
+	check(int(st.get("meshes", 0)) > 0 and with_mat == m.orig.water_meshes.size() and st.get("zone") == "norway",
+		"Neues Wasser: Material auf allen Wasserflächen, Stil Norwegen", "%s / %d von %d" % [str(st.get("zone")), with_mat, m.orig.water_meshes.size()])
+	check(m.orig.water.size() > 0, "Wasserbereiche (Schwimmen) unverändert erkannt")
+	var zones := {"arctic1": "arctic", "normandy3_mp": "normandy", "burma2": "burma", "norway": "norway",
+		"africa5": "africa", "czech2": "czech", "alps1_mp_zone": "alps"}
+	var ok := true
+	var seen := {}
+	for f in zones:
+		var z: String = fx.zone_of(f)
+		var p: Dictionary = fx.params_for(f, 2)
+		ok = ok and z == zones[f] and p.has("shallow_color")
+		seen[str(p["shallow_color"])] = true
+	check(ok and seen.size() == zones.size(), "Klimazonen: eigener Stil je Zone", str(seen.size()))
+	var q0: Dictionary = fx.params_for("normandy", 0)
+	var q4: Dictionary = fx.params_for("normandy", 4)
+	check(int(q0["wave_count"]) < int(q4["wave_count"]) and float(q0["foam_amount"]) == 0.0 and float(q4["foam_amount"]) > 0.0,
+		"Grafikstufe: Niedrig weniger Wellen/kein Schaum, 4K Ultra voll")
+	var keep: int = Settings.water_mode
+	Settings.water_mode = 1
+	var n_off: int = fx.apply(m, m.orig)
+	check(n_off == 0 and not fx.enabled(), "Option ORIGINAL-Wasser: kein neues Material")
+	Settings.water_mode = keep
+	fx.apply(m, m.orig)

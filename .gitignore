@@ -25,7 +25,18 @@ __pycache__/
 local/
 CLAUDE.local.md
 docs/lokal/
-# eigene lokale Karte (alle Pfade mit diesem Namensteil, auch künftige)
+# Testkarte Bavaria (0.10.8): Code, layout.json, Antennenmodell und Audio sind öffentlich.
+# ALLE Bilder der Karte, Quell-/Referenzangaben und Abgleichwerkzeuge bleiben lokal.
+assets/maps/bavaria/**/*.png
+assets/maps/bavaria/**/*.png.import
+assets/maps/bavaria/**/*.jpg
+assets/maps/bavaria/facade/SOURCES.json
+assets/maps/bavaria/roof_antenna/SOURCE_README.md
+assets/ui/mp_maps/bav*
+docs/references/
+tests/capture_bavaria_reference.gd
+tests/capture_bavaria_reference.gd.uid
+tools/audit_bavaria_reference.py
 # Heldenfiguren
 
 # Nutzer-Werkzeuge (Python-Umgebung, ffmpeg, KI-Modelle, Protokolle – lokal erzeugt)

@@ -41,6 +41,11 @@ const VIEW_NEW := 1
 var view_mode := 0:
 	set(v):
 		view_mode = clampi(v, 0, VIEW_NAMES.size() - 1)
+## 0.10.8 Wasseroptik: 0 NEU = Wassershader je Klimazone (src/world/water_fx.gd), 1 ORIGINAL = Originalmaterial/-film
+const WATER_NAMES := ["NEU", "ORIGINAL"]
+var water_mode := 0:
+	set(v):
+		water_mode = clampi(v, 0, WATER_NAMES.size() - 1)
 var render_scale := 1.0    ## 0.5..1.0 (FSR 1 bei < 1)
 var fov := 70.0
 var mouse_sensitivity := 0.12
@@ -82,7 +87,7 @@ const DETAIL_PRESETS := [
 ## Wie im Original gehören die Menü-Optionen zum Profil (Options.bin im Profilordner); Setup-Werte
 ## (Auflösung, VSync, Kantenglättung …) sind rechnerweit wie beim Original-setup.exe.
 const PROFILE_KEYS := {
-	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models", "quality", "view_mode"],
+	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models", "quality", "view_mode", "water_mode"],
 	"audio": ["master_volume", "music_volume", "sfx_volume", "speech_volume"],
 	"controls": ["mouse_sensitivity", "invert_y"],
 	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"],
@@ -180,7 +185,7 @@ func load_settings() -> void:
 func load_from_config(cfg: ConfigFile) -> void:
 	_load_key(cfg, "display", "resolution")
 	_load_key(cfg, "display", "fullscreen")
-	for k in ["quality", "render_scale", "fov", "gamma", "shadows", "view_mode"]:
+	for k in ["quality", "render_scale", "fov", "gamma", "shadows", "view_mode", "water_mode"]:
 		_load_key(cfg, "graphics", k)
 	for k in ["mouse_sensitivity", "invert_y"]:
 		_load_key(cfg, "controls", k)
@@ -299,6 +304,7 @@ func save_settings() -> void:
 		_cfg.erase_section_key("display", "vsync")   # F-017: Altfeld nicht wieder schreiben
 	_cfg.set_value("graphics", "quality", quality)
 	_cfg.set_value("graphics", "view_mode", view_mode)
+	_cfg.set_value("graphics", "water_mode", water_mode)
 	_cfg.set_value("graphics", "render_scale", render_scale)
 	_cfg.set_value("graphics", "fov", fov)
 	_cfg.set_value("controls", "mouse_sensitivity", mouse_sensitivity)

@@ -1461,9 +1461,22 @@ func search(by: Soldier) -> String:
 	return ", ".join(parts) if not parts.is_empty() else "nichts Brauchbares"
 
 
+## Nichtkämpfer (actors.bin Mensch +0x1A5, `noncombatant_flag`): „Uniform benutzen“ (T7044) bleibt grau [B]
+## (Zivilisten, Ärzte, Piloten …; 14 Kampagnenkarten).
+func noncombatant() -> bool:
+	if soldier == null or not soldier.has_meta("orig_params"):
+		return false
+	return int((soldier.get_meta("orig_params") as Dictionary).get("noncombatant_flag", 0)) != 0
+
+
+## Uniform verfügbar: noch nicht abgegeben und kein Nichtkämpfer
+func uniform_available() -> bool:
+	return not uniform_taken and not noncombatant()
+
+
 ## Uniform eines Gefangenen anziehen (Original T7044, nur lebende Gefangene); Uniform zählt als Gegenstand
 func give_uniform(to: Soldier) -> bool:
-	if not captured or uniform_taken or not soldier.alive or to.disguised:
+	if not captured or not uniform_available() or not soldier.alive or to.disguised:
 		return false
 	uniform_taken = true
 	# Original-Figur der Uniform (Modell des Gefangenen, z. B. ge01a) übergeben: Soldier tauscht nur die Figur
@@ -1505,7 +1518,7 @@ class CaptureAction extends Interactable:
 		if not live or s.team != Soldier.TEAM_ALLIED or s.vehicle != null:
 			return false
 		if brain.captured and searched:
-			return not brain.uniform_taken and not s.disguised
+			return brain.uniform_available() and not s.disguised
 		return true
 
 	func interact(s: Soldier) -> void:

@@ -1294,7 +1294,16 @@ class OrigCrate extends Interactable:
 	var take_limit := 20
 	var taken := {}            ## Soldat -> Anzahl Entnahmen
 	var equipment := false
-	var items: Array = []
+	var items: Array = []          ## Liste Alliierte (+0x10C-Vektor) – Trupp der Spielerseite
+	var items_axis: Array = []     ## Liste Achse (+0xFC-Vektor), Auswahl je Seite wie 0x5A8820
+	## Laufzeitbestand +0x130 (Anfang aus +0x12C, 0x5F9908); je Entnahme −1, 0 = leer; −1 = ohne Angabe (unbegrenzt)
+	var stock := -1
+	var stock_initial := -1
+	## Zustand Bit 0 (+0x120 → 0x5FBD90): 1 = sichtbar/benutzbar, 0 = ausgeblendet und abgemeldet bis SetActorState
+	var actor_state := 1
+	## Abwurfverzögerung +0x134 in s (0x5FCD80 Fall 2: Wert·1000 ms); ≤ 0 = kein Abwurf (Kampagne überall −1)
+	var airdrop_delay := -1.0
+	var _body_layers := {}
 
 	var destroyed := false
 
@@ -1329,21 +1338,68 @@ class OrigCrate extends Interactable:
 		persistent_id = "ocrate_" + String(e["name"])
 		take_limit = maxi(int(p.get("take_limit", 20)), 1)
 		equipment = bool(p.get("equipment_box", false))
-		items = (p.get("items_list_a", []) as Array) + (p.get("items_list_b", []) as Array)
+		# Listen A = Achse, B = Alliierte (ältere Daten: items_list_a/_b)
+		items = p.get("items_allied", p.get("items_list_b", [])) as Array
+		items_axis = p.get("items_axis", p.get("items_list_a", [])) as Array
+		stock_initial = int(p.get("stock", p.get("u12c_?", -1)))
+		stock = stock_initial
+		airdrop_delay = float(p.get("airdrop_delay_s", p.get("u134_?", -1)))
 		global_position = OrigInteractive.world_aabb(frame).get_center()
 		prompt = "%s: %s" % [OrigInteractive.text(int(p.get("label_text", 1305)), "Kiste"), OrigInteractive.text(TXT_AMMO, "Munition nehmen")]
+		var flags := int(p.get("initial_flags", p.get("u120_?", 1)))
+		_apply_state(flags & 1)
+
+	## Gegenstandsliste je Seite (0x5A8820): Achse → Liste A, sonst Liste B
+	func items_for(s: Soldier) -> Array:
+		return items_axis if s != null and s.team == Soldier.TEAM_AXIS else items
+
+	## SetActorState(kiste, n): Bit 0 blendet ein (Registrieren) bzw. aus (Abmelden, Fallschirmrahmen aus) [B 0x5F9E7B].
+	## Mit Abwurfverzögerung > 0 erscheint die Kiste erst nach Wert s (Fallschirmabwurf selbst nicht nachgebaut [D]).
+	func set_actor_state(n: int) -> void:
+		if destroyed:
+			return
+		if (n & 1) and actor_state == 0 and airdrop_delay > 0.0 and is_inside_tree():
+			actor_state = n & 1
+			frame.set_meta("actor_state", actor_state)
+			get_tree().create_timer(airdrop_delay).timeout.connect(func():
+				if actor_state == 1 and not destroyed:
+					stock = stock_initial          # Abwurf setzt den Bestand neu (0x5F9F47)
+					_apply_state(1))
+			return
+		_apply_state(n & 1)
+
+	func _apply_state(v: int) -> void:
+		actor_state = v
+		frame.visible = v == 1
+		frame.set_meta("actor_state", v)
+		enabled = v == 1 and stock != 0
+		for b in frame.find_children("*", "CollisionObject3D", true, false):
+			var co := b as CollisionObject3D
+			if v == 1:
+				if _body_layers.has(co):
+					co.collision_layer = int(_body_layers[co])
+			else:
+				if not _body_layers.has(co):
+					_body_layers[co] = co.collision_layer
+				co.collision_layer = 0
 
 	func can_interact(s: Soldier) -> bool:
-		return enabled and int(taken.get(s.persistent_id, 0)) < take_limit
+		return enabled and actor_state == 1 and stock != 0 and int(taken.get(s.persistent_id, 0)) < take_limit
 
 	## Munitionskiste: je Benutzung ein Magazin für jede getragene Waffe (Original: Menü „Munition nehmen“
-	## bis take_limit); Ausrüstungskiste: Gegenstände der Liste ins Originalinventar
+	## bis take_limit); Ausrüstungskiste: Gegenstände der Liste ins Originalinventar. Jede Entnahme zählt den
+	## Kistenbestand +0x130 herunter; leer → nicht mehr benutzbar.
 	func interact(s: Soldier) -> void:
 		taken[s.persistent_id] = int(taken.get(s.persistent_id, 0)) + 1
+		if stock > 0:
+			stock -= 1
+			if stock == 0:
+				enabled = false
 		OrigAudio.play_group(OrigAudio.CAT_OBJECT, OrigAudio.OBJ_CRATE_OPEN, global_position, self)   # „Crate Opened“
-		if equipment and not items.is_empty():
+		var lst := items_for(s)
+		if equipment and not lst.is_empty():
 			var inv: Array = s.get_meta("orig_items", [])
-			for it in items:
+			for it in lst:
 				if int(it) >= 0:
 					inv.append(int(it))
 					if int(it) in SAS.MEDKITS:
@@ -1356,17 +1412,20 @@ class OrigCrate extends Interactable:
 				if w != null and w.data.slot != WeaponData.Slot.GRENADE:
 					got += w.add_ammo(w.data.magazine_size)
 			var names: Array = []
-			for it in items:
+			for it in lst:
 				if int(it) >= 0:
 					names.append(OrigInteractive.give_item(s, int(it)))
 			Events.say("Munition entnommen (%d Schuss)%s." % [got, (": " + ", ".join(names)) if not names.is_empty() else ""], 2.0)
 		super.interact(s)
 
+	## Spielstand wie Original (0x5FD2EF/0x5FD763): Laufzeitbestand +0x130 und Zustand
 	func serialize() -> Dictionary:
-		return {"taken": taken}
+		return {"taken": taken, "stock": stock, "state": actor_state}
 
 	func deserialize(d: Dictionary) -> void:
 		taken = d.get("taken", {})
+		stock = int(d.get("stock", stock))
+		_apply_state(int(d.get("state", actor_state)))
 
 
 func _place(e: Dictionary, kind: String, action_text: int, item: int) -> void:

@@ -150,6 +150,41 @@ func _register_mp_maps(texts) -> void:
 			"script": "res://src/missions/mp_arena.gd", "orig": e[1], "k": e[2], "briefing": "",
 			"sp_mission": String(e[0])}   # B-046: Coop spiegelt diese SP-Mission 1:1 (gleicher Ordner/k)
 		MP_MAPS.append(mid)
+	# Testkarten (Registerschlüssel "test_map") ans Ende der Hauptauswahl
+	for id in MISSIONS:
+		if bool(MISSIONS[id].get("test_map", false)) and not MP_MAPS.has(String(id)):
+			MP_MAPS.append(String(id))
+
+
+## Testkarte Bavaria (eigener Entwurf). Bilder sind optional; ohne sie neutrale Ersatzmaterialien.
+## Zusätzliche Freigaben (Registerschlüssel "mp_extra_allowed", Format wie mp.json „allowed_items“):
+## Raketenwerfer M1 Bazooka (39, Munition 206) für die Alliierten, Panzerschreck (264, Munition 205) für die Achse.
+const TEST_MAP_LAUNCHERS := [
+	{"item_id": 39, "name": "M1 Bazooka", "item_num": 1, "ammo_num": 5, "ammo_item": 206, "ammo_name": "AMMO Bazooka", "team_flag": 0},
+	{"item_id": 264, "name": "panzerschreck", "item_num": 1, "ammo_num": 5, "ammo_item": 205, "ammo_name": "AMMO Pschreck", "team_flag": 1},
+]
+const TEST_MAP_IMAGE := "res://assets/ui/mp_maps/bavaria.png"   # optional; fehlt → Ladebild ohne Kartenbild
+
+
+func _register_test_maps() -> void:
+	var base := {"script": "res://src/missions/bavaria.gd", "test_map": true,
+		"mp_allowed_from": "normandy2_mp_zone", "mp_extra_allowed": TEST_MAP_LAUNCHERS}
+	if ResourceLoader.exists(TEST_MAP_IMAGE):
+		base["map_image"] = TEST_MAP_IMAGE
+	var entries := {
+		"bavaria": {"title": "Bavaria (Test)", "mp_mode": 0,
+			"briefing": "Bayern, Frühjahr 1945. Testkarte.\nGehöfte am Dorfrand, zwei Häuserzeilen und eine große Wiese mit Baumsaum. Intakte Gebäude und Kriegsruinen bieten unterschiedliche Wege und Deckung.\nDie Umzäunung markiert die Kartengrenze. Freie Besichtigung ohne Missionsziele. Mehrspieler: Deathmatch, Team-Deathmatch und Eroberung."},
+		"bavaria_occupation": {"title": "Bavaria (Test, Eroberung)", "mp_mode": 2,
+			"briefing": "Bayern, Frühjahr 1945. Testkarte.\nErobert und haltet fünf Zonen: Dorfrand, Südgarten, Wiese, Obstgarten und Häuserzeile. Einnahme, Wertung und Wiedereinstieg folgen dem bestehenden Spielmodus BESETZUNG."},
+		"bavaria_tdm": {"title": "Bavaria (Test, Team-DM)", "mp_mode": 1,
+			"briefing": "Bayern, Frühjahr 1945. Testkarte.\nTeam-Deathmatch: Alliierte starten auf der Dorfrand-Seite, die Achse auf der Seite der Häuserzeile. Abschüsse zählen für das eigene Team."},
+	}
+	for id in entries:
+		var e: Dictionary = base.duplicate(true)
+		e.merge(entries[id], true)
+		MISSIONS[id] = e
+	if not PRACTICE_MISSIONS.has("bavaria"):
+		PRACTICE_MISSIONS.append("bavaria")
 
 
 
@@ -1232,6 +1267,7 @@ func _ready() -> void:
 			var kv := arg.substr(2).split("=", true, 1)
 			cli[kv[0]] = kv[1] if kv.size() > 1 else "1"
 	_check_pck_version()
+	_register_test_maps()
 	_load_local_content()
 	_register_orig_missions()
 	_load_current_profile()
@@ -1301,7 +1337,19 @@ func loadout_for(pid: String) -> Array:
 	return e["loadout"] if not e.is_empty() else ["sten", "colt", ""]
 
 
+## 0.10.8: ältere Karten-IDs der Testkarte („bavaria_<alt>[_tdm|_occupation]“ aus Server-Konfigurationen,
+## Kartenrotationen, Spielständen) auf die aktuellen IDs abbilden; alle übrigen IDs unverändert.
+static func canonical_map_id(id: String) -> String:
+	if not id.begins_with("bavaria_") or id in ["bavaria_tdm", "bavaria_occupation"]:
+		return id
+	var parts := id.split("_")
+	if parts.size() < 2 or parts.size() > 3:
+		return id
+	return "bavaria_" + parts[2] if parts.size() == 3 and parts[2] in ["tdm", "occupation"] else ("bavaria" if parts.size() == 2 else id)
+
+
 func start_mission(id: String) -> void:
+	id = canonical_map_id(id)
 	if not MISSIONS.has(id):
 		push_error("Unbekannte Mission: %s" % id)
 		return
@@ -1637,6 +1685,7 @@ func validate_save_data(data) -> String:
 		return "keine JSON-Wurzel (Objekt erwartet)"
 	if not data.has("mission") or typeof(data["mission"]) != TYPE_STRING:
 		return "Feld 'mission' fehlt oder ist kein Text"
+	data["mission"] = canonical_map_id(String(data["mission"]))   # 0.10.8: alte Karten-IDs
 	if not MISSIONS.has(String(data["mission"])):
 		return "unbekannte Mission '%s'" % data["mission"]
 	if not data.has("state") or typeof(data["state"]) != TYPE_DICTIONARY:

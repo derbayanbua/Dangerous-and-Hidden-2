@@ -243,6 +243,8 @@ static func _uniform_gone(s: Soldier) -> bool:
 	var b := s.get_node_or_null("EnemyBrain")
 	if b and bool(b.get("uniform_taken")):
 		return true
+	if b and b.has_method("noncombatant") and b.noncombatant():     # Nichtkämpfer +0x1A5: Uniform gesperrt
+		return true
 	for c in s.get_children():
 		if c is Pickups.Loot and (c as Pickups.Loot).uniform_taken:
 			return true

@@ -84,6 +84,9 @@ pause
 #     Spieldaten selbst aus ihrer Installation erzeugen und Texturen hochskalieren können
 "-- Nutzer-Werkzeug (HD2-Werkzeuge.cmd, pipeline, tools\user)"
 Copy-Item "$proj\HD2-Werkzeuge.cmd" $Out -Force
+# 0.10.8: Lizenzhinweise der Fremdquellen gehören ins Paket (Pflicht)
+if (-not (Test-Path "$proj\THIRD_PARTY_LICENSES.txt")) { throw "THIRD_PARTY_LICENSES.txt fehlt" }
+Copy-Item "$proj\THIRD_PARTY_LICENSES.txt" $Out -Force
 New-Item -ItemType Directory -Force "$Out\tools\user", "$Out\pipeline" | Out-Null
 Copy-Item "$proj\tools\user\*" "$Out\tools\user" -Force
 Get-ChildItem "$proj\pipeline" -File -Filter *.py | ForEach-Object { Copy-Item $_.FullName "$Out\pipeline" -Force }

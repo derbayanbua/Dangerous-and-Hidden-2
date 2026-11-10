@@ -250,7 +250,8 @@ func host(cfg: Dictionary) -> bool:
 	settings = cfg.duplicate(true)
 	settings["port"] = port
 	dedicated = bool(cfg.get("dedicated", false))
-	var ml: Array = settings.get("map_list", [])
+	settings["map"] = Game.canonical_map_id(String(settings.get("map", "")))   # 0.10.8: alte Karten-IDs
+	var ml: Array = (settings.get("map_list", []) as Array).map(func(x): return Game.canonical_map_id(String(x)))
 	if ml.is_empty() or not ml.has(String(settings["map"])):
 		ml = [String(settings["map"])] + ml
 	settings["map_list"] = ml
@@ -1149,11 +1150,18 @@ func find_player(s: String) -> int:
 ## Karte auflösen: Karten-ID (mp_africa1_mp), Original-Ordner (AFRICA1_MP) oder Kartenname (Africa1) im Stil
 func resolve_map(s: String, style := -1) -> String:
 	s = s.strip_edges()
-	if Game.MP_MAPS.has(s):
+	var canon := Game.canonical_map_id(s.to_lower())
+	if canon != s.to_lower() and Game.MP_MAPS.has(canon):
+		return canon   # 0.10.8: alte Karten-IDs
+	# 0.10.8: Kartenname = ID einer Karte mit festem anderem Stil (z. B. „Bavaria“ + Besetzung) → Titelsuche unten
+	var other_style := func(id: String) -> bool:
+		var st = Game.MISSIONS.get(id, {}).get("mp_mode")
+		return style >= 0 and st != null and int(st) != style and s != id
+	if Game.MP_MAPS.has(s) and not other_style.call(s):
 		return s
 	if Game.MP_MAPS.has("mp_" + s.to_lower()):
 		return "mp_" + s.to_lower()
-	if Game.MP_MAPS.has(s.to_lower()):
+	if Game.MP_MAPS.has(s.to_lower()) and not other_style.call(s.to_lower()):
 		return s.to_lower()                 # eigene Karten-ID in anderer Schreibweise (Großbuchstaben)
 	# Zwei Durchgänge: zuerst Karten genau dieses Stils (Kartenname + teamdeathmatch → TDM-Eintrag derselben Karte),
 	# danach die bisherige großzügige Zuordnung (Arena-Karten ohne festen Stil, TDM auf DM-Karten)

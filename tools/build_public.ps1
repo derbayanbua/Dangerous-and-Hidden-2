@@ -77,6 +77,9 @@ try {
   # 5) Beilagen
   [IO.File]::WriteAllText("$Out\version.txt", $version, (New-Object Text.UTF8Encoding $false))
   Copy-Item "$wt\HD2-Werkzeuge.cmd" $Out -Force
+  # 0.10.8: Lizenzhinweise der Fremdquellen gehören ins Paket (Pflicht)
+  if (-not (Test-Path "$wt\THIRD_PARTY_LICENSES.txt")) { throw "THIRD_PARTY_LICENSES.txt fehlt im Tag-Stand" }
+  Copy-Item "$wt\THIRD_PARTY_LICENSES.txt" $Out -Force
   New-Item -ItemType Directory -Force "$Out\tools\user", "$Out\pipeline" | Out-Null
   Copy-Item "$wt\tools\user\*" "$Out\tools\user" -Force -Recurse
   Get-ChildItem "$wt\pipeline" -File -Filter *.py | ForEach-Object { Copy-Item $_.FullName "$Out\pipeline" -Force }

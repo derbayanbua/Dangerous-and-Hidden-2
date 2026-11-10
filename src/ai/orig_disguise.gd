@@ -31,9 +31,32 @@ static func step(value: float, observers: int, enemy_clothes: bool, carrying_cor
 	return clampf(value + GAIN, 0.0, MAX_VALUE)
 
 
-## Getarnt im Sinne von 0x5A84F0: Feinduniform und Wert > 0.
+## Getarnt im Sinne von 0x5A84F0: Feinduniform und Wert > 0 – dazu [D]: keine sichtbare Ausrüstung der eigenen Seite.
 static func is_cover_active(s: Soldier) -> bool:
-	return s != null and s.disguised and s.disguise_value > 0.0
+	return s != null and s.disguised and s.disguise_value > 0.0 and gear_matches(s)
+
+
+## [D] Abweichung vom Original: Die Tarnung wirkt nur, wenn auch alles Sichtbare zur Feindseite passt – Waffe in der
+## Hand, an der Schulter, auf dem Rücken und der Rucksack (oder kein Rucksack). Seitenkennung items.sav +0x7C
+## (Net.item_side_flag: 0 Alliierte, 1 Achse, 2 beide); ein Gegenstand nur der eigenen Seite verrät den Soldaten.
+static func gear_matches(s: Soldier) -> bool:
+	var own_flag := 1 if s.team == Soldier.TEAM_AXIS else 0
+	for id in visible_items(s):
+		if id >= 0 and Net.item_side_flag(id) == own_flag:
+			return false
+	return true
+
+
+## Sichtbare Gegenstände: Hände, Schulter, Rücken (Rucksack) und zweite Langwaffe auf dem Rücken.
+static func visible_items(s: Soldier) -> Array:
+	var out: Array = []
+	var inv := FieldInventory.view(s)
+	for slot in ["hands", "shoulder", "back"]:
+		out.append(int(inv.get(slot, -1)))
+	var bw := FieldInventory.back_weapon(s)
+	if bw:
+		out.append(FieldInventory.weapon_item(bw, s.team))
+	return out
 
 
 static func carrying_corpse(s: Soldier) -> bool:

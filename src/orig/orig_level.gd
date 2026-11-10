@@ -779,6 +779,7 @@ func _mesh_collider(mi: MeshInstance3D, collide: bool, two_sided := false, klz_f
 		# Wasserfläche (QuadPatch/„more“, Material VODA*/MORE*): keine Kollision, als Wasserbereich merken
 		var box: AABB = mi.global_transform * mi.get_aabb() if mi.is_inside_tree() else mi.get_aabb()
 		water.append(box)
+		water_meshes.append(mi)      # 0.10.8: Wasseroptik je Klimazone (water_fx.gd)
 	elif collide and mi.mesh and not foliage and _has_area(mi.mesh):    # entartete Meshes (Linien, Flächen ohne Inhalt) ohne Kollision
 		var body := StaticBody3D.new()
 		body.collision_layer = 1
@@ -841,6 +842,8 @@ static func _has_area(mesh: Mesh) -> bool:
 
 ## Wasserflächen (Welt-AABB, Oberkante = Wasserspiegel): Schwimmen/Tauchen (Soldier, Mission.water_level_at)
 var water: Array[AABB] = []
+## Sichtbare Wasserflächen (gleiche Erkennung wie `water`) für die neue Wasseroptik
+var water_meshes: Array = []
 
 
 ## klz_faces: in tree.klz als begehbare Fläche verlinkt – dann zählt nur ein Wassermaterial (VODA*/MORE*), nicht der

@@ -1,4 +1,7 @@
 extends "res://tests/test_gameplay.gd"
+
+## „Dorthin“ verteilt die Soldaten nach der Original-Tabelle 0x89AB20 (bis ≈ 8,3 m um den Zielpunkt) + 1 m Ankunft
+const SPREAD_TOL := 9.5
 ## Truppbefehle in einer Original-Kampagnenmission mit echten Spielereingaben (Fehlerbericht 23.10.2026
 ## „Soldaten-Befehle funktionieren im Single Player nicht, die folgen immer nur“): Befehlsmenü (Ziffernblock), taktische
 ## Karte per Mausklick, Soldatenwechsel; jeder Befehl muss nach 20 s Spielzeit noch bestehen.
@@ -202,7 +205,7 @@ func _run() -> void:
 		if k == 2:
 			Input.action_release("move_back")
 		await seconds(2.0)
-		if k >= 9 and mates.all(func(s2): return Vector2(s2.global_position.x - goal.x, s2.global_position.z - goal.z).length() < 4.0):
+		if k >= 9 and mates.all(func(s2): return Vector2(s2.global_position.x - goal.x, s2.global_position.z - goal.z).length() < SPREAD_TOL):
 			break
 		for s in mates:
 			var bq := sq.brain_of(s)
@@ -216,7 +219,7 @@ func _run() -> void:
 	for s in mates:
 		var d := Vector2(s.global_position.x - goal.x, s.global_position.z - goal.z).length()
 		info.append("%s %d %.1f m" % [s.soldier_name, sq.brain_of(s).order, d])
-		there = there and sq.brain_of(s).order == SquadBrain.Order.MOVE and d < 4.0
+		there = there and sq.brain_of(s).order == SquadBrain.Order.MOVE and d < SPREAD_TOL
 	check(there and far0 > 8.0, "Bewegung › Dorthin: nach 20–40 s am Fadenkreuzpunkt, Befehl besteht",
 		"Start %.1f m; %s" % [far0, ", ".join(info)])
 

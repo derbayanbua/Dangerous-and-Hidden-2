@@ -282,6 +282,13 @@ func _soldier(vm: LsVM) -> Soldier:
 	return vm.me as Soldier
 
 
+## „wird gezählt“-Flag (actors.bin Mensch +0x1A4, `counted_flag`; fehlt → gezählt) – 0x476A50 [B]
+static func counted_enemy(e: Node) -> bool:
+	if e == null or not e.has_meta("orig_params"):
+		return true
+	return int((e.get_meta("orig_params") as Dictionary).get("counted_flag", 1)) != 0
+
+
 func _brain(vm: LsVM) -> EnemyBrain:
 	var s := _soldier(vm)
 	return s.get_node_or_null("EnemyBrain") if s else null
@@ -961,9 +968,15 @@ func call_api(vm: LsVM, fname: String, args: Array):
 			return null
 		# --- Gegner zählen / Abfragen ---
 		"_GETNUMLIVEENEMIES", "_GETCOUNTOFCARNAGEENEMIES":
+			# hd2.exe 0x476A50 (Zählung bei Laden/Neuaufbau): lebende Menschen Seite 2, nicht gefangen (0x5A6380);
+			# +0x4C = alle ohne 0x5A5D30, +0x50 = nur mit „wird gezählt“-Flag (Mensch +0x1A4) [B]. Zuordnung
+			# +0x50 → _GetCountOfCarnageEnemies (Ziel „alle Gegner ausschalten“, af1_obj.scr) [P].
+			var carnage: bool = fname == "_GETCOUNTOFCARNAGEENEMIES"
 			var n2 := 0
 			for e in mission.enemies:
 				if is_instance_valid(e) and e.alive and not e.has_meta("hands_up"):
+					if carnage and not counted_enemy(e):
+						continue
 					n2 += 1      # Ergebene/Gefangene zählen nicht als lebende Gegner
 			return n2
 		"_SPGETGAMEDIFFICULTY":

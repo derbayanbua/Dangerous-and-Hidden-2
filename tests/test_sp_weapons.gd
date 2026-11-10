@@ -396,7 +396,7 @@ func _phase_hits() -> void:
 		var ok_zone := true
 		for zone in [&"head", &"torso", &"arm", &"leg"]:
 			var hit_aimed := false
-			for attempt in 5:
+			for attempt in 12:   # 0.10.7: Original-Streuung (0x545140) – kleine Zonen brauchen bei Pistolen mehr Versuche
 				target.max_health = 100000.0
 				target.health = 100000.0
 				w.in_mag = w.data.magazine_size

@@ -1042,7 +1042,15 @@ func _update_action_icon(s: Soldier) -> void:
 	action_icon.visible = f != "" and action_icon.texture != null
 
 
-## Name des Kameraden unter dem Fadenkreuz (≤ 60 m, ±1,5°) [P].
+## Anzeigename einer Missionsfigur: Text-ID aus actors.bin Mensch +0x1A8 (`name_text_id`, −1/0 = keiner) [B Daten].
+static func person_name(p: Soldier) -> String:
+	if p == null or not p.has_meta("orig_params"):
+		return ""
+	var tid := int((p.get_meta("orig_params") as Dictionary).get("name_text_id", -1))
+	return OrigInteractive.text(tid, "") if tid > 0 else ""
+
+
+## Name des Kameraden (bzw. einer Missionsfigur mit Anzeigename) unter dem Fadenkreuz (≤ 60 m, ±1,5°) [P].
 func _update_cross_name(s: Soldier) -> void:
 	cross_name_text = ""
 	var cam := get_viewport().get_camera_3d()
@@ -1059,5 +1067,21 @@ func _update_cross_name(s: Soldier) -> void:
 			if c > best:
 				best = c
 				cross_name_text = m.soldier_name
+		# Missionsfiguren mit Anzeigename (actors.bin Mensch +0x1A8, Text-ID): Wachen, Zivilisten, Verbündete
+		if cross_name_text == "":
+			for o in get_tree().get_nodes_in_group("soldiers"):
+				var p := o as Soldier
+				if p == null or p == s or not p.alive:
+					continue
+				var nm := person_name(p)
+				if nm == "":
+					continue
+				var to2: Vector3 = p.global_position + Vector3.UP * 1.0 - cam.global_position
+				if to2.length() > 60.0:
+					continue
+				var c2 := to2.normalized().dot(fwd)
+				if c2 > best:
+					best = c2
+					cross_name_text = nm
 	_cross_label.text = cross_name_text
 	_cross_label.visible = cross_name_text != ""

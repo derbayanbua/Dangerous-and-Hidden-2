@@ -137,6 +137,37 @@ func _run() -> void:
 	Input.action_release("aim")
 	await seconds(0.8)
 	check(not rig.fpv_active and absf(rig.camera.fov - rig.base_fov()) < 0.5, "Zielen beendet: 3. Person, Grund-FOV 65°")
+	# 0.10.8: Repetieren durch Zielen bzw. Zoom-Ende abgebrochen -> Verschluss (gunlock) wieder in Ruhelage
+	rig.toggle_mode()
+	await seconds(0.8)
+	var kw := s.current_weapon()
+	kw.in_mag = 5
+	var bolt_mid := 0.0
+	var bolt_end := [] as Array
+	for pass_i in 2:
+		kw.cooldown = 0.0
+		Input.action_press("fire")
+		await frames(2)
+		Input.action_release("fire")
+		await seconds(0.45)
+		bolt_mid = maxf(bolt_mid, rig._vm_rest.size())
+		if pass_i == 0:
+			Input.action_press("aim")      # Schuss -> sofort Zielen
+		else:
+			Input.action_release("aim")    # Schuss im Zoom -> Zoom aus
+		await seconds(1.0)
+		bolt_end.append(rig.vm_part_offset("gunlock"))
+	await seconds(1.0)
+	s.select_slot(WeaponData.Slot.SIDEARM)     # Wechsel und zurück
+	await seconds(1.2)
+	s.select_slot(WeaponData.Slot.PRIMARY)
+	await seconds(2.0)
+	bolt_end.append(rig.vm_part_offset("gunlock"))
+	check(bolt_mid > 0 and bolt_end.all(func(v): return v >= 0.0 and v < 0.005),
+		"K98 Repetieren abgebrochen (Schuss→Zielen, Schuss→Zoom aus, Wechsel): Verschluss in Ruhelage",
+		"Teile %d, Abweichung %s" % [int(bolt_mid), str(bolt_end)])
+	rig.toggle_mode()
+	await seconds(0.5)
 	# Pistole ([D]): Zoom 48°, Visierlinie auf die Bildmitte gelegt
 	s.select_slot(WeaponData.Slot.SIDEARM)
 	await seconds(1.5)
