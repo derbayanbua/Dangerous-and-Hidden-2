@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="res://assets/weapons/placeholder/G43.glb" id="1_model"]
+
+[node name="G43" type="Node3D"]
+
+[node name="Model" parent="." instance=ExtResource("1_model")]
+
+[node name="Muzzle" type="Marker3D" parent="."]
+position = Vector3(0, 0.08, -0.81)
+
+[node name="Grip" type="Marker3D" parent="."]
+position = Vector3(0, -0.094, 0.07)

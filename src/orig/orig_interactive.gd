@@ -350,6 +350,11 @@ func _static_leaves() -> void:
 		stats["leaf_doors"] = int(stats.get("leaf_doors", 0)) + 1
 
 
+## Dauer Schlossknacken aus dem Kaderwert Schlösser (0 → 8 s, 100 → 2 s; ohne Wert 50 → 5 s) [P]
+static func lockpick_seconds(s: Node) -> float:
+	return lerpf(8.0, 2.0, clampf(float(s.get_meta("lockpick", 50.0)) / 100.0, 0.0, 1.0))
+
+
 static func text(id: int, fb: String) -> String:
 	return SAS.text(id, fb) if id > 0 else fb
 
@@ -656,7 +661,7 @@ class OrigDoor extends Interactable:
 				# Dauer aus der Fertigkeit Schlösser (Original: Getter 8, Text 7073)
 				_picker = s
 				_pick_from = s.global_position
-				_pick_left = lerpf(8.0, 2.0, clampf(float(s.get_meta("lockpick", 50.0)) / 100.0, 0.0, 1.0))
+				_pick_left = OrigInteractive.lockpick_seconds(s)
 				Events.say(OrigInteractive.text(7073, "Knackt Schloss") + " …", _pick_left)
 				# Schlossknacken: Türklang „lockpick“, sonst Kat. 11 „Lockpicking“ (l_dhook.wav)
 				if _snd("lockpick") == null:
@@ -2154,6 +2159,8 @@ class OrigWorldItem extends Interactable:
 		var vis: Node3D = host.orig.model_instance(model) if model != "" else null
 		if vis == null:
 			vis = OrigWeapons.world_model(model)   # Waffen: gemeinsamer Cache (tools/export_weapons.py)
+		if vis == null:
+			vis = OrigWeapons.pack_item_model(item)   # B-051: Platzhalter für fehlende Originalmodelle
 		if vis == null:
 			var mi := MeshInstance3D.new()
 			var bm := BoxMesh.new()

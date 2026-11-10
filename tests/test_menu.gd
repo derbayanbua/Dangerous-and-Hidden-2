@@ -55,6 +55,14 @@ func _run() -> void:
 	menu.open_lan(true)
 	await frames(2)
 	check(menu.online_dialog == null and menu.lan_menu != null, "Zweites Mal: kein Hinweis mehr")
+	var all_tr := true
+	for lang in ["en", "fr", "it", "es", "cs"]:
+		var tro := TranslationServer.get_translation_object(lang)
+		for l in menu.ONLINE_DISCLAIMER_LINES + ["Zustimmen", "Ablehnen"]:
+			if l != "" and (tro == null or String(tro.get_message(l)) in ["", l]):
+				all_tr = false
+				print("  fehlt [%s] %s" % [lang, l])
+	check(all_tr, "Hinweis in allen Spielsprachen übersetzt")
 	if menu.lan_menu:
 		menu.lan_menu.back_requested.emit()
 		await frames(2)

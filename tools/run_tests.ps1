@@ -47,6 +47,7 @@ $suites = @(
   @{ name = "test_a2_interaktiv"; args = "--headless -- --mission=a2_erkundung --autoplay=test_a2" },
   @{ name = "test_a3";       args = "--headless -- --mission=a3_rendezvous --autoplay=test_orig_part --commandos=4" },
   @{ name = "test_sas";      args = "--headless -- --autoplay=test_sas" },
+  @{ name = "test_sas_values"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_sas_values" },
   @{ name = "test_ui_flow";  args = "--headless -- --autoplay=test_ui_flow --profiles_dir=user://test_ui_flow --noimport" },
   @{ name = "test_language"; args = "--headless -- --autoplay=test_language --profiles_dir=user://test_language --noimport" },
   @{ name = "test_b022b";    args = "--headless -- --autoplay=test_b022b --profiles_dir=user://test_b022b --noimport" },
@@ -81,6 +82,7 @@ $suites = @(
   @{ name = "test_fix0103_no2"; args = "--headless -- --mission=no2_schwerttaenzer --autoplay=probe_gap_drive --strict=1 --goal_r=3.5 --veh=Hakl --goals=Hakl_4,Hakl_5 --sig=r_n2_wave2_1:1@3;r_n2_wave2_1:10@6 --dur=90 --speed=1 --test_timeout=900"; timeout = 1200 },   # Halbkette bis Hakl_5
   @{ name = "test_commands"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_commands" },
   @{ name = "test_follow_spacing"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_follow_spacing" },
+  @{ name = "test_quick_line"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_quick_line" },
   @{ name = "test_surrender"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_surrender" },
   @{ name = "test_blood";    args = "--headless -- --mission=m01_funkfeuer --autoplay=test_blood --profiles_dir=user://test_blut" },
   @{ name = "test_weapons_orig"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_weapons_orig" },

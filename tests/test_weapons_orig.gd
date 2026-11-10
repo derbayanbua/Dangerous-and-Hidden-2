@@ -38,6 +38,28 @@ func _run() -> void:
 	var o13 := WeaponDB.from_orig(13)
 	check(o13 != null and o13.magazine_size == 5, "K98 mit Zielfernrohr (o_13): 5 Schuss")
 
+	# --- B-051: fehlende Originalmodelle (P08 SD 260, G43 262, MAS 36 263, Panzerschreck 264) -> Platzhalter-Satz ---
+	var pack_bad: Array = []
+	for it in OrigWeapons.PACK_ITEMS:
+		var wd := WeaponDB.from_orig(int(it))
+		var inst := OrigWeapons.instance(wd) if wd else null
+		var ok := inst != null and String(inst.get_meta("pack", "")) == String(OrigWeapons.PACK_ITEMS[it]) \
+			and inst.find_child("LW", true, false) != null and inst.get_meta("muzzle", null) is Node3D
+		if ok:
+			var mz: Node3D = inst.get_meta("muzzle")
+			var mp := (mz.position + (mz.get_parent() as Node3D).position)
+			ok = mp.z < -0.3                                  # Mündung vor dem Griff (−Z)
+		var gnd := OrigWeapons.pack_item_model(int(it))
+		if gnd == null:
+			ok = false
+		else:
+			gnd.free()
+		if not ok:
+			pack_bad.append(it)
+		if inst:
+			inst.free()
+	check(pack_bad.is_empty(), "B-051: 4 Waffen ohne Originalmodell bekommen ein Platzhaltermodell (Hand + Boden)", str(pack_bad))
+
 	# --- Original-Figur an den Spieler (en01) ---
 	var fig := OrigWeapons._load(OrigLevel.cache_root() + "/characters/en01.glb")
 	check(fig != null, "Original-Figur en01 geladen")

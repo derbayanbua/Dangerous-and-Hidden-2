@@ -28,6 +28,7 @@ enum MoveMode { WALK, RUN, SNEAK, JOG }
 
 const FALL_SAFE_V := 9.0
 const TEAM_ALLIED := 0
+const _CF := preload("res://src/combat/combat_flags.gd")
 const TEAM_AXIS := 1
 ## Neutral (Original actors.bin Seite 3/4: Zivilisten, Gefangene, Sonderfiguren): wird von keiner Seite
 ## gezielt angegriffen und greift selbst nicht an, bis ein Skript ihn dem Team zuordnet (SetNPCTeamStatus).
@@ -173,6 +174,8 @@ var net_target := Vector3.ZERO
 var net_velocity := Vector3.ZERO
 ## eigener Mehrspieler-Soldat: Aktionen (kind, a, b, Waffen-ID) an die anderen Rechner melden
 var net_hook: Callable
+## MP-Client: abgeschlossener Verband → Anfrage an den Server statt lokaler Wirkung (Net._local_heal)
+var net_heal_hook: Callable
 
 
 func _net(kind: String, a: Vector3, b: Vector3, wid: String) -> void:
@@ -246,13 +249,53 @@ func _update_heal(delta: float) -> void:
 	if heal_time_left <= 0.0:
 		heal_time_left = 0.0
 		_end_heal_anim()
-		medkits -= 1
-		var amount := HEAL_AMOUNT * skill_k(skill_first_aid, 0.7, 1.4)
-		heal_target.heal(amount)
-		train("heals")
-		if medkits <= 0 and tool == "medkit":
-			tool = ""                       # letzter Verband verbraucht: zurück zur Waffe
-		Events.say("%s versorgt %s (+%d)." % [soldier_name, "sich selbst" if heal_target == self else heal_target.soldier_name, int(amount)], 2.5)
+		if net_heal_hook.is_valid() and not net_puppet:
+			net_heal_hook.call(heal_target)   # MP-Client (0.10.6): Server prüft, verbraucht und heilt (Net._heal_req)
+			return
+		apply_bandage(heal_target)
+
+
+## Ausdauerverbrauch je Sekunde Rennen (Gewicht der Waffen, Kaderwert Ausdauer) [P]
+func sprint_cost() -> float:
+	return (10.0 + _carried_weight() * 0.4) * skill_k(skill_endurance, 1.4, 0.7)
+
+
+## Wirkung eines Verbands nach dem Erste-Hilfe-Wert des Heilenden (Kader 0–100; ohne Wert neutral)
+func bandage_amount() -> float:
+	return HEAL_AMOUNT * skill_k(skill_first_aid, 0.7, 1.4)
+
+
+## Verband verbrauchen und am Ziel wirken (SP, MP-Server; Net._heal_req ruft das nach der Prüfung)
+func apply_bandage(target: Soldier) -> float:
+	if medkits <= 0 or target == null or not target.alive:
+		return 0.0
+	medkits -= 1
+	var amount := bandage_amount()
+	target.heal(amount)
+	train("heals")
+	if medkits <= 0 and tool == "medkit":
+		tool = ""                       # letzter Verband verbraucht: zurück zur Waffe
+	Events.say("%s versorgt %s (+%d)." % [soldier_name, "sich selbst" if target == self else target.soldier_name, int(amount)], 2.5)
+	return amount
+
+
+## Kamerad am Fadenkreuz (0.10.6): lebender Teamkamerad ≤ reach m vor dem Soldaten (Blickrichtung ±40°)
+func aimed_comrade(reach := 2.0) -> Soldier:
+	var fwd := Vector3(-sin(look_yaw), 0.0, -cos(look_yaw))
+	var best: Soldier = null
+	var bd := reach
+	for c in get_tree().get_nodes_in_group("team_%d" % team):
+		var s := c as Soldier
+		if s == null or s == self or not s.alive:
+			continue
+		var off := s.global_position - global_position
+		off.y = 0.0
+		var d := off.length()
+		if d > bd or (d > 0.3 and fwd.dot(off / d) < cos(deg_to_rad(40.0))):
+			continue
+		bd = d
+		best = s
+	return best
 
 
 const MEDKIT_MODEL := "l_medkit"
@@ -622,7 +665,7 @@ func _update_movement(delta: float) -> void:
 	# Ausdauer: Rennen kostet, Gewicht der Ausrüstung erhöht den Verbrauch.
 	var moving := current_speed() > 0.3
 	if moving and mode == MoveMode.RUN and stance == Stance.STAND:
-		stamina = maxf(stamina - (10.0 + _carried_weight() * 0.4) * delta * skill_k(skill_endurance, 1.4, 0.7), 0.0)
+		stamina = maxf(stamina - sprint_cost() * delta, 0.0)
 		train("sprint_s", delta)
 	else:
 		if moving and stance != Stance.STAND:
@@ -1068,7 +1111,11 @@ func _fire_shot(w: Weapon) -> void:
 			if w.data.action != WeaponData.Action.ROCKET and Ballistics.compensation_enabled():
 				dir = Ballistics.solve_direction(origin, aim_point, w.data)
 	var spread_deg := current_spread()
+	if team == TEAM_ALLIED and _CF.active(_CF.steady):
+		spread_deg = 0.0
 	dir = _apply_spread(dir, spread_deg)
+	if team == TEAM_ALLIED and _CF.active(_CF.keep_mag) and w.data.slot != WeaponData.Slot.GRENADE:
+		w.in_mag = mini(w.in_mag + 1, w.data.magazine_size)
 	if w.data.action == WeaponData.Action.ROCKET:
 		_fire_rocket(w, origin, dir)
 		_net("rocket", origin + dir * 1.0, dir * w.data.muzzle_velocity, String(w.data.id))
@@ -1318,8 +1365,13 @@ func apply_selection(key: String) -> void:
 func use_tool() -> void:
 	match tool:
 		"medkit":
+			var aimed := aimed_comrade(2.0)   # 0.10.6: Kamerad am Fadenkreuz zuerst
 			if medkits <= 0:
 				Events.say("Kein Verbandskasten mehr.", 1.5)
+			elif aimed != null and aimed.health < aimed.max_health - 1.0:
+				start_heal([aimed])
+			elif aimed != null and health >= max_health - 1.0:
+				Events.say("%s ist unverletzt." % aimed.soldier_name, 1.5)
 			elif not start_heal(get_tree().get_nodes_in_group("team_%d" % team)):
 				Events.say("Niemand in Reichweite ist verwundet.", 1.5)
 		"binoculars":
@@ -1654,6 +1706,8 @@ func apply_hit(amount: float, zone: StringName, attacker: Node, direction: Vecto
 		if attacker is Soldier and attacker != self and (attacker as Soldier).team == team and Net.team_mode():
 			Net.inverse_damage(attacker as Soldier, amount)     # Server-Regel „Umgekehrter Schaden“
 	# Zonen-/Helmfaktoren rechnet der Aufrufer (Ballistics → WeaponDB.zone_damage, hd2.exe 0x5A1C90)
+	if team == TEAM_AXIS and _CF.active(_CF.one_hit):
+		amount = maxf(amount, health)
 	health -= amount
 	last_attacker = attacker
 	set_meta("_rd_amount", amount)       # B-016: Ragdoll-Impuls nach Schaden
@@ -1684,6 +1738,9 @@ func die(attacker: Node = null, direction := Vector3.ZERO) -> void:
 		if vehicle is RigidBody3D:
 			set_meta("_rd_vel", (vehicle as RigidBody3D).linear_velocity)   # B-016: Ragdoll erbt die Fahrt
 		vehicle.leave(self)       # Gefallene fallen aus dem Fahrzeug
+	if heal_time_left > 0.0:     # Tod während des Verbands: Kasten aus der Hand (auch Ego-Ansicht)
+		heal_time_left = 0.0
+		_end_heal_anim()
 	collision_layer = 0          # Leichen blockieren keine Bewegung
 	_apply_capsule(Stance.PRONE)
 	for hb in find_children("*", "Hitbox", true, false):

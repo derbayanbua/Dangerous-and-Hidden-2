@@ -225,13 +225,22 @@ func open_lan(internet := false) -> void:
 
 
 ## Hinweis Datenübertragung beim ersten Internet-Mehrspieler je Profil ([D] 10.11.2026).
-const ONLINE_DISCLAIMER := "Beim Online-Mehrspieler werden folgende Daten an den Masterserver übertragen:\n\n" \
-	+ "• PC-Daten (gehasht und verschlüsselt)\n" \
-	+ "• der Profilname\n" \
-	+ "• IP-Adressen (gehasht)\n\n" \
-	+ "Diese Daten dienen nur der Sicherheit und dem Betrieb des Serverbrowsers.\n\n" \
-	+ "Spielstand und Rang werden im lokalen Profil und auf dem Masterserver gespeichert.\n\n" \
-	+ "Einverstanden?"
+## Zeilen einzeln übersetzt (locale/ui_texts.csv), "" = Leerzeile.
+const ONLINE_DISCLAIMER_LINES := [
+	"Beim Online-Mehrspieler werden folgende Daten an den Masterserver übertragen:", "",
+	"• PC-Daten (gehasht und verschlüsselt)",
+	"• der Profilname",
+	"• IP-Adressen (gehasht)", "",
+	"Diese Daten dienen nur der Sicherheit und dem Betrieb des Serverbrowsers.", "",
+	"Spielstand und Rang werden im lokalen Profil und auf dem Masterserver gespeichert.", "",
+	"Einverstanden?"]
+
+
+func online_disclaimer_text() -> String:
+	var out := PackedStringArray()
+	for l in ONLINE_DISCLAIMER_LINES:
+		out.append(tr(l) if l != "" else "")
+	return "\n".join(out)
 
 var _consent_session := false    # ohne Profil: Zustimmung nur für diese Sitzung
 var online_dialog: ConfirmationDialog
@@ -252,7 +261,7 @@ func _show_online_disclaimer() -> void:
 		online_dialog.queue_free()
 	online_dialog = ConfirmationDialog.new()
 	online_dialog.title = tr("MEHRSPIELER-SPIEL - INTERNET")
-	online_dialog.dialog_text = tr(ONLINE_DISCLAIMER)
+	online_dialog.dialog_text = online_disclaimer_text()
 	online_dialog.ok_button_text = tr("Zustimmen")
 	online_dialog.cancel_button_text = tr("Ablehnen")
 	online_dialog.exclusive = true

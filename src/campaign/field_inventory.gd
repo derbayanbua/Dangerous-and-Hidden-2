@@ -737,6 +737,8 @@ class Pile extends Interactable:
 				return
 		_vis = OrigWeapons.world_model(model) if model != "" else null
 		if _vis == null:
+			_vis = OrigWeapons.pack_item_model(first)     # B-051: Platzhalter für fehlende Originalmodelle
+		if _vis == null:
 			var mi := MeshInstance3D.new()
 			var bm := BoxMesh.new()
 			bm.size = Vector3(0.3, 0.1, 0.22)

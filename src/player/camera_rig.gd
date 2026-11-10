@@ -107,6 +107,7 @@ func set_target(s: Soldier) -> void:
 		target.action_started.connect(_on_action)
 		target.model_changed.connect(_on_model_changed)
 		_dir = target.aim_direction()
+		_set_vm_prop(target.heal_time_left > 0.0)   # Verbandskasten des vorigen Soldaten nicht mitnehmen
 		_on_weapon_changed(target.current_weapon())
 		_apply_head_visibility()
 
@@ -341,6 +342,11 @@ func _on_weapon_changed(w: Weapon) -> void:
 	var skin := StandardMaterial3D.new()
 	skin.albedo_color = Color(0.8, 0.63, 0.5)
 	var hands: Array = [] if _vm_weapon.has_meta("orig") else [Vector3(0.0, -0.06, 0.02), Vector3(0.0, -0.05, -w.data.model_length * 0.38)]
+	var pack := String(_vm_weapon.get_meta("pack", ""))
+	if pack != "":
+		# B-051 FPV-Variante [D]: Platzhaltermodell mit Hand-Klötzen an Griff (Ursprung) und LW
+		var lwn := _vm_weapon.find_child("LW", false, false) as Node3D
+		hands = [Vector3(0.0, -0.04, 0.03), (lwn.position if lwn else Vector3(0, -0.05, -0.3))]
 	for p in hands:
 		var h := MeshInstance3D.new()
 		var b := BoxMesh.new()
@@ -352,7 +358,7 @@ func _on_weapon_changed(w: Weapon) -> void:
 	for mi in _vm_weapon.find_children("*", "MeshInstance3D", true, false):
 		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_vm_no_clip(_vm_weapon)
-	_vm_weapon.position = VM_HIP
+	_vm_weapon.position = OrigWeapons.PACK_FPV_POS.get(pack, VM_HIP)
 	_viewmodel.add_child(_vm_weapon)
 
 
@@ -650,6 +656,9 @@ func _update_viewmodel(delta: float) -> void:
 	var w := target.current_weapon()
 	var aim := zoomed()
 	var base: Vector3 = VM_AIM if aim else VM_HIP
+	var pack := String(_vm_weapon.get_meta("pack", ""))
+	if pack != "":
+		base = OrigWeapons.pack_fpv_pos(_vm_weapon, aim)     # B-051 [D]
 	_vm_bob += delta * target.current_speed() * 3.2
 	var bob := Vector3(sin(_vm_bob) * 0.012, absf(cos(_vm_bob)) * 0.01, 0.0) * (0.3 if aim else 1.0)
 	var reload_drop: Vector3 = Vector3(0, -0.12, 0.05) if w and w.is_reloading() else Vector3.ZERO

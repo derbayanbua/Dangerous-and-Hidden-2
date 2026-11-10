@@ -1718,6 +1718,8 @@ func _spawn(id: int, pname: String, team: int, pos: Vector3, yaw: float, gen: in
 		s.net_target = pos
 	elif id == my_id():
 		s.net_hook = _local_action
+		if not multiplayer.is_server():
+			s.net_heal_hook = _local_heal      # 0.10.6: Verband am Kameraden server-autoritativ
 		var sq = m.squad
 		sq.members.clear()
 		sq.add_member(s)
@@ -1893,6 +1895,76 @@ func _do_act(s: Soldier, kind: String, a: Vector3, b: Vector3, wid: String) -> v
 		"tool":
 			# Hilfsmittel in der Hand der Netzfigur (Verband/Mine/Sprengstoff/Fernglas), Code in a.x
 			s.tool = String(Soldier.TOOL_KEYS[clampi(int(a.x), 0, Soldier.TOOL_KEYS.size() - 1)])
+
+
+## 0.10.6 Verband (Erste-Hilfe-Kit) am Kameraden/sich selbst: Client fragt nach abgeschlossener Animation beim
+## Server an; der Server prüft und wirkt (Soldier.apply_bandage), Gesundheit geht über _hp an alle.
+const HEAL_REACH := 2.5
+var heals_done := 0                ## Server: ausgeführte Verbands-Anfragen (Tests)
+
+
+func soldier_id(s: Soldier) -> int:
+	for id in _soldiers:
+		if _soldiers[id] == s:
+			return int(id)
+	return 0
+
+
+func _local_heal(target: Soldier) -> void:
+	var tid := soldier_id(target)
+	if tid != 0:
+		_heal_req.rpc_id(1, tid)
+
+
+func heal_error(s: Soldier, t: Soldier) -> String:
+	if not is_instance_valid(s) or not s.alive:
+		return "Heiler tot"
+	if not is_instance_valid(t) or not t.alive:
+		return "Ziel tot/unbekannt"
+	if t != s and (t.team != s.team or mode() == Mode.DEATHMATCH):
+		return "fremdes Team"
+	if s.medkits <= 0:
+		return "kein Verband"
+	if s.vehicle != null:
+		return "im Fahrzeug"
+	if t.global_position.distance_to(s.global_position) > HEAL_REACH:
+		return "zu weit"
+	if t.health >= t.max_health - 0.5:
+		return "unverletzt"
+	return ""
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _heal_req(tid: int) -> void:
+	if not multiplayer.is_server() or _guest("heal"):
+		return
+	var sid := multiplayer.get_remote_sender_id()
+	_touch(sid)
+	var s: Soldier = _soldiers.get(sid)
+	var t: Soldier = _soldiers.get(tid)
+	var why := heal_error(s, t)
+	if why != "":
+		_reject_log(sid, "heal", why)
+		if is_instance_valid(s):
+			_heal_ack.rpc_id(sid, false, s.medkits)
+		return
+	s.apply_bandage(t)
+	heals_done += 1
+	_hp_sent[tid] = t.health
+	_hp.rpc(tid, t.health)
+	_heal_ack.rpc_id(sid, true, s.medkits)
+
+
+@rpc("authority", "call_remote", "reliable")
+func _heal_ack(ok: bool, med: int) -> void:
+	var s: Soldier = _soldiers.get(my_id())
+	if not is_instance_valid(s):
+		return
+	s.medkits = med
+	if med <= 0 and s.tool == "medkit":
+		s.tool = ""
+	if not ok:
+		Events.say("Verband nicht möglich.", 1.5)
 
 
 ## Server: gelegte Mine/Ladung detoniert (Beschuss, Kettenreaktion, Zünder) – bei allen Clients ebenfalls

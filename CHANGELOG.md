@@ -2,6 +2,18 @@
 
 
 
+## 0.10.6 (10.11.2026)
+
+- **Kameraden heilen:** Erste-Hilfe-Kit in die Hand, Kameraden (≤ 2 m) anklicken → Verband mit Animation und
+  Fortschrittsbalken; Wirkung nach Erste-Hilfe-Wert des Heilenden. Einzelspieler und Mehrspieler (gleiches Team,
+  Server prüft Abstand/Verband/Team, nicht im Deathmatch).
+- **Soldatenwerte geprüft:** Gesundheit, Kraft/Traglast, Ausdauer, Schießen, Tarnung, Erste Hilfe und Schlösser wirken
+  im Spiel, auch nach dem Laden und bei Ersatzleuten. Test `test_sas_values`.
+- **Fehlende Waffenmodelle** (Panzerschreck, P08 SD, G43, MAS 36) mit eigenen Platzhaltermodellen in Hand, 3. Person,
+  Ego-Ansicht und am Boden.
+- Datenschutz-Hinweis im Internet-Mehrspieler in allen Spielsprachen (EN/FR/IT/ES/CS).
+- Behoben: Erste-Hilfe-Kit blieb nach dem Tod beim Verbinden und Soldatenwechsel in der Ego-Ansicht in der Hand.
+
 ## 0.10.5 (10.11.2026)
 
 - Internet-Mehrspieler: beim ersten Aufruf je Profil Hinweis zur Datenübertragung an den Masterserver (PC-Daten gehasht

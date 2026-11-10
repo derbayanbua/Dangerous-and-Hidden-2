@@ -57,6 +57,10 @@ func _run() -> void:
 	check(inet != null and not inet.disabled, "Hauptmenü: MEHRSPIELER-SPIEL – INTERNET aktiv")
 	check(await click(inet), "Internet-Knopf angeklickt")
 	await frames(5)
+	# 0.10.5: Datenschutz-Hinweis beim ersten Aufruf je Profil → zustimmen
+	if menu.online_dialog != null:
+		menu.online_dialog.confirmed.emit()
+		await frames(5)
 	var lm: LanMenu = menu.lan_menu
 	check(lm != null and lm.internet and lm._inet.button_pressed and Net.browsing_favorites, "Internet-Menü offen (Internet-Server vorgewählt, Favoriten)")
 	Net.favorites.clear()

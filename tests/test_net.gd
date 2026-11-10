@@ -116,18 +116,64 @@ func _run() -> void:
 	# Ergebnisse des Clients abwarten (der Host fährt währenddessen im Kreis)
 	t0 = Time.get_ticks_msec()
 	var maxd := 0.0
-	while Time.get_ticks_msec() - t0 < 240000 and not FileAccess.file_exists(RESULT):
+	var car_done := func() -> bool: return Net.chat_log.any(func(e): return String(e["name"]) == "Gast" and String(e["text"]) == "CAR_DONE")
+	while Time.get_ticks_msec() - t0 < 240000 and not FileAccess.file_exists(RESULT) and not car_done.call():
 		await get_tree().create_timer(0.5).timeout
 		maxd = maxf(maxd, car.global_position.distance_to(c0))
 	Input.action_release("move_forward")
 	Input.action_release("move_left")
 	check(maxd > 3.0, "Host fährt das Testfahrzeug", "max. %.1f m vom Start" % maxd)
+	await _heal_phase(car)
+	t0 = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - t0 < 120000 and not FileAccess.file_exists(RESULT):
+		await get_tree().create_timer(0.5).timeout
 	var txt := FileAccess.get_file_as_string(RESULT) if FileAccess.file_exists(RESULT) else ""
 	check(txt != "", "Client-Ergebnisse empfangen")
 	for line in txt.split("\n", false):
 		check(line.begins_with("PASS"), "Client: " + line.substr(6))
 	Net.leave(false)            # Client wartet darauf (Verbindung beendet) und beendet sich dann selbst
 	_finish()
+
+
+## 0.10.6: Client verbindet den verletzten Host per Erste-Hilfe-Kit (Server prüft Abstand/Team/Verband, heilt, Abgleich).
+## Für die Teamprüfung gilt während der Phase Team-Deathmatch mit beiden im selben Team (nur Prüfphase).
+func _heal_phase(car: Vehicle) -> void:
+	var cid := 0
+	for id in Net._soldiers:
+		if id != 1 and is_instance_valid(Net._soldiers[id]) and Net._soldiers[id].alive:
+			cid = id
+	var cl: Soldier = Net._soldiers.get(cid)
+	var host: Soldier = Net._soldiers.get(1)
+	if not is_instance_valid(cl) or not is_instance_valid(host):
+		check(false, "Heilen: Soldaten vorhanden")
+		return
+	car.leave_all()
+	await get_tree().create_timer(0.5).timeout
+	var mode0 = Net.settings.get("mode", 0)
+	var team0 := cl.team
+	check(Net.heal_error(cl, host) == "fremdes Team" or Net.heal_error(cl, host) == "zu weit",
+		"Heilen (DM/weit weg): Server lehnt ab", Net.heal_error(cl, host))
+	Net.settings["mode"] = Net.Mode.TEAM_DEATHMATCH
+	cl.team = host.team
+	host.global_position = cl.global_position + Vector3(1.2, 0.2, 0.0)
+	host.velocity = Vector3.ZERO
+	host.health = 20.0
+	var med0 := cl.medkits
+	var done0 := Net.heals_done
+	Net.send_chat("HEAL_GO")
+	var ok := await _wait(func() -> bool: return Net.heals_done > done0, 90.0)
+	check(ok and host.health > 20.0 + 10.0 and cl.medkits == med0 - 1,
+		"Heilen MP: Anfrage des Clients vom Server ausgeführt (Verband verbraucht, Gesundheit gesetzt)",
+		"%.1f LP, Verbände %d→%d" % [host.health, med0, cl.medkits])
+	host.global_position = cl.global_position + Vector3(6.0, 0.2, 0.0)
+	host.health = 20.0
+	var med1 := cl.medkits
+	cl.medkits = maxi(med1, 1)
+	check(Net.heal_error(cl, host) == "zu weit", "Heilen MP: > 2,5 m wird abgelehnt", Net.heal_error(cl, host))
+	cl.medkits = med1
+	host.health = host.max_health
+	cl.team = team0
+	Net.settings["mode"] = mode0
 
 
 ## Testfahrzeug an derselben Stelle auf Server und Client (gleicher Knotenpfad für Net._veh/_seat)

@@ -23,8 +23,15 @@ func _run() -> void:
 			var s = Net._soldiers[k]
 			if int(k) < 0 and is_instance_valid(s):
 				bots.append(s)
-		if bots.size() >= 2:
+		var cm := Game.current_mission()
+		if bots.size() >= 2 and cm and cm.nav_ready:
 			break
+	await frames(120)       # Neu-Spawn nach dem Kartenabgleich abwarten (sonst freigegebene Figuren)
+	bots.clear()
+	for k in Net._soldiers:
+		var s2 = Net._soldiers[k]
+		if int(k) < 0 and is_instance_valid(s2):
+			bots.append(s2)
 	var m := Game.current_mission()
 	if m == null or bots.size() < 2:
 		print("FEHLER: KI-Soldaten nicht gefunden ", bots.size())
@@ -59,7 +66,15 @@ func _run() -> void:
 	cam.current = true
 	await frames(30)
 	var idx := 1
-	for pair in PAIRS:
+	var pairs: Array = PAIRS
+	var pre := "w"
+	if String(Game.cli.get("pack", "")) == "1":
+		pre = "wp"
+		# B-051: Platzhalter für Waffen ohne Originalmodell (G43/MAS 36, P08 SD, Panzerschreck) → shot_wp*
+		for it in [260, 262, 263]:
+			WeaponDB.from_orig(it)
+		pairs = [["p_gewehr", "o_262", "o_263"], ["p_pistole", "o_260", "o_260"], ["p_werfer", "panzerschreck", "panzerschreck"]]
+	for pair in pairs:
 		for i in 2:
 			var s = bots[i]
 			var wid := StringName(pair[1 + (0 if int(s.team) == Soldier.TEAM_AXIS else 1)])
@@ -81,7 +96,7 @@ func _run() -> void:
 			cam.fov = 45
 			cam.global_position = mid + Vector3(1.6, 1.4, 3.4)
 			cam.look_at(mid + Vector3.UP * 0.95)
-			await shot("w%d_%s_%s_ganz" % [idx, pair[0], mode])
+			await shot("%s%d_%s_%s_ganz" % [pre, idx, pair[0], mode])
 			for i in 2:
 				var s: Node3D = bots[i]
 				for b in bots:
@@ -90,8 +105,12 @@ func _run() -> void:
 				cam.fov = 40
 				cam.global_position = hand + Vector3(-1.7, 0.25, 0.9)     # rechte Seite der Figur (Blick +Z)
 				cam.look_at(hand + Vector3(0, 0, 0.25))
-				await shot("w%d_%s_%s_nah_%s" % [idx, pair[0], mode, "achse" if int(s.team) == Soldier.TEAM_AXIS else "alliiert"])
+				await shot("%s%d_%s_%s_nah_%s" % [pre, idx, pair[0], mode, "achse" if int(s.team) == Soldier.TEAM_AXIS else "alliiert"])
 		idx += 1
+	if pre == "wp":
+		await _pack_ground(cam, bots[0].global_position + Vector3(0, 0, 2.5))
+		get_tree().quit()
+		return
 	# Hocken mit Anschlag (Gewehr)
 	for i in 2:
 		var s = bots[i]
@@ -118,6 +137,23 @@ func _run() -> void:
 	get_tree().quit()
 
 
+## B-051: Platzhalter als Weltgegenstand (liegend wie Ablagestapel, gedreht um Z) nebeneinander.
+func _pack_ground(cam: Camera3D, at: Vector3) -> void:
+	var i := 0
+	for it in OrigWeapons.PACK_ITEMS:
+		var n := OrigWeapons.pack_item_model(int(it))
+		if n == null:
+			continue
+		Game.current_mission().add_child(n)
+		n.global_position = at + Vector3(i * 0.5 - 0.75, 0.06, 0)
+		n.rotation = Vector3(0, 0, PI * 0.5)
+		i += 1
+	cam.fov = 40
+	cam.global_position = at + Vector3(0.3, 1.6, 1.4)
+	cam.look_at(at)
+	await shot("wp9_boden")
+
+
 ## Prüfwerte: Waffe hängt an hw1, Mündungshöhe, Laufrichtung gegen Blickrichtung (Skalarprodukt).
 func _report(s, cls: String, mode: String) -> void:
 	var mdl = s.model
@@ -129,5 +165,5 @@ func _report(s, cls: String, mode: String) -> void:
 	var barrel: Vector3 = w.global_basis * Vector3(0, 0, -1)
 	var dotv: float = barrel.normalized().dot(s.aim_direction())
 	print("WAFFE %s %s %s orig=%s an_hw1=%s Griff=%s Mündung=%s Lauf·Blick=%.2f Clip=%s" % [cls, mode, s.name,
-		w.has_meta("orig"), hand != null and w.get_parent() == hand, str(w.global_position - s.global_position),
+		String(w.get_meta("pack", "")) if w.has_meta("pack") else str(w.has_meta("orig")), hand != null and w.get_parent() == hand, str(w.global_position - s.global_position),
 		str(mdl.muzzle_point(barrel, 1.0) - s.global_position), dotv, mdl._hold_clip])

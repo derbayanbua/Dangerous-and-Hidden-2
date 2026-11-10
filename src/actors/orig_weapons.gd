@@ -225,7 +225,7 @@ static func _swap_hands(n: Node3D, hands: String) -> bool:
 static func instance(data: WeaponData, team: int = -1) -> Node3D:
 	var model := String(info(data, team).get("model", ""))
 	if model == "":
-		return null
+		return pack_instance(pack_name(data, team))     # B-051: fehlendes Originalmodell -> Platzhalter-Satz
 	if not _templates.has(model):
 		_templates[model] = _load(OrigLevel.cache_root() + SUBDIR + "/" + model + ".glb")
 	var tpl: Node3D = _templates[model]
@@ -256,6 +256,86 @@ static func instance(data: WeaponData, team: int = -1) -> Node3D:
 	for mi in root.find_children("*", "MeshInstance3D", true, false):
 		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	return root
+
+
+## --- B-051: Platzhaltermodelle für Waffen, deren Modell in der Original-Installation fehlt ---
+## Eigene stilisierte GLBs (assets/weapons/placeholder, 1 m, +Y oben, Mündung −Z, Marker Muzzle/Grip in den .tscn).
+## Griff = Marker „Grip“ (wie RW der Originale im Ursprung), Lage an hw1 über hand_transform() wie die Originale.
+## LW (linke Hand, IK) = Annahme [D]: Anteil der Strecke Griff → Mündung, knapp unter der Laufachse.
+const PACK_DIR := "res://assets/weapons/placeholder/"
+const PACK_ITEMS := {260: "P08_SD", 262: "G43", 263: "MAS_36", 264: "Panzerschreck"}
+const PACK_LW := {"P08_SD": 0.08, "G43": 0.5, "MAS_36": 0.5, "Panzerschreck": 0.45}     ## [D]
+## FPV-Variante [D]: Lage vor der Kamera (Kameraraum) statt CameraRig.VM_HIP; Werfer auf der Schulter.
+const PACK_FPV_POS := {"P08_SD": Vector3(0.16, -0.17, -0.36), "G43": Vector3(0.15, -0.17, -0.34),
+	"MAS_36": Vector3(0.15, -0.17, -0.34), "Panzerschreck": Vector3(0.2, -0.1, -0.15)}
+
+
+## Name des Platzhaltermodells zur Waffe oder "" (nur Gegenstände ohne Originalmodell im Cache).
+static func pack_name(data: WeaponData, team: int = -1) -> String:
+	return pack_item_name(item_for(data, team))
+
+
+static func pack_item_name(item: int) -> String:
+	var nm := String(PACK_ITEMS.get(item, ""))
+	if nm == "" or not ResourceLoader.exists(PACK_DIR + nm + ".tscn"):
+		return ""
+	return nm
+
+
+## Szene des Platzhalters unverändert (Ursprung = Modellursprung), oder null.
+static func pack_scene(nm: String) -> Node3D:
+	if nm == "":
+		return null
+	var ps := load(PACK_DIR + nm + ".tscn") as PackedScene
+	if ps == null:
+		return null
+	var n := ps.instantiate() as Node3D
+	n.set_meta("pack", nm)
+	return n
+
+
+## Platzhalter wie instance(): Griff im Ursprung, Lauf −Z, Meta "muzzle"/"pack", Knoten "LW". null = fehlt.
+static func pack_instance(nm: String) -> Node3D:
+	var scene := pack_scene(nm)
+	if scene == null:
+		return null
+	var root := Node3D.new()
+	root.name = "OrigWeapon"
+	root.set_meta("pack", nm)
+	root.add_child(scene)
+	var grip := scene.get_node_or_null("Grip") as Node3D
+	var muz := scene.get_node_or_null("Muzzle") as Node3D
+	var gp := grip.position if grip else Vector3.ZERO
+	scene.position = -gp
+	var mp := (muz.position if muz else Vector3(0, 0, -0.6)) - gp
+	var lw := Node3D.new()
+	lw.name = "LW"
+	var f := float(PACK_LW.get(nm, 0.4))
+	lw.position = Vector3(0.0, mp.y * f - 0.04, mp.z * f)
+	root.add_child(lw)
+	root.set_meta("muzzle", muz if muz else lw)
+	for mi in root.find_children("*", "MeshInstance3D", true, false):
+		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	return root
+
+
+## Lage des Platzhalters vor der Kamera [D]: Hüfte aus PACK_FPV_POS, Zielen = Laufachse knapp unter der Bildmitte
+## (Mündungshöhe über dem Griff), Werfer mit Visier links am Rohr leicht nach rechts versetzt.
+static func pack_fpv_pos(vm: Node3D, aim: bool) -> Vector3:
+	var nm := String(vm.get_meta("pack", ""))
+	if not aim:
+		return PACK_FPV_POS.get(nm, Vector3(0.17, -0.2, -0.42))
+	var h := 0.15
+	var muz: Variant = vm.get_meta("muzzle", null)
+	if muz is Node3D and (muz as Node3D).get_parent() is Node3D:
+		h = (muz as Node3D).position.y + ((muz as Node3D).get_parent() as Node3D).position.y   # Mündungshöhe über dem Griff
+	var x := 0.07 if nm == "Panzerschreck" else 0.0
+	return Vector3(x, -h - 0.02, -0.3 if nm != "Panzerschreck" else -0.1)
+
+
+## Weltgegenstand (liegend/Ablagestapel) zu einer items.sav-Nummer: Platzhalter, falls kein Originalmodell.
+static func pack_item_model(item: int) -> Node3D:
+	return pack_scene(pack_item_name(item))
 
 
 ## Original-Modell (Weltgegenstand, Modellname wie in items.sav) unverändert, oder null.

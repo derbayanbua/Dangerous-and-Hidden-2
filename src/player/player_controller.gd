@@ -107,6 +107,10 @@ func _ready() -> void:
 	inventory = IngameInventory.new()
 	inventory.name = "IngameInventory"
 	add_child(inventory)
+	var ql: Node = preload("res://src/player/quick_line.gd").new()
+	ql.name = "QuickLine"
+	ql.set("controller", self)
+	add_child(ql)
 	Events.soldier_died.connect(_on_soldier_died)
 
 

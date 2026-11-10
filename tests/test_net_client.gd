@@ -93,7 +93,44 @@ func _run() -> void:
 			break
 	check(boarded, "Fahrzeug: Host sitzt auch beim Client am Steuer (Sitzabgleich)")
 	check(followed and moved > 5.0, "Fahrzeug: Lage vom Fahrer kommt an (kinematisch nachgeführt)", "%.1f m" % moved)
+	await _heal_phase()
 	_done()
+
+
+## 0.10.6: Erste-Hilfe-Kit wählen, den verletzten Host (≤ 2 m vor sich) anklicken → Server heilt
+func _heal_phase() -> void:
+	Net.send_chat("CAR_DONE")
+	var go := func() -> bool: return Net.chat_log.any(func(e): return String(e["name"]) == "Host" and String(e["text"]) == "HEAL_GO")
+	var tw := Time.get_ticks_msec()
+	while not go.call() and Time.get_ticks_msec() - tw < 120000:
+		await get_tree().create_timer(0.2).timeout
+	var me: Soldier = Net._soldiers.get(Net.my_id())
+	var host: Soldier = Net._soldiers.get(1)
+	if not go.call() or not is_instance_valid(me) or not is_instance_valid(host):
+		check(false, "Heilen: Startsignal/Soldaten")
+		return
+	tw = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - tw < 20000 and (host.global_position.distance_to(me.global_position) > 1.8 or host.health > 25.0):
+		await get_tree().create_timer(0.2).timeout    # Lage und Gesundheit des Hosts kommen an
+	# Testphase: der Host gilt hier als Teamkamerad (Server prüft dasselbe mit Team-Deathmatch)
+	if host.team != me.team:
+		host.remove_from_group("team_%d" % host.team)
+		host.team = me.team
+		host.add_to_group("team_%d" % me.team)
+	var d := host.global_position - me.global_position
+	me.look_yaw = atan2(-d.x, -d.z)
+	var med0 := me.medkits
+	me.apply_selection("medkit")
+	check(me.tool == "medkit" and me.aimed_comrade(2.0) == host, "Heilen MP: Erste-Hilfe-Kit gewählt, Host am Fadenkreuz",
+		"%.2f m, %d Verbände" % [d.length(), med0])
+	var hp0 := host.health
+	me.use_tool()
+	check(me.heal_target == host and me.heal_time_left > 0.0, "Heilen MP: Verband beginnt (Fortschritt)")
+	tw = Time.get_ticks_msec()
+	while Time.get_ticks_msec() - tw < 15000 and host.health <= hp0 + 1.0:
+		await get_tree().create_timer(0.2).timeout
+	check(host.health > hp0 + 10.0 and me.medkits == med0 - 1, "Heilen MP: Gesundheit vom Server, Verband verbraucht",
+		"%.1f → %.1f LP, %d → %d" % [hp0, host.health, med0, me.medkits])
 
 
 var _quitting := false
