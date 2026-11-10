@@ -289,10 +289,36 @@ func _run() -> void:
 		all_alive = all_alive and mm.alive
 	check(all_alive and sq.leader() == lead, "Trupp unversehrt (kein Eigenbeschuss durch Befehle)")
 
-	# --- Befehl an einen Soldaten (Ziffernblock 2 = Teamplatz 2) ---
+	# --- 0.10.7: Num 1–6 = n-ter Kamerad OHNE den aktiven Soldaten ---
+	check(sq.members[0] == lead, "Anführer auf Teamplatz 1 (Testvoraussetzung)")
+	var map_ok := true
+	for n in range(1, 7):
+		var want := n if n < sq.members.size() else -1
+		map_ok = map_ok and cm.key_member(n) == want
+	check(map_ok, "Num n → n-ter Kamerad ohne den aktiven (Num 1 = Teamplatz 2 …), fehlende = -1")
+	var lbl: Array = cm.key_labels()
+	check(lbl[0][0] == sq.members[1].soldier_name and (sq.members.size() > 6 or not lbl[sq.members.size() - 1][1]),
+		"Anzeige: Name je Ziffer, Ziffern ohne Kameraden ausgegraut", str(lbl))
+	await act("command_%d" % sq.members.size())     # kein Kamerad mit dieser Nummer
+	check(not cm.is_open, "Num ohne passenden Kameraden: ohne Wirkung")
+	# aktiver Soldat wechselt: wird übersprungen, Nummerierung rückt nach
+	sq.set_active(1)
+	c.set_active(sq.members[1])
+	await idle()
+	check(sq.leader() == sq.members[1] and cm.key_member(1) == 0 and cm.key_member(2) == 2, "Aktiver Soldat (Platz 2) übersprungen: Num 1 = Platz 1, Num 2 = Platz 3")
+	await act("command_1")
+	check(cm.is_open and cm.target_index == 0 and cm.title().ends_with(sq.members[0].soldier_name), "Num 1 öffnet Menü für Platz 1 (Name in der Zeile)", cm.title())
+	await key(KEY_0)
+	sq.set_active(0)
+	c.set_active(lead)
+	for mm in mates:
+		sq.brain_of(mm).set_order(SquadBrain.Order.FOLLOW)
+	await idle()
+
+	# --- Befehl an einen Soldaten (Ziffernblock 1 = erster Kamerad = Teamplatz 2) ---
 	var two := sq.members[1]
-	await act("command_2")
-	check(cm.is_open and cm.target_index == 1 and cm.title().ends_with(two.soldier_name), "Ziffernblock 2: Befehl an Soldat 2", cm.title())
+	await act("command_1")
+	check(cm.is_open and cm.target_index == 1 and cm.title().ends_with(two.soldier_name), "Ziffernblock 1: Befehl an Soldat 2 (erster Kamerad)", cm.title())
 	check(cm.entries[6][1] == CommandMenu.A_GREY and cm.entries[7][1] == CommandMenu.A_GREY, "Einzelner Soldat: Formation/Taktik ausgegraut")
 	await key(KEY_1)
 	await key(KEY_5)
@@ -305,7 +331,7 @@ func _run() -> void:
 	await act("command_all")
 	check(cm.entries[7][1] == 58, "Taktik-Modus wählbar, sobald ein Soldat einen Plan hat")
 	await key(KEY_0)
-	await act("command_2")
+	await act("command_1")
 	var only_tac: bool = cm.entries[7][1] == 58
 	for g in [0, 1, 3, 4, 6]:
 		only_tac = only_tac and cm.entries[g][1] == CommandMenu.A_GREY
@@ -318,9 +344,9 @@ func _run() -> void:
 	var pp := two.global_position
 	await seconds(1.0)
 	check(two.global_position.distance_to(pp) < 0.6, "Plan angehalten (Soldat steht)")
-	await cmd("command_2", [8, 4])
+	await cmd("command_1", [8, 4])
 	check(not tb.plan_paused and tb.order == SquadBrain.Order.MOVE, "Taktik › Weiter")
-	await cmd("command_2", [8, 6])
+	await cmd("command_1", [8, 6])
 	check(tb.order == SquadBrain.Order.FOLLOW and not sq.has_plan(two), "Taktik › Zurück in Formation")
 
 	# --- Aktion: Tür öffnen / leise schließen ---
@@ -335,7 +361,7 @@ func _run() -> void:
 		mate.global_position = door.global_position + door.global_basis.z * 3.0 + Vector3.UP * 0.3
 		sq.brain_of(mate).set_order(SquadBrain.Order.HOLD)
 		cm.context_override = door
-		await cmd("command_3", [3])
+		await cmd("command_2", [3])
 		# B-019: Original 0x4BF670 Fall 6 – unverschlossene Tür: Öffnen, Schließen, Hineing. & räumen, Granate in den Raum,
 		# Abschließen (nur mit Schlüssel); offen/zu ist keine Bedingung
 		var door_ids: Array = cm.entries.slice(0, 5).map(func(e): return e[0])
@@ -354,17 +380,17 @@ func _run() -> void:
 		var keep_w: Array = [mate.weapons[0], mate.weapons[1]]
 		mate.weapons[0] = Weapon.new(WeaponDB.get_weapon(&"kar98k"))
 		mate.weapons[1] = null
-		await act("command_3")
+		await act("command_2")
 		check(cm.entries[4][1] == CommandMenu.A_GREY and cm.entries[5][1] == CommandMenu.A_GREY and cm.entries[3][1] == 54,
 			"Ohne Schalldämpfer: Stiller Angriff/Stille Aktion ausgegraut, Schl. Beweg. wählbar")
 		await key(KEY_6)
 		check(cm.is_open and cm.menu_id == CommandMenu.MAIN, "Taste 6 auf ausgegrauter Stille Aktion wirkungslos")
 		await key(KEY_0)
 		mate.weapons[0] = Weapon.new(WeaponDB.get_weapon(&"mp40_sd"))
-		await act("command_3")
+		await act("command_2")
 		check(cm.entries[4][1] == 55 and cm.entries[5][1] == 56, "Mit Schalldämpferwaffe (MP 40 SD): leise Menüs wählbar")
 		await key(KEY_0)
-		await cmd("command_3", [6])
+		await cmd("command_2", [6])
 		mate.weapons[0] = keep_w[0]
 		mate.weapons[1] = keep_w[1]
 		check(cm.menu_id == 56 and cm.entries[1][1] == CommandMenu.ACT_CLOSE, "Stille Aktion (Tür offen): Schließen wählbar")
@@ -387,7 +413,7 @@ func _run() -> void:
 	medic.medkits = maxi(medic.medkits, 1)
 	var hp0 := hurt.health
 	cm.context_override = hurt
-	await cmd("command_4", [3])
+	await cmd("command_3", [3])
 	check(cm.entries[0][0] == 7034 and cm.entries[0][1] == CommandMenu.ACT_HEAL, "Aktion (verwundeter Kamerad): Erste Hilfe")
 	await key(KEY_1)
 	await seconds(7.0)
@@ -468,7 +494,94 @@ func _run() -> void:
 
 	await _b019(m, c, cm, sq, lead)
 	await _persistence(m, c, cm, sq, lead)
+	await _quiet(m, c, cm, sq, lead)
 	_finish()
+
+
+## 0.10.7 leise Befehle: geduckt schleichen, Feuer nur mit Schalldämpferwaffe. Gegner ohne KI (kein Schaden am Trupp).
+func _quiet(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadManager, lead: Soldier) -> void:
+	c.set_active(lead)
+	place(lead, 0, 22, 0.0)
+	var mate := sq.members[1]
+	place(mate, 0, 25, 0.0)
+	var b := sq.brain_of(mate)
+	b.clear_tasks()
+	b.set_order(SquadBrain.Order.HOLD)
+	b.roe = SquadBrain.ROE.FIRE_AT_WILL
+	await seconds(0.3)
+	var keep_w: Array = [mate.weapons[0], mate.weapons[1]]
+	# Folgen leise, Anführer weit weg (> 15 m) und stehend: trotzdem geduckt schleichen
+	await cmd("command_1", [4, 1])
+	check(b.order == SquadBrain.Order.FOLLOW and b.quiet, "Schl. Beweg. an Num 1: folgt leise")
+	place(lead, 0, 0, 0.0)
+	await seconds(1.0)
+	check(mate.stance_request == Soldier.Stance.CROUCH, "Leiser Befehl: Haltung geduckt (Anführer steht)", str(mate.stance_request))
+	check(mate.move_mode == Soldier.MoveMode.SNEAK, "Leiser Befehl: Gangart Schleichen auch bei großem Abstand", str(mate.move_mode))
+	# Halten leise, Gegner in Sicht: ohne Schalldämpfer kein Feuer
+	place(lead, 10, 27, 0.0)
+	place(mate, 0, 25, 0.0)
+	await cmd("command_1", [4, 4])
+	check(b.order == SquadBrain.Order.HOLD and b.quiet, "Schl. Beweg. › Anhalten (leise)")
+	b.roe = SquadBrain.ROE.FIRE_AT_WILL
+	mate.weapons[0] = Weapon.new(WeaponDB.get_weapon(&"kar98k"))
+	mate.weapons[1] = null
+	mate.select_slot(0)
+	var e: Soldier = null
+	for en in m.enemies:
+		if is_instance_valid(en) and en.alive:
+			e = en
+			break
+	var eb := reset_enemy(e, -1, 8, PI)
+	eb.enabled = false
+	b.hold_yaw = 0.0
+	mate.look_yaw = 0.0
+	var t0 := mate.last_shot_time
+	await seconds(3.0)
+	var seen := (mate.get_node("Perception") as Perception).best_target() == e
+	check(seen and mate.last_shot_time == t0, "Leise ohne Schalldämpfer: Gegner erkannt, kein Feuer",
+		"e %s alive %s, d %.1f, seen %s, shot %s, quiet %s, roe %d, w %s" % [e.name, e.alive, e.global_position.distance_to(mate.global_position), seen, mate.last_shot_time != t0, b.quiet, b.roe, mate.current_weapon().data.id if mate.current_weapon() else &"-"])
+	# mit Schalldämpferwaffe: feuert
+	mate.weapons[0] = Weapon.new(WeaponDB.get_weapon(&"mp40_sd"))
+	mate.select_slot(0)
+	await seconds(3.0)
+	check(CommandMenu.has_silenced(mate) and mate.last_shot_time != t0, "Leise mit Schalldämpfer (MP 40 SD): feuert selbständig",
+		"sil %s, quiet %s, target %s, w %s" % [CommandMenu.has_silenced(mate), b.quiet, (mate.get_node("Perception") as Perception).best_target(),
+		mate.current_weapon().data.id if mate.current_weapon() else &"-"])
+	e.global_position = Vector3(-120, 30, -110)
+	e.set_physics_process(false)
+	e.get_node("Perception").set_physics_process(false)
+	(mate.get_node("Perception") as Perception).awareness.clear()
+	# Automatischer Waffenwechsel: Pistole in der Hand, Schalldämpferwaffe auf Primär → leise = MP 40 SD, danach zurück
+	mate.weapons[1] = Weapon.new(WeaponDB.get_weapon(&"p08"))
+	mate.weapons[1].reserve = 16
+	b.set_order(SquadBrain.Order.HOLD)
+	mate.select_slot(WeaponData.Slot.SIDEARM)
+	await seconds(0.5)
+	await cmd("command_1", [4, 1])
+	await seconds(0.8)
+	check(mate.current_slot == WeaponData.Slot.PRIMARY, "Leiser Befehl: Wechsel auf die Schalldämpferwaffe", str(mate.current_slot))
+	await cmd("command_1", [1, 1])
+	await seconds(0.8)
+	check(not b.quiet and mate.current_slot == WeaponData.Slot.SIDEARM, "Normaler Befehl: zurück zur vorherigen Waffe", str(mate.current_slot))
+	# Stiller Angriff (Original 0x5380C0): 13/17 setzen Leise-Feuer, 12/16 löschen
+	await cmd("command_1", [5, 1])
+	check(cm.last_command == 17 and b.quiet_fire and b.roe == SquadBrain.ROE.FIRE_AT_WILL and mate.current_slot == WeaponData.Slot.PRIMARY,
+		"Stiller Angriff › Nach Belieben (17): leise feuern, Schalldämpferwaffe", "cmd %d qf %s slot %d" % [cm.last_command, b.quiet_fire, mate.current_slot])
+	await cmd("command_1", [2, 1])
+	check(cm.last_command == 16 and not b.quiet_fire, "Angriff › Nach Belieben (16) hebt Leise-Feuer auf")
+	# Granate: Ziel < 6 m → „Negativ“ (Original 0x535910)
+	var g0: int = mate.weapons[WeaponData.Slot.GRENADE].total_ammo() if mate.weapons.size() > 2 and mate.weapons[2] else 0
+	cm.point_override = mate.global_position + Vector3(2, 0, 0)
+	await cmd("command_1", [2, 5])
+	await seconds(2.0)
+	var g1: int = mate.weapons[WeaponData.Slot.GRENADE].total_ammo() if mate.weapons.size() > 2 and mate.weapons[2] else 0
+	check(not b.grenade_target.is_finite() and g1 == g0, "Granate < 6 m: kein Wurf (Negativ)", "%d → %d" % [g0, g1])
+	cm.point_override = Vector3.INF
+	check(SquadBrain.COVER_ORDER_RADIUS == 20.0 and CommandMenu.SUPPRESS_TIME == 4.0, "Deckung 20 m / Deckungsfeuer 4 s wie Original")
+	mate.weapons[0] = keep_w[0]
+	mate.weapons[1] = keep_w[1]
+	b.set_order(SquadBrain.Order.FOLLOW)
+	check(not b.quiet and mate.alive and lead.alive, "Normaler Befehl hebt leise auf, Trupp unversehrt")
 
 
 ## B-019: Formation nach den Originaltabellen, Aktionsmenü am Menschen, Darstellung im Original-Frame „rollmenu“.
@@ -525,7 +638,7 @@ func _b019(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadManager, l
 	place(mate, 4, 26, 0.0)
 	sq.brain_of(mate).clear_tasks()
 	sq.brain_of(mate).set_order(SquadBrain.Order.HOLD)
-	await cmd("command_2", [3])
+	await cmd("command_1", [3])
 	check(cm.entries[2][1] == CommandMenu.ACT_CAPTURE, "Gegner ergibt sich: Gefangennehmen wählbar")
 	await key(KEY_3)
 	for i in 600:
@@ -533,7 +646,7 @@ func _b019(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadManager, l
 			break
 		await frames(1)
 	check(eb.captured, "Aktion › Gefangennehmen: Kamerad geht hin und nimmt gefangen")
-	await cmd("command_2", [3])
+	await cmd("command_1", [3])
 	ids = cm.entries.slice(0, 4).map(func(x): return x[0])
 	check(ids == [7045, 7043, 7044, 7050] and cm.entries[2][1] == CommandMenu.ACT_UNIFORM,
 		"Aktion (Gefangener): Töten, Suchen & Mun. sammeln, Uniform benutzen, Gegenstände nehmen", str(ids))
@@ -541,7 +654,7 @@ func _b019(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadManager, l
 	await key(KEY_0)
 	# Befehl an genau den Soldaten unter dem Fadenkreuz: kein Ziel (0x4C10F0 Fall 3)
 	cm.context_override = mate
-	await act("command_2")
+	await act("command_1")
 	check(cm.context == null and cm.entries[2][1] == CommandMenu.A_GREY, "Soldat ist kein Aktionsziel für sich selbst")
 	await key(KEY_0)
 	cm.context_override = null
@@ -571,7 +684,7 @@ func _b019(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadManager, l
 	sq.order_one(two, SquadBrain.Order.MOVE, m.lb.ground(-20, 0, 0.0))
 	await cmd("command_all", [1, 1])
 	check(sq.has_plan(two) and sq.brain_of(three).order == SquadBrain.Order.FOLLOW, "Folgt mir (an alle) übergeht Soldaten mit Taktik-Plan")
-	await cmd("command_2", [8, 6])
+	await cmd("command_1", [8, 6])
 
 
 ## Befehle bleiben bestehen (Fehlerbericht 23.10.2026 „die folgen immer nur“): echte Tasten, 20 s Spielzeit, der
@@ -629,7 +742,7 @@ func _persistence(m: Mission, c: PlayerController, cm: CommandMenu, sq: SquadMan
 	# Position halten an einen einzelnen Soldaten (Ziffernblock 2), die übrigen folgen
 	var two := sq.members[1]
 	await cmd("command_all", [1, 1])
-	await cmd("command_2", [1, 5])
+	await cmd("command_1", [1, 5])
 	var p2 := two.global_position
 	Input.action_press("move_back")
 	await seconds(5.0)

@@ -2,6 +2,17 @@
 
 
 
+## 0.10.7 (10.11.2026)
+
+- **Befehlsmenü Ziffernblock:** Num 0 = alle, Num 1–6 = 1.–6. Kamerad (der aktive Soldat wird übersprungen), Name des
+  Empfängers in der Menüzeile.
+- **Befehle näher am Original:** Folgen (Rennen ab 10 m), Deckung suchen (20 m), Deckungsfeuer (4 s), Granate (unter 6 m
+  „Negativ“), Feuerbefehle des stillen Angriffs.
+- **Leise Befehle:** Kameraden folgen geduckt schleichend, feuern selbstständig nur mit schallgedämpfter Waffe und
+  nehmen diese automatisch in die Hand.
+- **Waffenstreuung nach Original-Formel** (Abweichung je Waffe aus der Waffentabelle, z. B. K98 ≈ 0,1°, MP 40 ≈ 1,4°).
+- Tests stabiler (`test_support_strike`, `test_commands_orig`).
+
 ## 0.10.6 (10.11.2026)
 
 - **Kameraden heilen:** Erste-Hilfe-Kit in die Hand, Kameraden (≤ 2 m) anklicken → Verband mit Animation und

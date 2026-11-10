@@ -127,7 +127,10 @@ def _decode_behaviour(code, b):
             "muzzle_velocity": _f(b, 48),      # m/s
             "dist_param": _f(b, 52),           # vermutl. Reichweite/Abfall in m
             "recoil_spread": _f(b, 56),        # Grundstreuung/Rückstoß
-            "aim_spread": _f(b, 60),           # Zielstreuung (ZF-Varianten klein)
+            # dw15 Zielstreuung: max. seitliche Ablenkung dw15*0,01 (~rad); Getter vtable+0x10 (0x7E0370) ->
+            # Streuroutine 0x545140 aus Schussroutine 0x5433B0 (ohne Zielen/Huefte-Unterscheidung) [B]
+            # dw14 (recoil_spread) ist der Schadensabfall je m (0x44B3B0), keine Streuung.
+            "aim_spread": _f(b, 60),
             "spread_f16": _f(b, 64),
             "u17": _i(b, 68),
             "u18": _i(b, 72),
@@ -170,6 +173,7 @@ def parse_items(d: bytes) -> list:
             "fpv_model": _cs(b[0x00:0x14]), "icon": _cs(b[0x14:0x28]), "model": _cs(b[0x28:0x3C]),
             "u3c": _i(b, 0x3C), "name": _cs(b[0x50:0x64]).strip(),
             "text_id": _i(b, 0x64), "weight_kg": _f(b, 0x68), "size_class": _i(b, 0x6C),
+            # +0x78 = Klanggruppe Ziehen/"Armed" (Kat. 3), Kopie nach Gegenstand +0x40 (0x7DFCF0)
             "u70": _i(b, 0x70), "u74": _i(b, 0x74), "u78": _i(b, 0x78), "team_flag": _i(b, 0x7C),
         }
         o = 0x80

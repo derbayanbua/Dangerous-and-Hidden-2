@@ -75,6 +75,21 @@ def decode(params: bytes) -> dict:
         "ratios": ratios[1:],
         "gear_extra_?": [[round(f[21 + 3 * k], 2), round(f[22 + 3 * k], 2)] for k in range(gears + 1)],
         "head_?": [round(x, 4) for x in f[:20]],
+        # 0.10.7: Feldnamen nach Datenabgleich (Opel/BMW/Panzer III), Leser in hd2.exe NICHT gefunden -> alle [P].
+        # Laufzeit nutzt keines davon (Fahrphysik = Vorgabe, Strukturpunkte ohne DM-Modell bleiben [E]).
+        "named_p": {
+            "gear_speed_factor": round(f[2], 3),           # f2
+            "redline_rpm": round(f[3], 1),                 # f3 (= rpm_max)
+            "power_idle": round(f[6], 3), "power_redline": round(f[7], 3),   # f6/f7
+            "power_band_kw_max": round(f[8], 3),           # f8
+            "hit_points": round(f[11], 1),                 # f11 (Opel 120, BMW 50, Panzer III 500)
+            "engine_time": round(f[12], 3), "slip_factor": round(f[13], 3),
+            "shift_time_s": round(f[14], 3), "engine_rpm_factor": round(f[15], 3),
+            "downforce_front": round(f[16], 3), "downforce_rear": round(f[17], 3),
+            "start_gear_flag": round(f[18], 3),            # f18
+            # f21/f22 + 3k: Hochschalt-/Runterschaltschwelle je Gang (Prozent der Drehzahl?)
+            "shift_up_down": [[round(f[21 + 3 * k], 2), round(f[22 + 3 * k], 2)] for k in range(gears + 1)],
+        },
     }
 
 

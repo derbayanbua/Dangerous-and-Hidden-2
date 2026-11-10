@@ -72,7 +72,8 @@ const EV_NEGATIVE := 0x68     ## „Negativ“ / „Das kann ich nicht“ … (l
 
 ## Annahmen (nicht aus dem Original belegt)
 const ADVANCE_DIST := 15.0    ## „Vorwärts“: so weit vor den Anführer
-const SUPPRESS_TIME := 6.0    ## „Deckungsfeuer“: Dauer
+const SUPPRESS_TIME := 4.0    ## „Deckungsfeuer“: Dauer – Original 0x5382D0 → 0x55D280(0, 4000) [P: 4000 = ms]
+const GRENADE_MIN := 6.0      ## Original 0x535910: Ziel näher als 6 m (36 = 6²) → „Negativ“ (Ereignis 0x68) [B]
 const SHOUT_RADIUS := 25.0    ## Hörweite eines gerufenen Befehls
 const WHISPER_RADIUS := 4.0   ## Hörweite eines geflüsterten Befehls
 const GRENADE_RANGE := 40.0   ## Original 0x4C09F1: Zielpunkt höchstens 40 m (0x42200000)
@@ -152,8 +153,41 @@ func _unhandled_input(event: InputEvent) -> void:
 	else:
 		for i in 6:
 			if event.is_action_pressed("command_%d" % (i + 1)):
-				open_for(i)
+				open_for_key(i + 1)
 				break
+
+
+## 0.10.7 Ziffernblock-Belegung: Num n (1–6) = n-ter Kamerad in Teamreihenfolge OHNE den aktiven Soldaten.
+## Rückgabe Teamplatz (members-Index) bzw. −1, wenn es keinen n-ten (lebenden) Kameraden gibt (= ohne Wirkung).
+func key_member(n: int) -> int:
+	var sq := _squad()
+	if sq == null or n < 1:
+		return -1
+	var lead := sq.leader()
+	var k := 0
+	for idx in sq.members.size():
+		if sq.members[idx] == lead:
+			continue
+		k += 1
+		if k == n:
+			return idx if is_instance_valid(sq.members[idx]) and sq.members[idx].alive else -1
+	return -1
+
+
+## Liste für die Anzeige: [Name oder "", aktiv] für Num 1–6 (ausgegraut ohne passenden Kameraden).
+func key_labels() -> Array:
+	var out: Array = []
+	var sq := _squad()
+	for n in range(1, 7):
+		var idx := key_member(n)
+		out.append([sq.members[idx].soldier_name if idx >= 0 else "", idx >= 0])
+	return out
+
+
+## Num n (1–6) gedrückt: Menü für den n-ten Kameraden ohne den aktiven Soldaten öffnen.
+func open_for_key(n: int) -> bool:
+	var idx := key_member(n)
+	return open_for(idx) if idx >= 0 else false
 
 
 ## Menü für alle (−1) bzw. den Soldaten auf Teamplatz i öffnen (Hauptmenü).
@@ -561,7 +595,14 @@ func execute(code: int, quiet: bool) -> void:
 			elif code >= 14:
 				roe = SquadBrain.ROE.HOLD_FIRE
 			for s in rec:
-				sq.brain_of(s).roe = roe
+				var rb := sq.brain_of(s)
+				rb.roe = roe
+				# Original 0x5380C0 [B]: 13/17 setzen das Leise-Feuer-Flag (+0x18A), 12/16 löschen es, 14/15 lassen es
+				if code == 13 or code == 17:
+					rb.quiet_fire = true
+				elif code == 12 or code == 16:
+					rb.quiet_fire = false
+				rb.update_quiet_weapon()
 		18:
 			var sp := _point(POINT_RANGE)
 			for s in rec:
@@ -578,7 +619,12 @@ func execute(code: int, quiet: bool) -> void:
 					responder = rec[0]
 			else:
 				responder = sq.order_grenade(gp)
-			ok = responder != null
+			# Original 0x535910 [B]: Ziel < 6 m vom Werfer → kein Wurf, Antwort „Negativ“
+			if responder and responder.global_position.distance_to(gp) < GRENADE_MIN:
+				sq.brain_of(responder).grenade_target = Vector3.INF
+				ok = false
+			else:
+				ok = responder != null
 			if not ok and not rec.is_empty():
 				responder = rec[0]
 		20:
@@ -718,6 +764,7 @@ func _start_action(code: int, rec: Array[Soldier], quiet: bool) -> Soldier:
 	if b.order == SquadBrain.Order.FOLLOW:
 		b.set_order(SquadBrain.Order.HOLD, Vector3.ZERO, quiet)    # danach dort bleiben [E]
 	b.quiet = quiet
+	b.update_quiet_weapon()
 	b.action_target = context
 	b.action_kind = ACTION_KIND.get(code, "use")
 	if code == ACT_DESTROY:

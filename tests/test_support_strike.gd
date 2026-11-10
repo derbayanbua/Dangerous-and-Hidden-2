@@ -237,9 +237,16 @@ func _host() -> void:
 	if bot:
 		var bb = bot.get_node_or_null("EnemyBrain")
 		check(bb == null or sup.bot_goal(bb).is_finite() or not bb.is_leader(), "KI-Führer läuft zum Funkgerät (bot_goal)")
-		bot.global_position = sup.radio_pos + Vector3.UP * 0.2
-		await wait_for(func(): return sup.radio_state == 2 and sup.carrier < 0, 5.0)
-		check(sup.radio_state == 2 and sup.carrier < 0, "KI nimmt das Funkgerät auf (supportbots)")
+		# Bot bis zur Aufnahme auf dem Funkgerät halten (seine KI läuft sonst ggf. sofort weiter)
+		await wait_for(func():
+			if is_instance_valid(bot) and bot.alive and sup.radio_state == 1:
+				bot.global_position = sup.radio_pos + Vector3.UP * 0.2
+				bot.velocity = Vector3.ZERO
+			return sup.radio_state == 2 and sup.carrier < 0, 8.0)
+		check(sup.radio_state == 2 and sup.carrier < 0, "KI nimmt das Funkgerät auf (supportbots)",
+			"state=%d carrier=%d bot_alive=%s d=%.2f log=%s" % [sup.radio_state, sup.carrier,
+			str(is_instance_valid(bot) and bot.alive),
+			bot.global_position.distance_to(sup.radio_pos) if is_instance_valid(bot) else -1.0, str(sup.ev_log.slice(-4))])
 	# Abschalten per Konsole
 	var r := Net.server_command("supportstrike 0", 0)
 	await get_tree().create_timer(0.5).timeout

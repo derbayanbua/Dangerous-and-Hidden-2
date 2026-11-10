@@ -32,6 +32,11 @@ func _run() -> void:
 	var ph := String(Game.cli.get("phase", "all"))
 	if ph in ["all", "bahn"]:
 		_phase_path()
+	if ph in ["all", "streu"]:
+		_phase_scatter()
+	if ph == "streu":
+		_finish()
+		return
 	await _setup_range()
 	for s in m.squad.members:            # Vorgabe: keine Läufe ohne Unverwundbarkeit
 		s.max_health = 100000.0
@@ -48,6 +53,69 @@ func _run() -> void:
 	if f:
 		f.store_string("\n".join(rep) + "\n")
 	_finish()
+
+
+# --- S: Zielstreuung (0.10.7, items.sav dw15, hd2.exe 0x545140) ------------------------------------------------------
+
+func _scatter_span(dir: Vector3, deg: float, n: int) -> Vector2:
+	## gemessene Höchstabweichung (Grad) und Spannweite quer (Grad, max − min einer Querachse)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 107
+	var mx := 0.0
+	var lo := 1e9
+	var hi := -1e9
+	var right := dir.cross(Vector3.UP).normalized()
+	for i in n:
+		var d := Ballistics.scatter_orig(dir, tan(deg_to_rad(deg)), rng)
+		mx = maxf(mx, rad_to_deg(dir.angle_to(d)))
+		var s := rad_to_deg(asin(clampf(d.dot(right), -1.0, 1.0)))
+		lo = minf(lo, s)
+		hi = maxf(hi, s)
+	return Vector2(mx, hi - lo)
+
+
+func _phase_scatter() -> void:
+	var dir := Vector3(0.3, 0.05, -1.0).normalized()
+	for row in [[&"kar98k", 4, 0.1031], [&"mp40", 18, 1.432]]:
+		var wd := WeaponDB.get_weapon(row[0])
+		var o := WeaponDB._orig_row(int(row[1]))
+		var want := float(row[2])
+		check(absf(wd.spread_aim - want) < 0.003, "S %s Zielstreuung = dw15·0,01 rad" % row[0],
+			"%.4f° (dw15 %s)" % [wd.spread_aim, str(o.get("aim_spread"))])
+		var r := _scatter_span(dir, wd.spread_aim, 4000)
+		rep.append("S %s: max %.4f° Spannweite quer %.4f° (Soll max %.4f°)" % [row[0], r.x, r.y, want])
+		check(r.x <= want * 1.001 and r.x > want * 0.97, "S %s gemessene Höchstabweichung ≈ %.2f°" % [row[0], want], "%.4f°" % r.x)
+		check(r.y > want * 1.8 and r.y <= want * 2.002, "S %s Spannweite ≈ 2 × %.2f°" % [row[0], want], "%.4f°" % r.y)
+	# Verteilung: Betrag gleichverteilt (Median ≈ halber Höchstwert, nicht 0,71 wie flächengleich)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	var mags: Array[float] = []
+	for i in 4000:
+		mags.append(dir.angle_to(Ballistics.scatter_orig(dir, 0.01, rng)))
+	mags.sort()
+	var med: float = mags[2000] / atan(0.01)
+	check(absf(med - 0.5) < 0.04, "S Betrag gleichverteilt (Median/Höchstwert ≈ 0,5)", "%.3f" % med)
+	check(Ballistics.scatter_orig(dir, 0.0) == dir, "S dw15 = 0 → keine Streuung")
+	# Soldat: stehend, ruhend, zielend, ohne Kaderwert, ausgeruht → genau dw15
+	var s: Soldier = mission().squad.leader()
+	var keep := [s.skill_shooting, s.stamina, s.aiming]
+	s.equip(["mp40", "colt", "no36", "", "knife"])
+	s.select_slot(WeaponData.Slot.PRIMARY)
+	s.skill_shooting = -1.0
+	s.stamina = 100.0
+	s.aiming = true
+	var cw := s.current_weapon()
+	if cw:
+		cw.bloom = 0.0
+	if s.stance == 0 and s.current_speed() < 0.01 and cw and cw.data.id == &"mp40":
+		check(absf(s.current_spread() - 1.432) < 0.01, "S Soldat zielend/stehend ohne Kaderwert = dw15", "%.4f°" % s.current_spread())
+		s.skill_shooting = 100.0
+		check(absf(s.current_spread() - 1.432 * 0.7) < 0.01, "S Schießen 100 → ×0,7 [E]", "%.4f°" % s.current_spread())
+	else:
+		check(false, "S Soldat für Streuprobe bereit", "stance %d v %.2f" % [s.stance, s.current_speed()])
+	s.skill_shooting = keep[0]
+	s.stamina = keep[1]
+	s.aiming = keep[2]
 
 
 # --- A: Flugbahn/Ausgleich je Waffe ----------------------------------------------------------------------------------

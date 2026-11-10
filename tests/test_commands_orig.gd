@@ -232,8 +232,9 @@ func _run() -> void:
 	await menu(KEY_KP_0, [2, 1])
 	check(sq.brain_of(mates[0]).roe == SquadBrain.ROE.FIRE_AT_WILL, "Angriff › Nach Belieben feuern")
 
-	# --- Einzelbefehl: Ziffernblock 2 = Soldat auf Teamplatz 2 hält Position, die anderen folgen ---
-	var two := sq.members[1]
+	# --- Einzelbefehl: Ziffernblock 2 = zweiter Kamerad (0.10.7: aktiver Soldat übersprungen) hält Position ---
+	var mates_order := sq.members.filter(func(x): return x != sq.members[sq.active_index] and x.alive)
+	var two: Soldier = mates_order[1]
 	await menu(KEY_KP_0, [1, 1])
 	await menu(KEY_KP_2, [1, 5])
 	var p2 := two.global_position

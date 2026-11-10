@@ -140,14 +140,20 @@ def anim_length(name):
     return fmt_5ds.parse(d)["last_frame"] / FPS if d else 0.0
 
 
+THOMPSON_ITEM = 20   # items.sav Slot „M1 Thompson“
+
+
 def reload_variant(it, set_name):
-    """Nachlade-Variante (Index in HOLD_SETS[set]["reload"]) [P]: Thompson (items.sav +0x78 = 52) nutzt die
-    zweite MP-Reihe (preTSA*), sonst die Variante, deren Länge der Original-Nachladezeit am nächsten liegt."""
+    """Nachlade-Variante (Index in HOLD_SETS[set]["reload"]) [P]: Thompson (Gegenstand 20) nutzt die zweite MP-Reihe
+    (preTSA*), sonst die Variante, deren Länge der Original-Nachladezeit am nächsten liegt.
+    0.10.7: früher über items.sav +0x78 == 52 erkannt. +0x78 ist aber die Klanggruppe „Ziehen/Armed“ (Kat. 3;
+    Kopie nach Gegenstand +0x40 in hd2.exe 0x7DFCF0, Gruppenname „… Armed“, docs/re_notes_audio.md §3) und kein
+    Nachlademerkmal; 52 traf nur zufällig allein die Thompson. Ergebnis unverändert, Schlüssel jetzt die Nummer."""
     vs = HOLD_SETS.get(set_name, {}).get("reload", [])
     if len(vs) <= 1:
         return 0
     if set_name in ("smg", "mg"):
-        return 1 if int(it.get("u78", 0)) == 52 else 0
+        return 1 if int(it.get("id", -1)) == THOMPSON_ITEM else 0
     rel = 0.0
     for b in it.get("behaviours", []):
         if b.get("code") == 4:

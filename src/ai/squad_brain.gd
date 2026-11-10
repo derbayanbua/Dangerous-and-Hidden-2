@@ -32,7 +32,9 @@ var _report_cooldown := 0.0
 var grenade_target := Vector3.INF   ## Granatbefehl (wird ausgeführt, sobald in Reichweite)
 var _cover := Vector3.INF        ## gewählte Deckung im laufenden Gefecht
 var _no_target_time := 0.0
-var quiet := false               ## leiser Befehl (Schl. Bewegung/Stiller Angriff): schleichend ausführen
+var quiet := false               ## leiser Befehl (Schl. Bewegung/Stille Aktion): schleichend ausführen (Original +0x188)
+var quiet_fire := false          ## Stiller Angriff 13/17 (Original 0x5380C0: +0x18A), 12/16 heben auf [B]
+var _pre_quiet_slot := -1        ## Waffenplatz vor dem automatischen Wechsel auf die Schalldämpferwaffe
 var strict_hold := false         ## „Position halten“: Platz nicht für Deckung verlassen
 var plan := false                ## Bewegungsbefehl aus der taktischen Karte (Original: Taktik-Plan)
 var plan_paused := false         ## Taktik-Befehl „Halten“ (bis „Weiter“)
@@ -59,11 +61,17 @@ func setup(s: Soldier) -> void:
 	Events.soldier_died.connect(_on_any_death)
 
 
+## „In Deckung“ 8/9 (Team 0x459740 [B]): Deckungspunkte im Umkreis 20 m (0x41A00000), Höhenunterschied ≤ 2 m,
+## gegen den Punkt 30 m in Blickrichtung des Anführers.
+const COVER_ORDER_RADIUS := 20.0
+
+
 func set_order(o: int, pos := Vector3.ZERO, quiet_mode := false) -> void:
 	order = o
 	_hold_init = true
 	_cover = Vector3.INF
 	quiet = quiet_mode
+	update_quiet_weapon()
 	strict_hold = false
 	plan = false
 	plan_paused = false
@@ -77,13 +85,45 @@ func set_order(o: int, pos := Vector3.ZERO, quiet_mode := false) -> void:
 			move_to(pos, _move_mode())
 		Order.COVER:
 			var threat := threat_point()
-			var c := find_cover(threat, 10.0, 0.0)
+			var c := find_cover(threat, COVER_ORDER_RADIUS, 0.0)
 			hold_pos = c if c.is_finite() else soldier.global_position
 			var to := threat - hold_pos
 			hold_yaw = atan2(-to.x, -to.z)
 			move_to(hold_pos, _move_mode())
 		Order.FOLLOW:
 			pass
+
+
+## Leiser Befehl aktiv (Bewegung/Aktion leise oder Stiller Angriff)?
+func is_quiet() -> bool:
+	return quiet or quiet_fire
+
+
+## Platz der Schalldämpferwaffe (Primär vor Pistole), sonst −1.
+func silenced_slot() -> int:
+	for slot in [WeaponData.Slot.PRIMARY, WeaponData.Slot.SIDEARM]:
+		var w: Weapon = soldier.weapons[slot] if soldier and soldier.weapons.size() > slot else null
+		if w and w.data and w.total_ammo() > 0 and (String(w.data.sound).begins_with("silenced") or w.data.noise_radius < 20.0):
+			return slot
+	return -1
+
+
+## 0.10.7 [D, [D]; Original 0x5380C0 prüft bei 13/17 nur die Waffenart der Hand und ruft sonst 0x530D40 [P]]:
+## leiser Befehl → Schalldämpferwaffe in die Hand, danach die vorherige Waffe zurück.
+func update_quiet_weapon() -> void:
+	if soldier == null or not soldier.alive:
+		return
+	if is_quiet():
+		var s := silenced_slot()
+		if s >= 0 and soldier.current_slot != s:
+			if _pre_quiet_slot < 0:
+				_pre_quiet_slot = soldier.current_slot
+			soldier.select_slot(s)
+	elif _pre_quiet_slot >= 0:
+		var back := _pre_quiet_slot
+		_pre_quiet_slot = -1
+		if soldier.current_slot != back:
+			soldier.select_slot(back)
 
 
 func _move_mode() -> int:
@@ -102,6 +142,9 @@ func threat_point() -> Vector3:
 
 ## Feuern erlaubt? (Feuerregel, Beschuss, „Auf mein Kommando“ = Anführer hat gerade geschossen)
 func _may_fire(_leader: Soldier) -> bool:
+	# 0.10.7 leiser Befehl: selbständig nur mit Schalldämpferwaffe, sonst Feuer halten (auch unter Beschuss)
+	if is_quiet() and silenced_slot() < 0:
+		return false
 	if roe == ROE.FIRE_AT_WILL or _under_fire > 0.0:
 		return true
 	return roe == ROE.ON_MY_LEAD and _lead_fire_window > 0.0
@@ -153,6 +196,8 @@ func _physics_process(delta: float) -> void:
 		want_stance = leader.stance
 	if want_stance < 0:
 		want_stance = Soldier.Stance.STAND
+	if is_quiet() and want_stance == Soldier.Stance.STAND:
+		want_stance = Soldier.Stance.CROUCH    # 0.10.7: leiser Befehl -> geduckt
 
 	# Fahrzeug: mit dem Anführer ein- und aussteigen (Original: HUMAN_BoardVehicle)
 	if leader and order == Order.FOLLOW:
@@ -218,7 +263,7 @@ func _physics_process(delta: float) -> void:
 			var anchor := soldier.global_position
 			_cover = find_cover(t.global_position + Vector3.UP * 1.5, 5.0 if order == Order.HOLD else 8.0, 0.0)
 			if _cover.is_finite() and anchor.distance_to(_cover) > 1.0:
-				move_to(_cover, Soldier.MoveMode.RUN)
+				move_to(_cover, _move_mode())
 			else:
 				_cover = anchor
 		if has_move_target() and order != Order.MOVE and _cover.is_finite() and not arrived(1.0):
@@ -305,15 +350,16 @@ func _follow(leader: Soldier, delta: float) -> void:
 			if distance_to(_unstick_target) <= 1.0 and wall_follow:
 				_unstick_target = _free_step(slot, false)    # weiter in dieselbe Richtung (Bonus letzte Richtung)
 			if distance_to(_unstick_target) > 1.0:
-				move_to(_unstick_target, Soldier.MoveMode.RUN)
+				move_to(_unstick_target, _move_mode())
 				return
 		_unstick_time = 0.0
 		_unstick_target = Vector3.INF
 	if d > FOLLOW_TOL:
-		var mode := Soldier.MoveMode.RUN if d > 8.0 else leader.move_mode
+		# Original 0x5377F0 [B]: Abstand zum Anführer ≥ 10 m → Gangart 0x4000 (rennen), sonst 0x2000, leise 0x1000
+		var mode := Soldier.MoveMode.RUN if d >= 10.0 else leader.move_mode
 		# Anführer schleicht (geduckt/liegend) bzw. leiser Befehl -> Kameraden schleichen mit
-		if (quiet or leader.move_mode == Soldier.MoveMode.SNEAK or leader.stance != Soldier.Stance.STAND) and d < 15.0:
-			mode = Soldier.MoveMode.SNEAK
+		if quiet or ((leader.move_mode == Soldier.MoveMode.SNEAK or leader.stance != Soldier.Stance.STAND) and d < 15.0):
+			mode = Soldier.MoveMode.SNEAK    # 0.10.7: leiser Befehl -> immer schleichen (auch bei großem Abstand)
 		move_to(slot, mode)
 		# Fortschritt zum Platz messen (der Platz wandert mit dem Anführer → Abstand statt Weg)
 		if d < _follow_best - 0.3:
@@ -711,7 +757,7 @@ func order_name() -> String:
 
 func serialize() -> Dictionary:
 	return {"order": order, "roe": roe, "hold": [hold_pos.x, hold_pos.y, hold_pos.z], "stance": stance_override,
-		"quiet": quiet, "strict": strict_hold, "plan": plan, "paused": plan_paused}
+		"quiet": quiet, "quiet_fire": quiet_fire, "strict": strict_hold, "plan": plan, "paused": plan_paused}
 
 
 func deserialize(d: Dictionary) -> void:
@@ -719,6 +765,7 @@ func deserialize(d: Dictionary) -> void:
 	_hold_init = true
 	roe = int(d.get("roe", ROE.FIRE_AT_WILL))
 	quiet = bool(d.get("quiet", false))
+	quiet_fire = bool(d.get("quiet_fire", false))
 	strict_hold = bool(d.get("strict", false))
 	plan = bool(d.get("plan", false))
 	plan_paused = bool(d.get("paused", false))

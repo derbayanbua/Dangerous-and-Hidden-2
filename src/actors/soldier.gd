@@ -1498,7 +1498,10 @@ func _shell_sound() -> void:
 		OrigAudio.play_group(OrigAudio.CAT_FALL, OrigAudio.FALL_SHELL_HARD, global_position + forward() * 0.3 + Vector3.UP * 0.1)
 
 
-## Aktuelle Streuung (Halbwinkel in Grad) aus Waffe, Haltung, Bewegung, Ausdauer.
+## Aktuelle Streuung (Höchstwinkel in Grad) aus Waffe, Haltung, Bewegung, Ausdauer.
+## 0.10.7: Grundwert beim Zielen = items.sav dw15 · 0,01 rad [B 0x545140]; im Stand, ausgeruht, ohne Kaderwert genau
+## dieser Wert. Haltung/Bewegung/Dauerfeuer/Ausdauer, Hüftanschlag und Faktor „Schießen“ (0,7–1,5) sind Nachbau [E] –
+## das Original nutzt in 0x5433B0 immer dw15 (kein dw14, kein Zielen-Zweig).
 func current_spread() -> float:
 	var w := current_weapon()
 	if w == null:
@@ -1514,13 +1517,8 @@ func current_spread() -> float:
 static func _apply_spread(dir: Vector3, spread_deg: float) -> Vector3:
 	if spread_deg <= 0.001:
 		return dir
-	# Gleichverteilung in der Kreisscheibe des Streukegels
-	var r := deg_to_rad(spread_deg) * sqrt(randf())
-	var a := randf() * TAU
-	var up := Vector3.UP if absf(dir.dot(Vector3.UP)) < 0.98 else Vector3.RIGHT
-	var right := dir.cross(up).normalized()
-	var up2 := right.cross(dir).normalized()
-	return (dir + right * tan(r) * cos(a) + up2 * tan(r) * sin(a)).normalized()
+	# 0.10.7: Verteilung wie hd2.exe 0x545140 (Betrag gleichverteilt bis zum Höchstwinkel) [B]
+	return Ballistics.scatter_orig(dir, tan(deg_to_rad(spread_deg)))
 
 
 ## Vom Controller abgeholter Rückstoß (Grad), danach zurückgesetzt.

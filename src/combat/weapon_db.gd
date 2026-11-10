@@ -203,7 +203,8 @@ static func get_weapon(id: StringName) -> WeaponData:
 
 ## Originalgegenstand (items.dat-Nummer) -> Waffe. Bekannte Waffen nutzen die Einträge oben, alle übrigen
 ## Handwaffen werden aus der Originaltabelle (orig_cache/items.json, item_shoot.tbl) erzeugt: Schaden/10,
-## Feuerintervall, Nachladezeit, Mündungsgeschwindigkeit, Magazin, Gewicht [O]; Streuung/Rückstoß [D].
+## Feuerintervall, Nachladezeit, Mündungsgeschwindigkeit, Magazin, Gewicht [O]; Zielstreuung dw15 [B, 0.10.7];
+## Hüftstreuung/Rückstoß [D].
 const ORIG_IDS := {0: &"p08", 2: &"colt", 4: &"kar98k", 6: &"enfield", 10: &"garand", 18: &"mp40", 20: &"thompson",
 	21: &"sten", 26: &"stg44", 29: &"bren", 61: &"m24", 62: &"no36", 60: &"no69", 63: &"no36",
 	38: &"panzerfaust", 39: &"bazooka", 264: &"panzerschreck", 56: &"knife", 57: &"knife"}
@@ -222,6 +223,40 @@ const ORIG_HANDHELD_MAX_KG := 15.0
 static var _orig_table: Dictionary = {}
 
 
+## Zeile der Originalwaffentabelle (orig_cache/items.json „weapons“); leer ohne Cache.
+static func _orig_row(item: int) -> Dictionary:
+	if _orig_table.is_empty():
+		var f := FileAccess.open(OrigLevel.cache_root() + "/items.json", FileAccess.READ)
+		var d = JSON.parse_string(f.get_as_text()) if f else null
+		if typeof(d) == TYPE_DICTIONARY:
+			for wp in d.get("weapons", []):
+				_orig_table[int(wp["id"])] = wp
+	return _orig_table.get(item, {})
+
+
+## Zielstreuung in Grad (Höchstwinkel) aus items.sav Feuerwaffe dw15 („aim_spread“, Datensatz +0xC0):
+## Getter vtable+0x10 (0x7E0370) → Streuroutine 0x545140: max. Ablenkung dw15 · 0,01 (≈ rad) [B].
+## K98 0,18 → 0,10°, MP 40 2,5 → 1,43°, ZF-Varianten 0,03 → 0,02°. −1 = kein Tabellenwert.
+static func orig_aim_spread_deg(o: Dictionary) -> float:
+	if not o.has("aim_spread"):
+		return -1.0
+	return rad_to_deg(atan(maxf(float(o["aim_spread"]), 0.0) * 0.01))
+
+
+## Eigene Einträge bekannter Originalwaffen übernehmen die Zielstreuung aus items.sav (0.10.7) [B]; Hüftanschlag
+## bleibt Nachbauwert [E], mindestens die Zielstreuung. Ohne Cache bleiben die Handwerte.
+static func _apply_orig_spread() -> void:
+	for item in ORIG_IDS:
+		var w: WeaponData = _cache.get(ORIG_IDS[item])
+		if w == null or w.action == WeaponData.Action.ROCKET or w.slot == WeaponData.Slot.GRENADE:
+			continue
+		var deg := orig_aim_spread_deg(_orig_row(int(item)))
+		if deg < 0.0:
+			continue
+		w.spread_aim = deg
+		w.spread_hip = maxf(w.spread_hip, deg)
+
+
 static func from_orig(item: int, mounted := false) -> WeaponData:
 	if _cache.is_empty():
 		_build()
@@ -230,19 +265,14 @@ static func from_orig(item: int, mounted := false) -> WeaponData:
 	var gid := StringName("o_%d" % item)
 	if _cache.has(gid):
 		return _cache[gid]
-	if _orig_table.is_empty():
-		var f := FileAccess.open(OrigLevel.cache_root() + "/items.json", FileAccess.READ)
-		var d = JSON.parse_string(f.get_as_text()) if f else null
-		if typeof(d) == TYPE_DICTIONARY:
-			for wp in d.get("weapons", []):
-				_orig_table[int(wp["id"])] = wp
-	var o: Dictionary = _orig_table.get(item, {})
+	var o: Dictionary = _orig_row(item)
 	if o.is_empty() or (float(o.get("weight_kg", 0.0)) > ORIG_HANDHELD_MAX_KG and not mounted) or int(o.get("magazine", 0)) <= 0:
 		return null
 	var fi := float(o.get("fire_interval_ms", 200.0)) / 1000.0
 	var pistol := ORIG_PISTOLS.has(item)
 	var act := WeaponData.Action.AUTO if fi <= 0.11 else (WeaponData.Action.BOLT if fi >= 1.0 else WeaponData.Action.SEMI)
 	var heavy := float(o.get("weight_kg", 4.0)) > 8.0
+	var aim_deg := orig_aim_spread_deg(o)
 	return _make({id = gid, display_name = String(o.get("name", gid)), slot = WeaponData.Slot.SIDEARM if pistol else WeaponData.Slot.PRIMARY,
 		action = act, can_toggle_auto = act == WeaponData.Action.AUTO, magazine_size = int(o["magazine"]),
 		start_magazines = 4, rpm = 60.0 / maxf(fi, 0.05) if act != WeaponData.Action.AUTO else float(o.get("rate_rpm", 600)),
@@ -250,7 +280,8 @@ static func from_orig(item: int, mounted := false) -> WeaponData:
 		muzzle_velocity = float(o.get("muzzle_velocity", 400.0)), damage = float(o.get("damage", 300.0)) / 10.0,
 		# items.sav Feuerwaffe +0x34 Abfallbeginn (m), +0x38 Abfall je m (zotti) [B 0x44B3B0]
 		falloff_start = float(o.get("dist_param", 50.0)), falloff_per_m = float(o.get("recoil_spread", 0.0)) / 10.0,
-		spread_hip = 2.8 if pistol else (4.5 if heavy else 3.0), spread_aim = 0.7 if pistol else (0.08 if act == WeaponData.Action.BOLT else 0.5),
+		spread_hip = maxf(2.8 if pistol else (4.5 if heavy else 3.0), aim_deg if aim_deg >= 0.0 else 0.0),
+		spread_aim = aim_deg if aim_deg >= 0.0 else (0.7 if pistol else (0.08 if act == WeaponData.Action.BOLT else 0.5)),
 		recoil_pitch = 2.0 if pistol else (1.3 if act == WeaponData.Action.AUTO else 3.2), recoil_yaw = 0.6,
 		spread_per_shot = 0.3, aim_fov = 60.0 if pistol else (30.0 if String(o.get("name", "")).contains("optic") else 45.0),
 		noise_radius = 15.0 if item in [7, 22, 260] else (60.0 if pistol else 130.0), weight = float(o.get("weight_kg", 4.0)),
@@ -404,3 +435,4 @@ static func _build() -> void:
 		reload_time = 1.7, muzzle_velocity = 351.0, damage = 30.0,
 		falloff_start = 15.0, falloff_per_m = 1.4, spread_hip = 2.8, spread_aim = 0.7, recoil_pitch = 2.0, recoil_yaw = 0.7,
 		aim_fov = 60.0, noise_radius = 60.0, weight = 0.965, model_length = 0.22, color = Color(0.12, 0.12, 0.12)})
+	_apply_orig_spread()

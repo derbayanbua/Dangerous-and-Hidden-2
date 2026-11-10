@@ -130,6 +130,26 @@ static func solve_direction(origin: Vector3, target: Vector3, data: WeaponData) 
 	return (aim - origin).normalized()
 
 
+## Zielstreuung wie hd2.exe 0x545140 (aufgerufen aus der Schussroutine 0x5433B0) [B]: zwei Querachsen zur
+## Schussrichtung je mit Zufall in [-1, 1] gewichtet, Summe normiert = zufällige Querrichtung; Richtung +=
+## Querrichtung · max_off · Zufall[0, 1], danach normiert. max_off = items.sav dw15 · 0,01 (≈ rad). Betrag damit
+## gleichverteilt (nicht flächengleich), Richtung aus zwei gleichverteilten Achsgewichten. Lage der beiden Querachsen
+## (0x544D20) im Nachbau: waagrecht rechts + senkrecht oben [P].
+static func scatter_orig(dir: Vector3, max_off: float, rng: RandomNumberGenerator = null) -> Vector3:
+	if max_off <= 0.0:
+		return dir
+	var r1 := (rng.randf() if rng else randf()) * 2.0 - 1.0
+	var r2 := (rng.randf() if rng else randf()) * 2.0 - 1.0
+	var up := Vector3.UP if absf(dir.dot(Vector3.UP)) < 0.98 else Vector3.RIGHT
+	var right := dir.cross(up).normalized()
+	var up2 := right.cross(dir).normalized()
+	var q := right * r1 + up2 * r2
+	if q.length_squared() < 1e-8:
+		return dir
+	var m := max_off * (rng.randf() if rng else randf())
+	return (dir + q.normalized() * m).normalized()
+
+
 func _physics_process(delta: float) -> void:
 	if _projectiles.is_empty():
 		return
