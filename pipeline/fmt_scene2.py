@@ -51,29 +51,38 @@ def parse_actor_defs(d):
     Typen (beobachtet): 3 Mensch (NPC/Gegner), 4 Fahrzeug, 10 Spielerkommando."""
     # Definitionen 0xAE21 liegen meist direkt unter 0xAE20 (z. B. ARCTIC1), in anderen Missionen aber
     # verschachtelt in den Objekt-Chunks 0x4010 (z. B. BURMA1, CZECH3) -> rekursiv suchen.
+    # hd2.exe liest die Objekt-/Definitionsbäume rekursiv ohne Tiefengrenze (docs/re_notes_actors_items.md,
+    # Abschnitt „actors.bin-Leser“). Hier iterativ (expliziter Stapel, gleiche Pre-Order-Reihenfolge wie die
+    # frühere Rekursion -> bei Namensgleichheit gewinnt weiterhin die zuerst gefundene Definition).
+    # Bis 0.10.8 war die Tiefe auf 6 begrenzt; dadurch fehlten in CZECH1/NORMANDY/NORMANDY_MP Definitionen.
     defs = {}
 
-    def visit(s, e, depth):
-        if depth > 6:
-            return
-        for t3, s3, e3 in chunks(d, s, e):
-            if t3 == 0xAE21:
-                name, typ, params = "", -1, b""
-                for t4, s4, e4 in chunks(d, s3, e3):
-                    if t4 == 0xAE23:
-                        name = cstr(d, s4, e4)
-                    elif t4 == 0xAE22:
-                        typ = struct.unpack_from("<I", d, s4)[0]
-                    elif t4 == 0xAE24:
-                        params = d[s4:e4]
-                if name and name not in defs:
-                    defs[name] = (typ, params)
-            if e3 - s3 > 6 and t3 in (0xAE20, 0xAE21, 0x4010, 0x4000):
-                visit(s3, e3, depth + 1)
+    def read_def(s3, e3):
+        name, typ, params = "", -1, b""
+        for t4, s4, e4 in chunks(d, s3, e3):
+            if t4 == 0xAE23:
+                name = cstr(d, s4, e4)
+            elif t4 == 0xAE22:
+                typ = struct.unpack_from("<I", d, s4)[0]
+            elif t4 == 0xAE24:
+                params = d[s4:e4]
+        if name and name not in defs:
+            defs[name] = (typ, params)
 
     for t, s, e in chunks(d, 0, len(d)):
-        if t == 0x4C53:
-            visit(s, e, 0)
+        if t != 0x4C53:
+            continue
+        stack = [iter(list(chunks(d, s, e)))]
+        while stack:
+            nxt = next(stack[-1], None)
+            if nxt is None:
+                stack.pop()
+                continue
+            t3, s3, e3 = nxt
+            if t3 == 0xAE21:
+                read_def(s3, e3)
+            if e3 - s3 > 6 and t3 in (0xAE20, 0xAE21, 0x4010, 0x4000):
+                stack.append(iter(list(chunks(d, s3, e3))))
     return defs
 
 

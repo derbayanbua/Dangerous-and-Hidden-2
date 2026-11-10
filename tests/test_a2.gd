@@ -167,4 +167,14 @@ func _run() -> void:
 	check(foto.can_interact(s), "Fotoplatz benutzbar")
 	foto.interact(s)
 	check(foto.state == 1, "Foto gemacht (Zustand 1)")
+
+	# 0.10.9: Konsolenbefehl „pos“ (Ortsmeldung) – offline über die Eingabezeile, ändert nichts am Spiel
+	var ql = m.find_child("QuickLine", true, false)
+	var before_pos := s.global_position
+	var rep: String = ql.run("pos") if ql else ""
+	var act: Soldier = ql.controller.active if ql and ql.controller else null
+	var want := "%.2f,%.2f,%.2f" % [act.global_position.x, act.global_position.y, act.global_position.z] if act else "?"
+	check(rep.begins_with("pos ") and rep.contains(want) and rep.contains(" blick ")
+		and s.global_position == before_pos, "Konsole pos meldet Lage/Blick", rep)
+	check(ql != null and ql.run("help").contains("pos"), "Konsole help nennt pos")
 	_finish()

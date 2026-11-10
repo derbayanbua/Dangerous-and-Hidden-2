@@ -687,6 +687,28 @@ func _chat_command(from: int, line: String) -> void:
 		_tell(from, r)
 
 
+## Konsolenbefehl „pos“ (offline und online, ändert nichts am Spiel): Karte, Lage und Blickrichtung des aktiven
+## Soldaten als eine Zeile; wird zusätzlich in die Zwischenablage kopiert (Fehlermeldungen mit Ortsangabe).
+static func position_report(s: Soldier, mission_id: String = "") -> String:
+	if s == null or not is_instance_valid(s):
+		return "pos: kein aktiver Soldat"
+	var p := s.global_position
+	var fwd := Vector3(-sin(s.look_yaw) * cos(s.look_pitch), sin(s.look_pitch), -cos(s.look_yaw) * cos(s.look_pitch))
+	var line := "pos %s %.2f,%.2f,%.2f blick %.2f,%.2f,%.2f yaw %.0f pitch %.0f" % [mission_id, p.x, p.y, p.z,
+		fwd.x, fwd.y, fwd.z, rad_to_deg(s.look_yaw), rad_to_deg(s.look_pitch)]
+	DisplayServer.clipboard_set(line)
+	return line
+
+
+func local_position_report() -> String:
+	var s: Soldier = null
+	for c in get_tree().root.find_children("*", "PlayerController", true, false):
+		if is_instance_valid(c.get("active")):
+			s = c.active
+			break
+	return position_report(s, Game.current_mission_id)
+
+
 ## Eingabe der Spiel-Konsole (Taste ^, Original „KONSOLE“ 2852): Zeile an den Server; Antwort per Chat „Server“
 func console_command(line: String) -> void:
 	line = line.strip_edges()
@@ -697,6 +719,10 @@ func console_command(line: String) -> void:
 		Settings.save_settings()
 		Settings.changed.emit()
 		_chat("Konsole", "FPS-Anzeige %s" % ("an" if Settings.show_fps else "aus"), false)
+		return
+	if line.to_lower() == "pos":
+		# lokaler Befehl: Lage/Blickrichtung des eigenen Soldaten anzeigen und in die Zwischenablage kopieren
+		_chat("Konsole", local_position_report(), false)
 		return
 	if line == "" or not is_online:
 		return
@@ -919,7 +945,7 @@ func server_command(line: String, from := 0) -> String:
 	# --- für alle Spieler ---
 	match kw:
 		"help":
-			return "Console keywords: " + ", ".join(PackedStringArray(["help", "status", "listplayers", "listmaps", "say", "sayteam",
+			return "Console keywords: " + ", ".join(PackedStringArray(["help", "pos", "fps", "status", "listplayers", "listmaps", "say", "sayteam",
 				"vote", "voteyes", "adminlogin", "svcmd", "kickplayer", "nextmap", "restart", "map", "mapname", "removemap", "style",
 				"domain", "sessionname", "port", "password", "voicechat", "adminpass", "exec", "server", "dedicated", "quit"]
 				+ RULE_KEYS.values()))

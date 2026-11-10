@@ -98,6 +98,12 @@ func run(text: String) -> String:
 	var sp := t.find(" ")
 	var word := (t if sp < 0 else t.substr(0, sp)).to_lower()
 	var arg := "" if sp < 0 else t.substr(sp + 1).strip_edges()
+	if word == "pos":
+		var line := Net.position_report(_active(), Game.current_mission_id)
+		print(line)
+		return line
+	if word == "help":
+		return "Console keywords: help, pos"
 	var k := String(_WORDS.get(word.sha256_text().substr(0, 16), ""))
 	match k:
 		"a":

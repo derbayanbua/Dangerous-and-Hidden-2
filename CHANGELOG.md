@@ -2,6 +2,15 @@
 
 
 
+## 0.10.9 (11.11.2026)
+
+- **Fehlende Missionsobjekte ergänzt:** tief verschachtelte Akteursdefinitionen werden jetzt vollständig gelesen –
+  Tschechien 1 (18 Lichtschalter, Fässer, Verstärkung), Normandie 1 (Original-Spielerstarts, Fässer, weitere Figur),
+  Normandie MP (Spawnpunkte, Fässer, Leitern, MG u. a.).
+- **Konsolenbefehl `pos`:** zeigt Mission, Position und Blickrichtung und kopiert sie in die Zwischenablage (für
+  Fehlermeldungen).
+- Lokaler Build entfernt vor dem Bauen ältere Release-Ordner.
+
 ## 0.10.8 (10.11.2026)
 
 - **Testkarte „Bavaria (Test)“** im Mehrspieler (Deathmatch, Team-Deathmatch, Eroberung) und als Übungseinsatz.

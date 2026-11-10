@@ -56,6 +56,8 @@ $suites = @(
   @{ name = "test_movie_skip"; args = "--headless -- --autoplay=test_movie_skip --profiles_dir=user://test_movie_skip --noimport" },
   @{ name = "test_interactive"; args = "--headless -- --mission=a1_blizzard --autoplay=test_interactive" },
   @{ name = "test_b0108";    args = "--headless -- --mission=al1_waldgeister --autoplay=test_b0108" },
+  @{ name = "test_b0109_cz1"; args = "--headless -- --mission=cz1_eintrittsgeld --autoplay=test_b0109" },
+  @{ name = "test_b0109_no1"; args = "--headless -- --mission=no1_leuchtturm --autoplay=test_b0109" },
   # Zweiprozessig: startet den Client (test_normandie_doors_client) selbst
   @{ name = "test_normandie_doors"; args = "--headless -- --autoplay=test_normandie_doors"; mp = $true },
   # B-017: Türflügel/Zäune/Wasser/Zielmarker (echte Benutzen-/Vorwärtstaste)

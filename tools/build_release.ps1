@@ -9,6 +9,13 @@
 # Firewall_freigeben.cmd, SPIELTEST_LIESMICH.txt.
 param([string]$Out = "", [switch]$Zip, [switch]$Verify, [switch]$NoHD)
 $ErrorActionPreference = "Stop"
+# Abbrüche immer in die Ausgabe (Erfolgsstrom) schreiben: bei Umleitung nur von stdout (> datei) ging die Fehlermeldung
+# sonst verloren und das Protokoll endete kommentarlos (Exit 1).
+trap {
+  "!! ABBRUCH: $($_.Exception.Message)"
+  "   $($_.InvocationInfo.PositionMessage)"
+  exit 1
+}
 $proj = Split-Path $PSScriptRoot -Parent
 Set-Location $proj
 $godot = "$proj\tools\godot.cmd"
@@ -17,6 +24,31 @@ $pg = Get-Content "$proj\project.godot" -Raw
 $version = if ($pg -match 'config/version="([^"]*)"') { $Matches[1] } else { "0.0.0" }
 if (-not $Out) { $Out = "$proj\build\release\DangerousHidden2_v$version" }
 "== Dangerous and Hidden 2 – Release-Build v$version -> $Out"
+
+# 0) Alte Release-Builds unter build\release entfernen (vor jedem Release). Verzeichnisverweise (z. B. orig_cache als
+#    Junction auf den Projektcache) werden nur als Verweis gelöscht – nie deren Ziel.
+function Remove-ReleaseDir([string]$dir) {
+  Get-ChildItem -LiteralPath $dir -Recurse -Force -Directory -ErrorAction SilentlyContinue |
+    Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint } |
+    Sort-Object { $_.FullName.Length } -Descending |
+    ForEach-Object { if (Test-Path -LiteralPath $_.FullName) { [IO.Directory]::Delete($_.FullName, $false) } }
+  if ((Get-Item -LiteralPath $dir -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    [IO.Directory]::Delete($dir, $false)
+  } else {
+    Remove-Item -LiteralPath $dir -Recurse -Force
+  }
+}
+$relRoot = "$proj\build\release"
+if (Test-Path $relRoot) {
+  $old = @(Get-ChildItem -LiteralPath $relRoot -Force)
+  if ($old) {
+    "-- Alte Release-Builds entfernen: $($old.Name -join ', ')"
+    foreach ($o in $old) {
+      if ($o.PSIsContainer) { Remove-ReleaseDir $o.FullName } else { Remove-Item -LiteralPath $o.FullName -Force }
+    }
+  }
+}
+if (-not (Test-Path "$proj\orig_cache\textures")) { throw "orig_cache fehlt nach dem Aufräumen – Abbruch (Verweis-Löschung prüfen)." }
 
 if (-not (Test-Path "$proj\orig_cache\textures")) { throw "orig_cache fehlt – erst die Originaldaten konvertieren (tools\convert_all.ps1)." }
 # Fehlerhafte Sammelordner (z. B. „arctic1,arctic2,…“ aus einem als ein String übergebenen Missions-Array) nicht mitspiegeln
@@ -62,6 +94,8 @@ if ($NoHD) { $xd += @("$proj\orig_cache\textures_hd", "$proj\orig_cache\textures
 $rc = @("$proj\orig_cache", "$Out\orig_cache", "/MIR", "/MT:8", "/R:1", "/W:1", "/NFL", "/NDL", "/NP", "/NJH", "/XF", "*.tmp", "*.part", "/XD") + $xd
 & robocopy @rc | Select-Object -Last 6
 if ($LASTEXITCODE -ge 8) { throw "Kopieren der Originaldaten fehlgeschlagen (robocopy $LASTEXITCODE)." }
+"   robocopy $LASTEXITCODE (0–7 = ok)"
+$global:LASTEXITCODE = 0   # robocopy 1–7 ist Erfolg und darf nicht als Exit-Code des Skripts durchschlagen
 
 # 4) Firewall-Freigabe für LAN (muss auf jedem Ziel-PC einmal als Administrator laufen)
 @"
@@ -154,3 +188,4 @@ if ($Zip) {
 
 $size = (Get-ChildItem $Out -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
 "== Fertig: $Out ($([math]::Round($size / 1GB, 2)) GB). Den ganzen Ordner auf den Ziel-PC kopieren und DangerousHidden2.exe starten."
+exit 0
