@@ -1243,6 +1243,8 @@ func _ready() -> void:
 		var gv = JSON.parse_string(FileAccess.get_file_as_string(String(cli["game_values"])))
 		if gv is Dictionary:
 			campaign["game_values"] = gv
+	if cli.has("server_config") and not cli.has("mission"):
+		_open_server_config.call_deferred()
 	if cli.has("mission"):
 		start_mission.call_deferred(cli["mission"])
 	if cli.has("autoplay"):
@@ -1255,6 +1257,28 @@ func _ready() -> void:
 		var t: Node = script.new()
 		t.name = "Autoplay"
 		get_tree().root.add_child.call_deferred(t)
+
+
+## 0.10.3: `-- --server_config[=<ordner>]` (DedicatedServer.cmd): nur das Konfigurationsmenü des dedizierten Servers
+## in einem kleinen Fenster (Launcher-Größe) statt Hauptmenü – ohne Intro und ohne Missionsladen
+func _open_server_config() -> void:
+	var s := DedicatedServerScreen.new()
+	s.name = "DedicatedServerScreen"
+	s.standalone = true
+	var v := String(cli["server_config"])
+	if v != "1" and v != "":
+		s.configs_dir = ProjectSettings.globalize_path(v) if v.begins_with("user://") or v.begins_with("res://") else v
+	var old := get_tree().current_scene
+	get_tree().root.add_child(s)
+	get_tree().current_scene = s
+	if old:
+		old.queue_free()
+	var win := get_window()
+	if DisplayServer.get_name() != "headless" and win.mode == Window.MODE_WINDOWED:
+		win.size = Vector2i(1100, 720)
+		win.move_to_center()
+	win.title = "Dangerous Hidden 2 – Server Launcher"
+	s.open()
 
 
 ## Original-Setup „Wenn inakt. aussetz.“: Mission pausieren, wenn das Fenster den Fokus verliert

@@ -108,6 +108,13 @@ func set_look_around(n: int) -> void:
 
 
 func script_move(pos: Vector3) -> void:
+	# af1_finale2 [P]: Skriptweg mit allen Alarmarten gesperrt (SetAlarmType(1023, false)) beendet ein vorher (z. B. im
+	# HUMAN_Suspend durch Leichen/Schüsse) begonnenes Untersuchen/Suchen – sonst übernimmt die Suche und der Soldat kehrt
+	# zum Spawnposten zurück (AFRICA1-Verstärkung). Kampf (gesehener Feind) bleibt.
+	if runtime != null and alarm_mask == 0 and (state == State.INVESTIGATE or state == State.SEARCH):
+		set_state(State.GUARD)
+	_script_move_abort_combat()
+	_script_interrupted = false
 	_script_target = pos
 	_script_route = []
 	script_look_at = Vector3.INF
@@ -115,6 +122,16 @@ func script_move(pos: Vector3) -> void:
 
 
 func script_move_done() -> bool:
+	if _script_interrupted:
+		# Alarm-Skriptweg [P]: die eigene KI hat den Weg unterbrochen (Kampf/Suche). Im Original wartet der Skript-pc
+		# (+0x1D8) weiter; fortgesetzt wird erst mit einer beendeten Bewegung (0x58D900) – also wenn die KI wieder ruhig
+		# ist und ihr Heimweg endet. Vorher galt „kein Laufziel“ (Kampfautomat hält an) als Ankunft → das Skript gab
+		# sofort den nächsten HUMAN_Move, mitten im Kampf. NUR mit `--skriptweg_warten=1` (Messung 10.11.: mehr
+		# 40-s-Grenzen in ARCTIC4/CZECH6, TIRPIC_18 wartet im Kampf „Verloren“) – Standard aus.
+		if (state == State.GUARD or state == State.PATROL) and not has_move_target():
+			_script_interrupted = false
+			return true
+		return false
 	var done := not has_move_target() or arrived(1.2)
 	if done and not _script_route.is_empty():
 		# B-033: nächster Wegpunkt der Checkpoint-Kantenfolge (LsRuntime._checkpoint_route)
@@ -124,11 +141,47 @@ func script_move_done() -> bool:
 		return false
 	if done and _script_target.is_finite():
 		_script_target = Vector3.INF
+		_script_prio = false
 		if not script_control:
 			# B-036c: Posten = erreichte Stelle (sonst läuft die Wache in der Delay-Pause zum Spawn zurück)
 			home_pos = soldier.global_position
 			home_yaw = soldier.look_yaw
 	return done
+
+
+## Alarm-Skriptweg (09.11.2026, docs/status/alarm_skriptweg.md): HUMAN_Move hat Vorrang vor Kampf/Suche. hd2.exe
+## 0x421C00 Fall 0x1F → 0x5AF1D0 → 0x58E780: Bewegungsauftrag + Skript-pc (+0x1D8, Rückmeldung erst bei Ankunft) und,
+## wenn der Gang NICHT 0x1000 ist (+0x1B0, nach Opcode-Reihenfolge Silence [P]), 0x58C400 = Kampf-/Alarmverhalten
+## zurücksetzen (dieselbe Funktion ruft der Automat 0x549AE0 in Zustand 2 vor dem Heimweg) [B Ablauf, P Deutung].
+## Vorher hielt OrigCombatFsm den Soldaten fest, der Weg lief in die 40-s-Grenze (ARCTIC3 squad1_4/5, sq1_p2_1/2,
+## ARCTIC4 static_guard_4, NORWAY tirpic4/5/18). Nur Originalmissionen offline; `--skriptweg=0` = Stand davor.
+## OnAlarmDone wird dabei NICHT gemeldet (kein Beleg, dass 0x58C400 das Skriptereignis auslöst) [P].
+func script_move_override() -> bool:
+	return _orig_rules() and String(Game.cli.get("skriptweg", "1")) != "0"
+
+
+## Alarm-Skriptweg [E]: dieser Skriptweg hat Kampf/Suche beendet – bis zur Ankunft lenken Geräusche/Leichen/Zurufe
+## nicht ab (Original: Skript-pc +0x1D8 wartet auf Ankunft; ob Hörreize den Auftrag im Original abbrechen, ist offen).
+## Gesehener Feind und Treffer starten den Kampf weiterhin.
+var _script_prio := false
+var _script_interrupted := false   ## Skriptweg von Kampf/Suche unterbrochen (nur mit script_move_override)
+
+
+func _script_move_abort_combat() -> void:
+	if state != State.COMBAT and state != State.SEARCH and state != State.INVESTIGATE:
+		return
+	if not script_move_override() or script_move_mode == Soldier.MoveMode.SNEAK:
+		return
+	if Game.cli.has("debug_skriptweg"):
+		print("SKRIPTWEG_ABBRUCH %s Zustand %s" % [soldier.name, state_name()])
+	var notified := _alarm_notified
+	_alarm_notified = false      # Zustandswechsel ohne ONALARMDONE
+	set_state(_calm_state())
+	_alarm_notified = notified
+	_script_prio = true
+	_search_limit = -1.0
+	search_time = 0.0
+	stop_moving()
 
 
 ## B-036c: HUMAN_Move läuft auch nach HUMAN_SETAIMODE_Defensive/Aggressive (script_control = false) – das Skript führt
@@ -147,6 +200,7 @@ func script_route(points: Array) -> void:
 	var q := points.duplicate()
 	if q.is_empty():
 		return
+	_script_prio = false      # neuer Skriptbefehl; script_move setzt es wieder, wenn er Kampf/Suche beendet
 	script_move(q.pop_front())
 	_script_route = q
 
@@ -435,7 +489,7 @@ func _physics_process(delta: float) -> void:
 			and soldier.vehicle.has_method("seat_weapon") and soldier.vehicle.seat_weapon(soldier.seat_index) != null):
 		_mounted_tick(delta)
 		return
-	if script_control or script_move_active():
+	if (script_control and not _zombie_fights()) or script_move_active():
 		_script_tick(delta)
 		return
 	# perf_gross: Tick-Staffelung nach Distanz (nur Ruhezustände Wache/Patrouille, Verhalten unverändert –
@@ -510,8 +564,11 @@ func set_state(s: int) -> void:
 			OrigAudio.speak_event(soldier, OrigAudio.EV_E_CANCEL, 4.0)
 	state = s
 	if s != State.GUARD and s != State.PATROL:
+		if _script_target.is_finite() and script_move_override() and String(Game.cli.get("skriptweg_warten", "0")) == "1":
+			_script_interrupted = true    # Alarm-Skriptweg: Skript wartet weiter (s. script_move_done)
 		_script_target = Vector3.INF    # B-036c: Skriptweg endet mit Kampf/Untersuchen/Suche
 		_script_route = []
+	_script_prio = false     # Alarm-Skriptweg: jeder Zustandswechsel beendet den Vorrang (_script_move_abort_combat setzt ihn danach)
 	_state_time = 0.0
 	_cover_pos = Vector3.INF
 	_engaged_time = 0.0
@@ -864,6 +921,16 @@ static func b044_switch() -> bool:
 	return String(Game.cli.get("b044", "1")) != "0"
 
 
+## AF1-Verteidiger (0.10.3): Zombie (0x400) kämpft/sucht selbst, sobald er im Kampf bzw. in der Suche danach ist.
+func _zombie_fights() -> bool:
+	return zombie_mode and (state == State.COMBAT or state == State.SEARCH) and hear_alarm_fix()
+
+
+## AF1-Verteidiger (0.10.3): gehörter Schuss bleibt Alarm (Suche) statt „Untersucht“; `--af1def=0` = Stand davor.
+func hear_alarm_fix() -> bool:
+	return _orig_rules() and String(Game.cli.get("af1def", "1")) != "0"
+
+
 func b044_fix() -> bool:
 	return _orig_rules() and b044_switch()
 
@@ -972,6 +1039,17 @@ func _on_detected(t: Soldier) -> void:
 		# Zombie-Modus: das Skript entscheidet (OnAlarm), die KI greift nicht selbst ein
 		target = t
 		_script_alarm(AL_SEE, t.global_position)
+		if not (zombie_mode and hear_alarm_fix()):
+			return
+		# AF1-Verteidiger (0.10.3): Modus 0x400 ist im Original ein KI-Modus mit eigener Leine min(Sicht/3; 25) m und
+		# Suchzeit 7–12 s (0x547BF0 [B]) – also mit Kampf/Suche. Skriptkommentar af1_09.scr Z. 79 zum Zombie-Aufruf:
+		# „sollte Defensive sein, darf sich aber nicht bewegen“ [B]. Gesehener Feind/Treffer → eigener Kampf in der
+		# kleinen Leine; Bewegungen im Ruhezustand bleiben beim Skript.
+		_stimulus = AL_SEE
+		if state != State.COMBAT:
+			set_state(State.COMBAT)
+			alert_level = 1.0
+			_shout(t.global_position)
 		return
 	target = t
 	_stimulus = AL_SEE
@@ -984,6 +1062,16 @@ func _on_detected(t: Soldier) -> void:
 
 func _on_suspicious(pos: Vector3) -> void:
 	if state == State.COMBAT or not soldier.alive or suspended or script_control:
+		return
+	# af1_finale2 [P]: Skriptweg mit SetAlarmType(1023, false) (AFRICA1-Verstärkung af1_posily_NN.scr „all off“ bis zur
+	# Stellung) – Geräusche lenken nicht ab; vorher → Untersuchen/Suche → zurück zum Spawnposten, Wellen kamen nie an
+	if _script_deaf(0):
+		return
+	# AF1-Verteidiger (0.10.3): Perception._on_noise sendet nach `heard` noch `suspicious` – das stufte den eben über
+	# _on_heard alarmierten Soldaten (Suche, rennt zum Schuss) jedes Mal auf „Untersucht“ zurück und setzte dessen
+	# 1,2-s-Hinsehphase neu: unter Dauerfeuer blieb er stehen. Original 0x5A5430 [B]: ein Geräusch erzeugt genau einen
+	# Alarmeintrag je (Art, Quelle) in der Liste +0x2AC, wiederholte Reize frischen nur Ort/Zeit auf (kein Herabstufen).
+	if state == State.SEARCH and hear_alarm_fix():
 		return
 	investigate_pos = pos
 	alert_level = maxf(alert_level, 0.4)
@@ -1014,6 +1102,8 @@ func _on_heard(pos: Vector3, kind: StringName, source: Node) -> void:
 	if not soldier.alive or state == State.COMBAT or suspended or surrendered or captured:
 		return
 	var at := _alarm_type_of(kind, pos, source)
+	if _script_deaf(at):
+		return      # af1_finale2: Alarmart gesperrt, Skriptweg läuft (s. _script_deaf; Art 0 = eigene Schüsse → nur bei Maske 0)
 	if at != 0 and (at != AL_STEPS or (source is Soldier and (source as Soldier).team != soldier.team)):
 		_stimulus = at
 		if script_control:
@@ -1021,6 +1111,12 @@ func _on_heard(pos: Vector3, kind: StringName, source: Node) -> void:
 			_script_alarm(at, pos)
 		else:
 			alarm_pos = pos
+			# AF1-Verteidiger (0.10.3): OnAlarm hängt im Original nicht am KI-Modus – die Alarmsetzer des Gehirns
+			# (0x5902D0 Geräusch 2/4/8/16, 0x5900E0 Art 1; docs/status/b036b.md) melden jedem Akteur mit erlaubter Art.
+			# Vorher bekamen Defensive/Aggressive nur beim Kampfeintritt (Sicht) ein OnAlarm; AF1-Skripte setzen dort
+			# Sichtweite 300, rennen zum Alarmpunkt (af1_01 „AF1_01_alert“) und drehen sich zum Spieler.
+			if hear_alarm_fix():
+				_script_alarm(at, pos)
 	if script_control:
 		return
 	if kind == &"alert":
@@ -1031,13 +1127,33 @@ func _on_heard(pos: Vector3, kind: StringName, source: Node) -> void:
 		_alarm_move(_leash_clamp(pos))
 	elif kind == &"gunshot" or kind == &"explosion" or kind == &"impact":
 		alert_level = 1.0
+		if hear_alarm_fix() and state == State.SEARCH:
+			# 0x5A5430 [B]: derselbe Reiz frischt den Alarmeintrag auf (Ort, timeGetTime) → Suchzeit neu [P], kein neuer
+			# Weg je Schuss (vorher alle 0,1–0,3 s neu geplant); neuer Weg nur bei deutlich anderem Ort oder ohne Ziel.
+			_state_time = 0.0
+			if investigate_pos.distance_to(pos) < 5.0 and has_move_target():
+				return
 		investigate_pos = pos
 		set_state(State.SEARCH)
 		_alarm_move(_leash_clamp(pos))
 
 
+## af1_finale2 [P]: Skriptweg (HUMAN_Move, KI ruhig) mit per SetAlarmType gesperrter Alarmart (0 = alle gesperrt) –
+## Geräusch/Leiche/Zuruf lenken nicht ab. AFRICA1-Verstärkung af1_posily_NN.scr läuft mit SetAlarmType(1023, false)
+## („all off“) zur Stellung und schaltet erst dort 511 ein; vorher → Untersuchen/Suche → zurück zum Spawnposten.
+## Gesehene Feinde (_on_detected) und Treffer wirken weiter.
+func _script_deaf(type: int) -> bool:
+	if not script_move_active() or runtime == null:
+		return false
+	if _script_prio and has_move_target():
+		return true     # Alarm-Skriptweg [E]: der Weg, der Kampf/Suche beendet hat, läuft bis zur Ankunft (nur Sicht/Treffer)
+	return alarm_mask == 0 if type == 0 else (alarm_mask & type) == 0
+
+
 func _on_corpse(c: Soldier) -> void:
 	if surrendered or captured:
+		return
+	if _script_deaf(AL_CORPSE):
 		return
 	_stimulus = AL_CORPSE
 	if script_control:
@@ -1089,6 +1205,8 @@ func _on_alarm(pos: Vector3, _by: Node) -> void:
 		_notify_script("ONGLOBALALARM")
 		return
 	_notify_script("ONGLOBALALARM")
+	if _script_deaf(AL_SHOT):
+		return
 	# Original: OnAlarm -> Sichtweite 300, rennen
 	alert_level = 1.0
 	perception.sight_range = maxf(_base_sight, 150.0)
@@ -1143,7 +1261,7 @@ func local_alarm(pos: Vector3) -> void:
 	alert_level = 1.0
 	if script_control:
 		_script_alarm(AL_SHOT, pos)    # wie bisher beim Skript-Alarm (Art 2) [E]
-	elif state != State.COMBAT and state != State.SEARCH:
+	elif state != State.COMBAT and state != State.SEARCH and not _script_deaf(AL_SHOT):
 		perception.sight_range = maxf(_base_sight, 150.0)
 		investigate_pos = pos
 		set_state(State.SEARCH)

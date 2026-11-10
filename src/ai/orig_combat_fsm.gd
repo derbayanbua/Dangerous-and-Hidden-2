@@ -441,8 +441,12 @@ func _st_close(delta: float) -> void:
 func _st_lost() -> void:
 	# Ziel freigeben, Haltung 3 (außer Flag 0x400000 „Haltung nicht ändern“) [B]; Haltung 3 = hocken [P]
 	brain.stop_moving()
-	brain.cease_fire()
 	_stance = Soldier.Stance.CROUCH
+	# Gap-Analyse Arktis (09.11.2026) [P]: Schießen liegt vor dem Automaten (0x549AE0-Kopf, Sichtliste +0x268,
+	# AI_AUDIT Runde 2/3) – auch im Zustand 2 (Ziel außerhalb der Leine, aber sichtbar) am Platz weiterfeuern statt
+	# 15–25 s geduckt zuzusehen (Sonde probe_gap_scripts a1: SEE_SEA_1/2, CARWHEEL_1/2). `--gap_lostfire=0` = alt.
+	if not (String(Game.cli.get("gap_lostfire", "1")) != "0" and b048() and _fire(brain.get_physics_process_delta_time())):
+		brain.cease_fire()
 	if timer_ms > 0.0:
 		return
 	# Bewegung 4, Haltung 1, Gang 0x2008, zurück zum Posten +0x180 → 13 [B]

@@ -43,3 +43,84 @@ SPRACHE:,SPRACHE:,LANGUAGE:,LANGUE :,LINGUA:,IDIOMA:,JAZYK:
 Sprachausgabe nur in den Sprachen der Installation.,Sprachausgabe nur in den Sprachen der Installation.,Voice output only in the installation's languages.,Voix uniquement dans les langues de l'installation.,Voci solo nelle lingue dell'installazione.,Voces solo en los idiomas de la instalación.,Hlasový výstup jen v jazycích instalace.
 Netzwerk-Einstellungen:,Netzwerk-Einstellungen:,Network settings:,Paramètres réseau :,Impostazioni di rete:,Ajustes de red:,Nastavení sítě:
 RAGDOLL-PHYSIK,RAGDOLL-PHYSIK,RAGDOLL PHYSICS,PHYSIQUE RAGDOLL,FISICA RAGDOLL,FÍSICA RAGDOLL,FYZIKA RAGDOLL
+3. PERSON ERLAUBEN,3. PERSON ERLAUBEN,ALLOW 3RD PERSON,ALLOW 3RD PERSON,ALLOW 3RD PERSON,ALLOW 3RD PERSON,ALLOW 3RD PERSON
+AB,AB,DOWN,DOWN,DOWN,DOWN,DOWN
+ADMIN-LOGIN,ADMIN-LOGIN,ADMIN LOGIN,ADMIN LOGIN,ADMIN LOGIN,ADMIN LOGIN,ADMIN LOGIN
+ADMIN-PASSWORT,ADMIN-PASSWORT,ADMIN PASSWORD,ADMIN PASSWORD,ADMIN PASSWORD,ADMIN PASSWORD,ADMIN PASSWORD
+ALLGEMEIN,ALLGEMEIN,GENERAL,GENERAL,GENERAL,GENERAL,GENERAL
+AUF,AUF,UP,UP,UP,UP,UP
+AUFWÄRMEN [s],AUFWÄRMEN [s],WARMUP [s],WARMUP [s],WARMUP [s],WARMUP [s],WARMUP [s]
+AUTO. TEAMAUSGLEICH,AUTO. TEAMAUSGLEICH,AUTO TEAM BALANCE,AUTO TEAM BALANCE,AUTO TEAM BALANCE,AUTO TEAM BALANCE,AUTO TEAM BALANCE
+AUTORESTART,AUTORESTART,AUTORESTART,AUTORESTART,AUTORESTART,AUTORESTART,AUTORESTART
+BEENDEN,BEENDEN,EXIT,EXIT,EXIT,EXIT,EXIT
+"Bitte einen neuen, noch nicht vergebenen Namen eingeben.","Bitte einen neuen, noch nicht vergebenen Namen eingeben.","Please enter a new, unused name.","Please enter a new, unused name.","Please enter a new, unused name.","Please enter a new, unused name.","Please enter a new, unused name."
+DEDIZIERTER SERVER – KONFIGURATION,DEDIZIERTER SERVER – KONFIGURATION,DEDICATED SERVER – CONFIGURATION,DEDICATED SERVER – CONFIGURATION,DEDICATED SERVER – CONFIGURATION,DEDICATED SERVER – CONFIGURATION,DEDICATED SERVER – CONFIGURATION
+DOMÄNE,DOMÄNE,DOMAIN,DOMAIN,DOMAIN,DOMAIN,DOMAIN
+DUPLIZIEREN,DUPLIZIEREN,DUPLICATE,DUPLICATE,DUPLICATE,DUPLICATE,DUPLICATE
+Dedizierter Server konnte nicht gestartet werden.,Dedizierter Server konnte nicht gestartet werden.,Dedicated server could not be started.,Dedicated server could not be started.,Dedicated server could not be started.,Dedicated server could not be started.,Dedicated server could not be started.
+Der Server läuft bereits.,Der Server läuft bereits.,The server is already running.,The server is already running.,The server is already running.,The server is already running.,The server is already running.
+ERGÄNZUNGEN,ERGÄNZUNGEN,EXTRAS,EXTRAS,EXTRAS,EXTRAS,EXTRAS
+FADENKREUZ ZULASSEN,FADENKREUZ ZULASSEN,ALLOW CROSSHAIR,ALLOW CROSSHAIR,ALLOW CROSSHAIR,ALLOW CROSSHAIR,ALLOW CROSSHAIR
+FAHRZEUGE ERLAUBEN,FAHRZEUGE ERLAUBEN,ALLOW VEHICLES,ALLOW VEHICLES,ALLOW VEHICLES,ALLOW VEHICLES,ALLOW VEHICLES
+FALLSCHADEN,FALLSCHADEN,FALLING DAMAGE,FALLING DAMAGE,FALLING DAMAGE,FALLING DAMAGE,FALLING DAMAGE
+FLOOD-SCHUTZ,FLOOD-SCHUTZ,FLOOD PROTECTION,FLOOD PROTECTION,FLOOD PROTECTION,FLOOD PROTECTION,FLOOD PROTECTION
+FRIENDLY FIRE,FRIENDLY FIRE,FRIENDLY FIRE,FRIENDLY FIRE,FRIENDLY FIRE,FRIENDLY FIRE,FRIENDLY FIRE
+FUNK ALLE [min],FUNK ALLE [min],RADIO EVERY [min],RADIO EVERY [min],RADIO EVERY [min],RADIO EVERY [min],RADIO EVERY [min]
+FUNK-SCHLAG (0–3),FUNK-SCHLAG (0–3),RADIO STRIKE (0–3),RADIO STRIKE (0–3),RADIO STRIKE (0–3),RADIO STRIKE (0–3),RADIO STRIKE (0–3)
+Für diesen Spielstil gibt es im Kartenwähler noch keine Karten.,Für diesen Spielstil gibt es im Kartenwähler noch keine Karten.,There are no maps for this game style in the map selection yet.,There are no maps for this game style in the map selection yet.,There are no maps for this game style in the map selection yet.,There are no maps for this game style in the map selection yet.,There are no maps for this game style in the map selection yet.
+GESPIELTE KARTEN,GESPIELTE KARTEN,PLAY MAPS,PLAY MAPS,PLAY MAPS,PLAY MAPS,PLAY MAPS
+Geladen:,Geladen:,Loaded:,Loaded:,Loaded:,Loaded:,Loaded:
+Gelöscht:,Gelöscht:,Deleted:,Deleted:,Deleted:,Deleted:,Deleted:
+Gespeichert:,Gespeichert:,Saved:,Saved:,Saved:,Saved:,Saved:
+INTERNET (sonst LAN),INTERNET (sonst LAN),INTERNET (otherwise LAN),INTERNET (otherwise LAN),INTERNET (otherwise LAN),INTERNET (otherwise LAN),INTERNET (otherwise LAN)
+KI NUTZT FUNK,KI NUTZT FUNK,AI USES RADIO,AI USES RADIO,AI USES RADIO,AI USES RADIO,AI USES RADIO
+KI-SOLDATEN JE TEAM,KI-SOLDATEN JE TEAM,AI SOLDIERS PER TEAM,AI SOLDIERS PER TEAM,AI SOLDIERS PER TEAM,AI SOLDIERS PER TEAM,AI SOLDIERS PER TEAM
+KILL-CAM,KILL-CAM,KILL CAM,KILL CAM,KILL CAM,KILL CAM,KILL CAM
+KONFIGURATIONEN,KONFIGURATIONEN,CONFIGURATIONS,CONFIGURATIONS,CONFIGURATIONS,CONFIGURATIONS,CONFIGURATIONS
+Keine Karte in der Liste der gespielten Karten.,Keine Karte in der Liste der gespielten Karten.,No map in the play list.,No map in the play list.,No map in the play list.,No map in the play list.,No map in the play list.
+Konfiguration nicht gefunden:,Konfiguration nicht gefunden:,Configuration not found:,Configuration not found:,Configuration not found:,Configuration not found:,Configuration not found:
+Konfiguration nicht schreibbar:,Konfiguration nicht schreibbar:,Configuration not writable:,Configuration not writable:,Configuration not writable:,Configuration not writable:,Configuration not writable:
+"Konsolenbefehl (help, listplayers, nextmap, say …)","Konsolenbefehl (help, listplayers, nextmap, say …)","Console command (help, listplayers, nextmap, say …)","Console command (help, listplayers, nextmap, say …)","Console command (help, listplayers, nextmap, say …)","Console command (help, listplayers, nextmap, say …)","Console command (help, listplayers, nextmap, say …)"
+LEBEN (-1 = ∞),LEBEN (-1 = ∞),LIVES (-1 = ∞),LIVES (-1 = ∞),LIVES (-1 = ∞),LIVES (-1 = ∞),LIVES (-1 = ∞)
+LÖSCHEN,LÖSCHEN,DELETE,DELETE,DELETE,DELETE,DELETE
+MAX. FREQUENZ [Hz] (0 = aus),MAX. FREQUENZ [Hz] (0 = aus),MAX FREQUENCY [Hz] (0 = off),MAX FREQUENCY [Hz] (0 = off),MAX FREQUENCY [Hz] (0 = off),MAX FREQUENCY [Hz] (0 = off),MAX FREQUENCY [Hz] (0 = off)
+MAX. INAKTIVITÄT [s] (0 = aus),MAX. INAKTIVITÄT [s] (0 = aus),MAX INACTIVITY [s] (0 = off),MAX INACTIVITY [s] (0 = off),MAX INACTIVITY [s] (0 = off),MAX INACTIVITY [s] (0 = off),MAX INACTIVITY [s] (0 = off)
+MAX. PING [ms] (0 = aus),MAX. PING [ms] (0 = aus),MAX PING [ms] (0 = off),MAX PING [ms] (0 = off),MAX PING [ms] (0 = off),MAX PING [ms] (0 = off),MAX PING [ms] (0 = off)
+MAX. SPIELER,MAX. SPIELER,MAX PLAYERS,MAX PLAYERS,MAX PLAYERS,MAX PLAYERS,MAX PLAYERS
+NAMEN ÜBER SPIELERN,NAMEN ÜBER SPIELERN,NAMES ABOVE PLAYERS,NAMES ABOVE PLAYERS,NAMES ABOVE PLAYERS,NAMES ABOVE PLAYERS,NAMES ABOVE PLAYERS
+NEUE KONFIG,NEUE KONFIG,NEW CONFIG,NEW CONFIG,NEW CONFIG,NEW CONFIG,NEW CONFIG
+Name der Konfiguration,Name der Konfiguration,Configuration name,Configuration name,Configuration name,Configuration name,Configuration name
+PASSWORT,PASSWORT,PASSWORD,PASSWORD,PASSWORD,PASSWORD,PASSWORD
+PORT,PORT,PORT,PORT,PORT,PORT,PORT
+PRÄZISES ZIELEN,PRÄZISES ZIELEN,PRECISE AIM,PRECISE AIM,PRECISE AIM,PRECISE AIM,PRECISE AIM
+PUNKTELIMIT (0 = aus),PUNKTELIMIT (0 = aus),POINT LIMIT (0 = off),POINT LIMIT (0 = off),POINT LIMIT (0 = off),POINT LIMIT (0 = off),POINT LIMIT (0 = off)
+RESPAWN ERLAUBEN,RESPAWN ERLAUBEN,ALLOW RESPAWN,ALLOW RESPAWN,ALLOW RESPAWN,ALLOW RESPAWN,ALLOW RESPAWN
+RESPAWN-ZEIT [s],RESPAWN-ZEIT [s],RESPAWN TIME [s],RESPAWN TIME [s],RESPAWN TIME [s],RESPAWN TIME [s],RESPAWN TIME [s]
+RUNDENZAHL,RUNDENZAHL,ROUND COUNT,ROUND COUNT,ROUND COUNT,ROUND COUNT,ROUND COUNT
+RUNDENZEIT [min] (0 = aus),RUNDENZEIT [min] (0 = aus),ROUND TIME [min] (0 = off),ROUND TIME [min] (0 = off),ROUND TIME [min] (0 = off),ROUND TIME [min] (0 = off),ROUND TIME [min] (0 = off)
+SCHWIERIGKEIT (1–4),SCHWIERIGKEIT (1–4),DIFFICULTY (1–4),DIFFICULTY (1–4),DIFFICULTY (1–4),DIFFICULTY (1–4),DIFFICULTY (1–4)
+SENDEN,SENDEN,SEND,SEND,SEND,SEND,SEND
+SERVER,SERVER,SERVER,SERVER,SERVER,SERVER,SERVER
+SERVER STARTEN,SERVER STARTEN,START SERVER,START SERVER,START SERVER,START SERVER,START SERVER
+SERVER STOPPEN,SERVER STOPPEN,STOP SERVER,STOP SERVER,STOP SERVER,STOP SERVER,STOP SERVER
+SITZUNGSNAME,SITZUNGSNAME,SESSION NAME,SESSION NAME,SESSION NAME,SESSION NAME,SESSION NAME
+SPAWN BEIM START,SPAWN BEIM START,SPAWN ON START,SPAWN ON START,SPAWN ON START,SPAWN ON START,SPAWN ON START
+SPAWN-SCHUTZ [s],SPAWN-SCHUTZ [s],SPAWN PROTECTION [s],SPAWN PROTECTION [s],SPAWN PROTECTION [s],SPAWN PROTECTION [s],SPAWN PROTECTION [s]
+SPEICHERN,SPEICHERN,SAVE,SAVE,SAVE,SAVE,SAVE
+SPIELSTIL,SPIELSTIL,GAME STYLE,GAME STYLE,GAME STYLE,GAME STYLE,GAME STYLE
+"Server beendet, Prozess","Server beendet, Prozess","Server stopped, process","Server stopped, process","Server stopped, process","Server stopped, process","Server stopped, process"
+"Server gestartet, Prozess","Server gestartet, Prozess","Server started, process","Server started, process","Server started, process","Server started, process","Server started, process"
+"Server läuft (Prozess %d), wartet auf Antwort …","Server läuft (Prozess %d), wartet auf Antwort …","Server running (process %d), waiting for reply …","Server running (process %d), waiting for reply …","Server running (process %d), waiting for reply …","Server running (process %d), waiting for reply …","Server running (process %d), waiting for reply …"
+Server läuft nicht.,Server läuft nicht.,Server not running.,Server not running.,Server not running.,Server not running.,Server not running.
+Server läuft: %s – Karte %s – Spieler %d/%d (+%d KI) – Port %d,Server läuft: %s – Karte %s – Spieler %d/%d (+%d KI) – Port %d,Server running: %s – map %s – players %d/%d (+%d AI) – port %d,Server running: %s – map %s – players %d/%d (+%d AI) – port %d,Server running: %s – map %s – players %d/%d (+%d AI) – port %d,Server running: %s – map %s – players %d/%d (+%d AI) – port %d,Server running: %s – map %s – players %d/%d (+%d AI) – port %d
+Server wird beendet …,Server wird beendet …,Stopping server …,Stopping server …,Stopping server …,Stopping server …,Stopping server …
+TEAM-LEBEN,TEAM-LEBEN,SHARED LIVES,SHARED LIVES,SHARED LIVES,SHARED LIVES,SHARED LIVES
+TREFFER-RICHTUNG,TREFFER-RICHTUNG,HIT DIRECTION,HIT DIRECTION,HIT DIRECTION,HIT DIRECTION,HIT DIRECTION
+TREFFERANZEIGE SCHÜTZE,TREFFERANZEIGE SCHÜTZE,HIT INDICATOR,HIT INDICATOR,HIT INDICATOR,HIT INDICATOR,HIT INDICATOR
+UMGEKEHRTER SCHADEN [%],UMGEKEHRTER SCHADEN [%],INVERSE DAMAGE [%],INVERSE DAMAGE [%],INVERSE DAMAGE [%],INVERSE DAMAGE [%],INVERSE DAMAGE [%]
+VERFÜGBARE KARTEN,VERFÜGBARE KARTEN,AVAILABLE MAPS,AVAILABLE MAPS,AVAILABLE MAPS,AVAILABLE MAPS,AVAILABLE MAPS
+VOICE-CHAT,VOICE-CHAT,VOICE CHAT,VOICE CHAT,VOICE CHAT,VOICE CHAT,VOICE CHAT
+ZURÜCK,ZURÜCK,BACK,BACK,BACK,BACK,BACK
+"EINSATZGEBIET VERLASSEN! Zurück in %d s, sonst scheitert die Mission.","EINSATZGEBIET VERLASSEN! Zurück in %d s, sonst scheitert die Mission.","LEAVING THE MISSION AREA! Return within %d s or the mission fails.","ZONE DE MISSION QUITTÉE ! Revenez dans %d s, sinon la mission échoue.","AREA DI MISSIONE ABBANDONATA! Torna entro %d s o la missione fallisce.","¡HAS SALIDO DE LA ZONA DE MISIÓN! Vuelve en %d s o la misión fracasará.","OPUSTIL JSI OBLAST MISE! Vrať se do %d s, jinak mise selže."
+Einsatzgebiet verlassen,Einsatzgebiet verlassen,Mission area left,Zone de mission quittée,Area di missione abbandonata,Zona de misión abandonada,Oblast mise opuštěna
+KONFIGURATION …,KONFIGURATION …,CONFIGURATION …,CONFIGURATION …,CONFIGURATION …,CONFIGURATION …,CONFIGURATION …

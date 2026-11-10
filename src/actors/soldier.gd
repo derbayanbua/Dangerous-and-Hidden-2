@@ -328,11 +328,20 @@ func enter_vehicle(v: Node, seat: int) -> void:
 	_apply_capsule(Stance.CROUCH)
 
 
+## af1_finale2: Bewegungsmaske – Welt, Figuren, Zäune; die Kartengrenze „Border - enemy filter“ (LevelBuilder.BORDER_LAYER)
+## sperrt alle außer der Gegner-KI im Einzelspieler (Online: alle, damit Achsen-Spieler/Bots die MP-Grenzen behalten) [P]
+func move_mask() -> int:
+	var m := 1 | (1 << 1) | (1 << 4)
+	if team != TEAM_AXIS or is_player_controlled or Net.is_online:
+		m |= LevelBuilder.BORDER_LAYER
+	return m
+
+
 func exit_vehicle(at: Vector3) -> void:
 	vehicle = null
 	seat_index = -1
 	collision_layer = 1 << 1
-	collision_mask = 1 | (1 << 1) | (1 << 4)
+	collision_mask = move_mask()
 	global_position = at
 	velocity = Vector3.ZERO
 
@@ -341,7 +350,7 @@ func _ready() -> void:
 	add_to_group("soldiers")
 	add_to_group("team_%d" % team)
 	collision_layer = 1 << 1
-	collision_mask = 1 | (1 << 1) | (1 << 4)   # Welt, Figuren, Zäune
+	collision_mask = move_mask()   # Welt, Figuren, Zäune (+ Kartengrenze außer Gegner-KI)
 	floor_snap_length = 0.4
 	floor_max_angle = deg_to_rad(50)
 	health = max_health
@@ -1358,6 +1367,16 @@ func _place_charge(kind: String) -> void:
 		tool = ""
 		return
 	OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_BOMB, global_position, self)   # „Player01 Bomb manipulation“
+	# Fortschrittsbalken prgbr01 (OrigHud) für die Ablegeaktion; Dauer = Clip manip_kl 1,6 s [E], Text 7072 [P]
+	if work_left <= 0.0 and String(Game.cli.get("gap_placebar", "1")) != "0":
+		work_total = 1.6
+		work_left = 1.6
+		work_label = OrigInteractive.text(7072, "Bringt Sprengstoff an") if kind == "explosive" else SAS.item_label(70) if SAS.available() else "Mine"
+		var lbl := work_label
+		# nur diese Ablegeanzeige herunterzählen – eine danach begonnene Arbeit (Entschärfen) nicht überschreiben
+		create_tween().tween_method(func(v: float) -> void:
+			if work_label == lbl and is_equal_approx(work_total, 1.6):
+				work_left = v, 1.6, 0.0, 1.6)
 	var c := PlacedCharge.new()
 	c.kind = kind
 	c.owner_soldier = self

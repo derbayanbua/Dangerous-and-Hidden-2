@@ -2,6 +2,20 @@
 
 
 
+## 0.10.3 (10.11.2026)
+
+- **Dedizierter Server mit Konfigurations-Launcher** (nach dem Original-ServerLauncher): eigenes Fenster ohne Spielstart
+  über `DedicatedServer.cmd` (liegt im Release-Paket) oder aus dem LAN-/Internet-Menü; Konfigurationen `ServerConfigs\*.cfg`
+  neben der EXE, Reiter Allgemein/Regeln/Erweitert/Kooperativ/Server (Status, Log, Konsole). Test `test_dedicated_ui`.
+- **Einsatzgebiet verlassen:** Warnung mit 10-s-Zähler, danach gilt die Mission als gescheitert (Einzelspieler).
+- **Automatisches Nachladen** bei leerer Waffe.
+- **Afrika 1:** Verstärkungspanzer fährt durch (kein Stehenbleiben am Hang), kein abstehendes Teil vor dem Panzer,
+  Raketentreffer wirken wie im Original, Begleitschutz kommt, Verteidiger greifen aktiver an.
+- **Gap-Analyse je Mission** (`docs/gap/*.md`): Skriptwege nach Alarm (Arktis 3/4, Norwegen) laufen weiter, Burma 2
+  Sherman und Normandie 2 Halbkette erreichen alle Wegpunkte, Gegner verlieren das Ziel nach Original-Zeitgeber.
+- **Sprengladungen:** Fortschrittsbalken beim Anbringen und Scharfmachen.
+- Tests `test_fix0103*`, `test_af1_defenders`.
+
 ## 0.10.2 (09.11.2026)
 
 - Afrika 1 schließt wieder ab: Verstärkungspanzer blieb in seiner Grube stecken (zu wenig Zugkraft, gegenseitiges Warten

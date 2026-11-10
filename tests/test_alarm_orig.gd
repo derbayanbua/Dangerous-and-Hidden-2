@@ -96,7 +96,10 @@ func _run() -> void:
 	_prep(B, base + Vector3(60, 0, 0), 40.0)
 	Events.emit_noise(B.global_position + Vector3(0, 0, 10), 300.0, m.squad.leader(), m.squad.leader().team, &"gunshot")
 	await seconds(1.0)
-	check(bb.state != EnemyBrain.State.GUARD and bb.alert_level >= 1.0, "gehörter Schuss alarmiert den Hörer", bb.state_name())
+	# Alarm-Skriptweg (docs/status/alarm_skriptweg.md): OnAlarm mit HUMAN_Move (z. B. Static_13 → „S13_alarm“) beendet die
+	# Suche und läuft den Skriptweg (hd2.exe 0x58E780 → 0x58C400) – das gilt ebenfalls als alarmiert.
+	check((bb.state != EnemyBrain.State.GUARD or bb.script_move_active()) and bb.alert_level >= 1.0,
+		"gehörter Schuss alarmiert den Hörer", "%s skriptweg=%s" % [bb.state_name(), bb.script_move_active()])
 
 	# 4) Skript-Alarm (HUMAN_SetAlarm → mission.raise_alarm): Skriptakteur bekommt OnAlarm (Bit gesetzt), keine Rundmeldung
 	var bd := _prep(D, base + Vector3(0, 0, 200), 40.0)

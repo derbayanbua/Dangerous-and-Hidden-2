@@ -309,6 +309,15 @@ func open() -> void:
 	_crosshair = _check(g, SAS.text(20212, "FADENKREUZ ZULASSEN"), true)
 	_crosshair.tooltip_text = "Wie im Original nur Serverinfo, ohne Wirkung (allowcrosshair)"
 	_coop_lives = _spin(g, SAS.text(20213, "RESPAWN-ANZAHL") + " (-1 = ∞)", -1, 99, -1)
+	# 0.10.3: Konfigurationsmenü des dedizierten Servers (ServerLauncher-Nachbau) – letzte Formularzeile, damit die
+	# Original-Felder und die Höhe der Bildlaufliste unverändert bleiben (test_lan_e2e)
+	_label(g, tr("DEDIZIERTER SERVER"))
+	var ded_cfg := Button.new()
+	ded_cfg.name = "DedicatedConfigButton"
+	ded_cfg.text = tr("KONFIGURATION …")
+	ded_cfg.custom_minimum_size.x = FIELD_W
+	ded_cfg.pressed.connect(open_dedicated_config)
+	g.add_child(ded_cfg)
 	_map_choice = ItemList.new()
 	_map_choice.name = "MapChoice"
 	_map_choice.select_mode = ItemList.SELECT_MULTI
@@ -453,6 +462,21 @@ func open_player_setup() -> void:
 		_close_player_setup())
 	player_setup.back_requested.connect(_close_player_setup)
 	player_setup.open(map, int(_respawn.value))
+
+
+var dedicated_screen: DedicatedServerScreen
+
+
+## 0.10.3: DEDIZIERTER SERVER – Konfigurationsmenü über dem LAN-Menü (src/ui/dedicated_server_screen.gd)
+func open_dedicated_config() -> void:
+	dedicated_screen = DedicatedServerScreen.new()
+	dedicated_screen.name = "DedicatedServerScreen"
+	add_child(dedicated_screen)
+	dedicated_screen.back_requested.connect(func():
+		if is_instance_valid(dedicated_screen):
+			dedicated_screen.queue_free()
+		dedicated_screen = null)
+	dedicated_screen.open()
 
 
 func _close_player_setup() -> void:

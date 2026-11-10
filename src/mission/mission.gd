@@ -21,6 +21,7 @@ var squad: SquadManager
 var controller: PlayerController
 var rig: CameraRig
 var hud: Node
+var area_guard: Node          ## fix_0103 src/mission/area_guard.gd (nur Einzelspieler)
 var tactical_map: Node
 var objectives: Array[Objective] = []
 var enemies: Array[Soldier] = []
@@ -152,6 +153,13 @@ func _ready() -> void:
 	var pause = pause_script.new()
 	pause.name = "PauseMenu"
 	add_child(pause)
+	# fix_0103: Einsatzgebiet verlassen → 10-s-Countdown, dann Fehlschlag (nur Einzelspieler)
+	var ag_script := preload("res://src/mission/area_guard.gd")
+	if ag_script.enabled_for_session():
+		area_guard = ag_script.new()
+		area_guard.name = "AreaGuard"
+		add_child(area_guard)
+		area_guard.setup(self)
 
 	squad.set_active(0)
 	var pending := Game.consume_pending_load()
@@ -255,7 +263,7 @@ func _bake_navigation() -> void:
 	nm.cell_size = 0.2
 	nm.cell_height = 0.2
 	nm.geometry_parsed_geometry_type = NavigationMesh.PARSED_GEOMETRY_STATIC_COLLIDERS
-	nm.geometry_collision_mask = 1 | (1 << 4)   # Welt + Zäune
+	nm.geometry_collision_mask = 1 | (1 << 4) | LevelBuilder.BORDER_LAYER   # Welt + Zäune + Kartengrenze (af1_finale2)
 	nm.region_min_size = 4.0
 	nm.filter_low_hanging_obstacles = true
 	nm.filter_ledge_spans = true
@@ -709,7 +717,7 @@ func _bridge_islands() -> void:
 	cap.height = 1.4
 	var params := PhysicsShapeQueryParameters3D.new()
 	params.shape = cap
-	params.collision_mask = 1 | (1 << 4)
+	params.collision_mask = 1 | (1 << 4) | LevelBuilder.BORDER_LAYER
 	var n_climb := 0
 	for key in best:
 		if Time.get_ticks_msec() - _slice > 8:      # Zeitscheiben: große Karten (NORWAY 14 s) ohne Standbild

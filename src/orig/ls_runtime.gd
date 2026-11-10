@@ -1308,7 +1308,8 @@ func call_api(vm: LsVM, fname: String, args: Array):
 				return null
 			var wp := _str(vm.value(args[0]))
 			var kmh := float(vm.value(args[1])) if args.size() > 1 else 30.0
-			if wp == "" or kmh <= 0.0:
+			# Original 0x422F5B: |int(kmh)·0,28| ≤ 1e-8 = Halt; kmh < 0 = rückwärts (re_notes_drive §3.7 [B], Gap-CZ 09.11.2026)
+			if wp == "" or int(kmh) == 0:
 				veh.stop_drive()
 				return null
 			# Original: Name = Ziel im Fahrzeugnetz (check2.bin Abschnitt 2 → drive.json); unbekannt → anhalten
@@ -2046,7 +2047,7 @@ func _board(vm: LsVM, target_name: String, seat := -1):
 		var v := t as Vehicle
 		if s.global_position.distance_to(v.global_position) > 12.0 and b:
 			b.script_move(v.global_position + v.global_basis.x * 2.0)
-			return {"wait_until": _board_wait.bind(s, v, seat), "timeout": 20.0}
+			return {"wait_until": _board_wait.bind(s, v, seat), "timeout": 60.0}   # gap_afrika [E]: 20 s reichten für 29 m nicht
 		_board_now(s, v, seat)
 		return null
 	if t:
@@ -2104,7 +2105,12 @@ func _board_wait(s, v, seat := -1) -> bool:
 	if s.global_position.distance_to(v.global_position) < 5.0:
 		return _board_now(s, v, seat) or true
 	var b: EnemyBrain = s.get_node_or_null("EnemyBrain")
-	return b == null or b.script_move_done()
+	# gap_afrika [P]: Weg beendet (Fahrzeugrumpf/Hindernis hält > 5 m vom Mittelpunkt) → trotzdem einsteigen; vorher
+	# blieb der Fahrer draußen und alle folgenden HUMAN_Drive liefen ins Leere (Tiger-Besatzung 29 m vom Panzer)
+	if b == null or b.script_move_done():
+		_board_now(s, v, seat)
+		return true
+	return false
 
 
 ## SetInterfaceTimer(ms): Countdown-Anzeige oben in der Mitte; 0 blendet sie aus

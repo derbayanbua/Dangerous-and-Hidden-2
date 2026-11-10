@@ -38,6 +38,7 @@ $suites = @(
   @{ name = "test_b035";     args = "--headless -- --mission=no1_leuchtturm --autoplay=test_b035" },   # B-035 Leuchtturm/Lightmaps/Gesichter/Wetter
   @{ name = "test_difficulty"; args = "--headless -- --mission=a1_blizzard --autoplay=test_difficulty" },
   @{ name = "test_alarm_orig"; args = "--headless -- --mission=a2_erkundung --autoplay=test_alarm_orig" },
+  @{ name = "test_af1_defenders"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_af1_defenders" },
   @{ name = "test_script_systems"; args = "--headless -- --mission=a1_blizzard --autoplay=test_script_systems" },
   @{ name = "test_commands_orig"; args = "--headless -- --mission=a1_blizzard --autoplay=test_commands_orig" },
   @{ name = "test_sp_weapons"; args = "--headless -- --mission=a1_blizzard --autoplay=test_sp_weapons" },
@@ -68,11 +69,16 @@ $suites = @(
   @{ name = "test_items";    args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_items" },
   @{ name = "test_vehicle_types"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_vehicle_types"; timeout = 2400 },
   @{ name = "test_tank";     args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_tank" },
+  @{ name = "test_tank_rockets"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_tank_rockets" },   # Raketen gegen panzer01 (docs/status/panzer_schaden.md)
   @{ name = "test_water";    args = "--headless -- --mission=nw1_dampfleitung --autoplay=test_water" },
   @{ name = "test_orig_vehicles_cz1"; args = "--headless -- --mission=cz1_eintrittsgeld --autoplay=test_orig_vehicles" },
   @{ name = "test_orig_vehicles_nw1"; args = "--headless -- --mission=nw1_dampfleitung --autoplay=test_orig_vehicles" },
   @{ name = "test_cz2_parts"; args = "--headless -- --mission=cz4_volksfest --autoplay=test_cz2_parts" },
   @{ name = "test_controls"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_controls" },
+  @{ name = "test_fix0103"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_fix0103 --area_guard=1" },   # 0.10.3 Auto-Nachladen + Einsatzgebiet (Kartengrenze)
+  @{ name = "test_fix0103_border"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_fix0103 --area_guard=1 --phase=border" },   # Einsatzgebiet über m_af1_border
+  @{ name = "test_fix0103_bu2"; args = "--headless -- --mission=bu2_bergkoenig --autoplay=probe_gap_drive --strict=1 --veh=Sherman --goals=Sherman08,Sherman09,Sherman13,Sherman18 --godlike=BU2_Allied02 --dur=420 --speed=2 --test_timeout=1500"; timeout = 1800 },   # Sherman am 23°-Hang
+  @{ name = "test_fix0103_no2"; args = "--headless -- --mission=no2_schwerttaenzer --autoplay=probe_gap_drive --strict=1 --goal_r=3.5 --veh=Hakl --goals=Hakl_4,Hakl_5 --sig=r_n2_wave2_1:1@3;r_n2_wave2_1:10@6 --dur=90 --speed=1 --test_timeout=900"; timeout = 1200 },   # Halbkette bis Hakl_5
   @{ name = "test_commands"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_commands" },
   @{ name = "test_follow_spacing"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_follow_spacing" },
   @{ name = "test_surrender"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_surrender" },
@@ -98,6 +104,7 @@ $suites = @(
   @{ name = "test_mp_features"; args = "--headless -- --autoplay=test_mp_features --profiles_dir=user://test_mp_features --noimport"; mp = $true },
   @{ name = "test_mp_weapons"; args = "--headless -- --autoplay=test_mp_weapons --phase=all"; mp = $true },
   @{ name = "test_dedicated"; args = "--headless -- --autoplay=test_dedicated --profiles_dir=user://test_ded --noimport"; mp = $true },
+  @{ name = "test_dedicated_ui"; args = "--headless -- --autoplay=test_dedicated_ui --profiles_dir=user://test_ded_ui --noimport"; mp = $true },   # 0.10.3 Konfigurationsmenue dedizierter Server
   @{ name = "test_mp_setup_ui"; args = "--headless -- --autoplay=test_mp_setup_ui --profiles_dir=user://test_mp_setup --noimport"; mp = $true },
   @{ name = "test_mp_feedback"; args = "--headless -- --autoplay=test_mp_feedback"; mp = $true },
   @{ name = "test_support_strike"; args = "--headless -- --autoplay=test_support_strike"; mp = $true },

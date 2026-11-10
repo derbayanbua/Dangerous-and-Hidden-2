@@ -315,7 +315,8 @@ func _run() -> void:
 	s._fire_rocket(pf, s.eye_position(), s.aim_direction())
 	await seconds(1.0)
 	check(s.weapons[WeaponData.Slot.LAUNCHER] == pf, "Leere Panzerfaust bleibt (nachladbar)")
-	check(s.reload() and s.model.action_clip() == "h_bazRELst", "Panzerfaust nachladen: Bazooka-Nachladeanimation (3. Person)", s.model.action_clip())
+	# Auto-Nachladen (0.10.3) kann schon während der Wartezeit begonnen haben
+	check((pf.is_reloading() or s.reload()) and s.model.action_clip() == "h_bazRELst", "Panzerfaust nachladen: Bazooka-Nachladeanimation (3. Person)", s.model.action_clip())
 	await seconds(pf.data.reload_time + 0.3)
 	check(pf.in_mag == 1 and pf.reserve == 0, "Panzerfaust mit Rakete nachgeladen (Vorrat verbraucht)")
 	rig.toggle_mode()

@@ -17,6 +17,7 @@ extends RefCounted
 ## Einheiten: Zonen-HP/Panzerung in zotti; der Nachbau rechnet Schaden in zotti/10 (WeaponDB) → ×10.
 
 const ZOTTI := 10.0
+const RAY_BEYOND := 6.0           ## Zonen-Strahltest: Länge hinter dem Treffpunkt (m) [P]
 
 var vehicle: Node3D               ## Vehicle (Wurzel des Fahrzeugs)
 var root: Node3D                  ## Schadensmodell (unsichtbar, Kind des Fahrzeugmodells → gleiche Lage)
@@ -139,6 +140,10 @@ func pick_zone(kind: int, at: Vector3, from: Vector3) -> int:
 		return -1
 	var best_i := -1
 	var best_t := INF
+	# Strahl bis RAY_BEYOND m hinter den Treffpunkt: der Nachbau trifft die Kollisionsbox (größer als die Wanne, z. B.
+	# über dem Deck vor dem Turm), das Original die Modellgeometrie; mit nur 1,5 m blieben solche Treffer ohne Zone
+	# und damit ohne Schaden (Fehlermeldung AF1-Finale, docs/status/panzer_schaden.md) [P]
+	var seg_end := at + dir.normalized() * RAY_BEYOND
 	for i in zones.size():
 		var nd := zones[i]["node"] as Node3D
 		var f: PackedVector3Array = zones[i]["faces"]
@@ -146,7 +151,7 @@ func pick_zone(kind: int, at: Vector3, from: Vector3) -> int:
 			continue
 		var x := nd.global_transform
 		for k in range(0, f.size() - 2, 3):
-			var hit = Geometry3D.segment_intersects_triangle(from, from + dir * 1.5, x * f[k], x * f[k + 1], x * f[k + 2])
+			var hit = Geometry3D.segment_intersects_triangle(from, seg_end,x * f[k], x * f[k + 1], x * f[k + 2])
 			if hit != null:
 				var t := from.distance_squared_to(hit)
 				if t < best_t:

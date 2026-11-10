@@ -879,6 +879,88 @@ func _void_glide(target: Vector3, want: float, delta: float) -> bool:
 	return true
 
 
+## fix_0103 (BURMA2 Sherman am 23°-Hang) [E]: Skriptfahrzeug steht trotz Vollgas mit allen Rädern am Boden und freier
+## Bahn länger als SLOPE_STALL_S → kinematisch auf der Fahrspur am Gelände entlang nachführen (wie _void_glide), höchstens
+## SLOPE_GLIDE_S am Stück, danach wieder Physik. `--slope_glide=0` = alter Stand.
+const SLOPE_STALL_S := 3.0
+const SLOPE_GLIDE_S := 8.0
+var _slope_stall := 0.0
+var _slope_glide_t := 0.0
+var _slope_off := 0.0
+var slope_glides := 0          # Zähler (Tests/Diagnose)
+
+
+func _ground_under(space: PhysicsDirectSpaceState3D) -> Dictionary:
+	var hx := _size.x * 0.5
+	var hz := _size.z * 0.5
+	var pts: Array[Vector3] = []
+	for c in [Vector3(hx, 0, hz), Vector3(-hx, 0, hz), Vector3(hx, 0, -hz), Vector3(-hx, 0, -hz)]:
+		var p: Vector3 = global_transform * c
+		p.y = global_position.y
+		# Strahl knapp über dem Rumpf: höchstens 1,0 m + Hangversatz über der Mitte (sonst Dächer/Vordächer als „Boden“)
+		var top := 1.0 + hz * 0.5
+		var q := PhysicsRayQueryParameters3D.create(p + Vector3.UP * top, p + Vector3.DOWN * 6.0, 1, [get_rid()])
+		var h := space.intersect_ray(q)
+		if not h.is_empty() and (h["normal"] as Vector3).y >= 0.5:
+			pts.append(h["position"])
+	if pts.size() < 3:
+		return {}
+	var y := 0.0
+	for p in pts:
+		y += p.y
+	var n := (pts[1] - pts[0]).cross(pts[2] - pts[0]).normalized()
+	if n.y < 0.0:
+		n = -n
+	if n.y < 0.3:
+		n = Vector3.UP
+	return {"y": y / pts.size(), "n": n}
+
+
+func _slope_glide(target: Vector3, want: float, delta: float) -> bool:
+	if _slope_glide_t <= 0.0:
+		return false
+	var space := get_world_3d().direct_space_state
+	var g := _ground_under(space)
+	_slope_glide_t -= delta
+	if g.is_empty() or want < 0.2 or _slope_glide_t <= 0.0:
+		_end_slope_glide(want)
+		return false
+	var to := target - global_position
+	to.y = 0.0
+	var yaw := global_rotation.y
+	if to.length() > 0.05:
+		yaw = rotate_toward(yaw, atan2(to.x, to.z), 1.2 * delta)
+	var fwd := Vector3(sin(yaw), 0.0, cos(yaw))
+	# Bewegung in Zielrichtung (Fahrzeug dreht dabei ein): sonst schob die schräg stehende Nase in die Hauswand
+	var mv := to.normalized() if to.length() > 0.05 else fwd
+	# Wand/Gebäude/Fahrzeug in Zielrichtung → Nachführung endet (nur Gelände wird nachgeführt)
+	var from := global_position + Vector3.UP * 0.8
+	var wq := PhysicsRayQueryParameters3D.create(from, from + mv * (_size.z * 0.5 + 1.0), 1 | (1 << 1), [get_rid()])
+	var wh := space.intersect_ray(wq)
+	if not wh.is_empty() and (wh["normal"] as Vector3).y < 0.6:
+		if Game.cli.has("drive_debug"):
+			var wc := wh["collider"] as Node
+			print("DRIVEDBG %s Nachführung Ende: Hindernis %s<%s> n%s @%s" % [name, wc.name, wc.get_parent().name, wh["normal"], wh["position"]])
+		_end_slope_glide(0.0)
+		return false
+	var n: Vector3 = g["n"]
+	var z := (fwd - n * fwd.dot(n)).normalized()
+	var np := global_position + mv * maxf(want, 1.5) * delta
+	np.y = move_toward(global_position.y, float(g["y"]) + _slope_off, 3.0 * delta)
+	global_transform = Transform3D(Basis(n.cross(z), n, z), np)
+	linear_velocity = Vector3.ZERO
+	angular_velocity = Vector3.ZERO
+	return true
+
+
+func _end_slope_glide(want: float) -> void:
+	_slope_glide_t = 0.0
+	_slope_stall = 0.0
+	if freeze:
+		freeze = false
+		linear_velocity = global_basis.z * clampf(want, 0.0, 3.0)
+
+
 func drive_done() -> bool:
 	return not script_driving or not _drive_goal.is_finite() or wrecked
 
@@ -887,10 +969,16 @@ func stop_drive() -> void:
 	_drive_goal = Vector3.INF
 	_drive_path.clear()
 	_drive_speed = 0.0
+	if _slope_glide_t > 0.0:
+		_end_slope_glide(0.0)
 
 
 func _script_drive(delta: float) -> void:
-	if not _drive_goal.is_finite() or driver() == null:
+	if not _drive_goal.is_finite() or driver() == null or not driver().alive:
+		# af1_finale2: Fahrer weg (gefallen/ausgestiegen) → Skriptfahrt beendet; vorher blieb das Ziel gesetzt, drive_done()
+		# lieferte nie true und das HUMAN_Drive des Skripts (AFRICA1 BMW-Gespann af1_posily_09) wartete bis zum Zeitlimit
+		if _drive_goal.is_finite():
+			stop_drive()
 		drive.release_controls(true)
 		return
 	var dirsign := -1.0 if _drive_reverse else 1.0
@@ -913,7 +1001,8 @@ func _script_drive(delta: float) -> void:
 		if _stuck_t > 5.0:
 			_next_drive_point()
 			return
-		if _stuck_t > 2.5 and _recover_t <= 0.0 and absf(drive.speed) < 0.4:
+		# fix_0103: Hangstillstand (_slope_stall läuft) → keine Rückwärtsphase, sondern Nachführen (s. u.)
+		if _stuck_t > 2.5 and _recover_t <= 0.0 and absf(drive.speed) < 0.4 and _slope_stall <= 0.0 and _slope_glide_t <= 0.0:
 			_recover_t = 1.6
 	# Vorausschaupunkt auf der Route (glatte Kurven statt Zickzack über die Netzknoten)
 	var look := clampf(4.0 + absf(drive.speed) * 0.7, 4.0, 16.0)
@@ -955,13 +1044,21 @@ func _script_drive(delta: float) -> void:
 		# Panzer in der Grube) warteten sonst ewig aufeinander. Nach 1,5 s ohne Fortschritt langsam weiter (Physik schiebt)
 		if ah["collider"] is Vehicle and _stuck_t > 1.5:
 			want = minf(want, 2.0)
+		elif drive.kind == VehicleDrive.Kind.HALFTRACK and String(Game.cli.get("creep_steer", "1")) != "0" \
+				and _target_dir_free(space, from, target, stop_d, heading, own):
+			# nur Halbketten: beim AFRICA1-BMW-Gespann fuhr das Kriechen es in der Grube fest (test_af1_finale 19 s)
+			# fix_0103 (NORMANDY2 Halbkette r_n2_wave2_1): nach dem Abbiegen stand sie schräg in der engen Gasse, der Strahl
+			# geradeaus traf die Hauswand H74_02 (3,4 m neben der Spur) → want 0 → ohne Fahrt kein Lenken (Vorderradlenkung),
+			# Rückwärts/Vorwärts-Schleife bis zum Überspringen der Punkte Hakl_4/5. Ist die Richtung zum Ziel frei: langsam
+			# weiter und dabei einlenken [E].
+			want = minf(want, 1.5)
 		else:
 			want = 0.0
 	if Game.cli.has("drive_debug"):
 		_dbg_t -= delta
 		if _dbg_t <= 0.0:
 			_dbg_t = 1.0
-			print("DRIVEDBG %s pos %s goal %s rest %.1f want %.2f v %.2f rec %.1f stuck %.1f ahead %s" % [name, global_position, _drive_goal, rest, want, drive.speed, _recover_t, _stuck_t, (ah.get("collider") as Node).name if not ah.is_empty() else "-"])
+			print("DRIVEDBG %s pos %s goal %s rest %.1f want %.2f v %.2f rec %.1f stuck %.1f ahead %s" % [name, global_position, _drive_goal, rest, want, drive.speed, _recover_t, _stuck_t, ("%s<%s> L%d n%s @%s" % [(ah["collider"] as Node).name, (ah["collider"] as Node).get_parent().name, (ah["collider"] as CollisionObject3D).collision_layer, ah["normal"], ah["position"]]) if not ah.is_empty() else "-"])
 			var hits := []
 			for c in get_children():
 				if c is CollisionShape3D:
@@ -973,7 +1070,44 @@ func _script_drive(delta: float) -> void:
 					for r in get_world_3d().direct_space_state.intersect_shape(hq, 4):
 						hits.append(String((r["collider"] as Node).get_path()).get_file())
 			print("DRIVEDBG2 kind %s grounded %d/%d thr %.2f brk %.2f hb %s park %s gear %d rpm %.0f force %.0f mass %.0f pow %.0f freeze %s sleep %s hull %s" % [drive.kind, drive.grounded, drive.wheels.size(), drive.throttle, drive.brake_in, drive.handbrake, drive.parked, drive.gear, drive.rpm, drive.drive_force, drive.mass, drive.power_w, freeze, sleeping, hits])
-	if not _drive_reverse and _void_glide(target, want, delta):
+	# fix_0103: Hangstillstand messen (Vollgas, alle Räder am Boden, keine Wand/kein Fahrzeug voraus)
+	# nur Gelände voraus zählt als frei – ein Fahrzeug/Soldat voraus nie (AFRICA1: Panzer hinter dem BMW-Gespann in der
+	# Grube schob es sonst kinematisch weg)
+	var slope_free := ah.is_empty() or ((ah["normal"] as Vector3).y >= 0.6 and ah["collider"] is StaticBody3D)
+	if slope_free and _slope_glide_t <= 0.0 and absf(drive.speed) < 0.5 and want > 0.5:
+		var near := PhysicsShapeQueryParameters3D.new()
+		var sph := SphereShape3D.new()
+		sph.radius = maxf(_size.x, _size.z) * 0.5 + 2.0
+		near.shape = sph
+		near.transform = Transform3D(Basis(), global_position)
+		near.collision_mask = 1 | (1 << 1)
+		near.exclude = own
+		for r in space.intersect_shape(near, 8):
+			if r["collider"] is Vehicle or (r["collider"] is Soldier and (r["collider"] as Soldier).alive):
+				slope_free = false
+				break
+	if _slope_glide_t <= 0.0 and _recover_t <= 0.0 and not _drive_reverse and want > 0.5 and slope_free \
+			and absf(drive.speed) < 0.5 and drive.throttle > 0.9 and drive.grounded >= drive.wheels.size() \
+			and (drive.kind == VehicleDrive.Kind.TANK or drive.kind == VehicleDrive.Kind.HALFTRACK) \
+			and String(Game.cli.get("slope_glide", "1")) != "0":
+		# nur Ketten/Halbketten: das AFRICA1-BMW-Gespann (Kind.BIKE) wurde in test_af1_finale bei der Nachführung
+		# geschleudert (Δv 15 m/s)
+		_slope_stall += delta
+		if _slope_stall > SLOPE_STALL_S:
+			_slope_glide_t = SLOPE_GLIDE_S
+			slope_glides += 1
+			var g0 := _ground_under(space)
+			_slope_off = clampf(global_position.y - float(g0.get("y", global_position.y - 0.6)), 0.0, 3.0)
+			freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+			freeze = true
+			_stuck_t = 0.0
+			if Game.cli.has("drive_debug"):
+				print("DRIVEDBG %s HANG-NACHFUEHRUNG an %s" % [name, global_position])
+	elif absf(drive.speed) >= 0.5 or not slope_free:
+		_slope_stall = 0.0
+	if not _drive_reverse and _slope_glide(target, want, delta):
+		_stuck_t = 0.0
+	elif not _drive_reverse and _void_glide(target, want, delta):
 		pass
 	elif _recover_t > 0.0:
 		_recover_t -= delta
@@ -988,12 +1122,28 @@ func _script_drive(delta: float) -> void:
 		Events.emit_noise(global_position, 60.0, driver(), driver().team, &"engine")
 
 
+## fix_0103: Hindernis geradeaus, aber Richtung zum Lenkziel frei (≥ 15° seitlich)?
+func _target_dir_free(space: PhysicsDirectSpaceState3D, from: Vector3, target: Vector3, dist: float, heading: Vector3, own: Array[RID]) -> bool:
+	var dir := target - global_position
+	dir.y = 0.0
+	if dir.length() < 0.5 or heading.length() < 0.01:
+		return false
+	dir = dir.normalized()
+	if dir.angle_to(heading.normalized()) < deg_to_rad(15.0):
+		return false
+	var q := PhysicsRayQueryParameters3D.create(from, from + dir * dist, 1 | (1 << 1), own)
+	var h := space.intersect_ray(q)
+	return h.is_empty() or (h["normal"] as Vector3).y >= 0.6
+
+
 func _next_drive_point() -> void:
 	_drive_goal = _drive_path.pop_front() if not _drive_path.is_empty() else Vector3.INF
 	_best_dist = INF
 	_stuck_t = 0.0
 	_recover_t = 0.0
 	if not _drive_goal.is_finite():
+		if _slope_glide_t > 0.0:
+			_end_slope_glide(0.0)
 		drive.release_controls(true)
 
 

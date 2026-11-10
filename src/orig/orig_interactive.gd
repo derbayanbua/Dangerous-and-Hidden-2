@@ -1023,6 +1023,10 @@ class OrigExplosive extends Interactable:
 		_worker = s
 		_work_kind = "plant" if state == 0 else "defuse"
 		_work = 3.0 if state == 0 else 4.0
+		# Fortschrittsbalken prgbr01/progress_name (OrigHud._update_progress über work_left/work_total)
+		s.work_total = _work
+		s.work_left = _work
+		s.work_label = OrigInteractive.text(7072 if state == 0 else 7075, "Bringt Sprengstoff an" if state == 0 else "Entschärft")
 		Events.say(OrigInteractive.text(7072 if state == 0 else 7075, "Bringt Sprengstoff an" if state == 0 else "Entschärft") + " …", _work)
 		OrigAudio.play_group(OrigAudio.CAT_MISC, OrigAudio.MISC_BOMB, global_position, self)   # „Player01 Bomb manipulation“
 		super.interact(s)
@@ -1031,8 +1035,11 @@ class OrigExplosive extends Interactable:
 		if _work > 0.0:
 			if not is_instance_valid(_worker) or not _worker.alive or _worker.global_position.distance_to(global_position) > 3.0:
 				_work = 0.0
+				if is_instance_valid(_worker):
+					_worker.work_left = 0.0
 			else:
 				_work -= delta
+				_worker.work_left = maxf(_work, 0.0)
 				if _work <= 0.0:
 					if _work_kind == "plant":
 						OrigInteractive.take_item(_worker, required_item)

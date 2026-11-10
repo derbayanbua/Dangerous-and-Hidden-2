@@ -47,6 +47,8 @@ var _wide_bg: TextureRect
 
 
 func _ready() -> void:
+	if Game.cli.has("server_config"):
+		return          # 0.10.3: eigenständiges Serverfenster (Game._open_server_config) – kein Menü, kein Intro
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	theme = UIKit.theme()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE

@@ -45,6 +45,15 @@ func _ready() -> void:
 ## Damage(7, Explosionsstärke) am Treffpunkt, danach Explosion mit 0,1 × Stärke; Aufschlag in der Welt: 0,5 × Stärke
 ## (Faktor im Nachbau nur für Fahrzeug-Schadensmodelle, docs/re_notes_ai.md §4) [B]
 var _veh_factor := 1.0
+
+
+## Direkttreffer-Stärke (0x449290 vor Damage(7)): im Einzelspieler (0x982100 & 7 == 7) auf Schwierigkeit 1 (0x6B6700)
+## und Schütze Seite 1 (Spielertrupp, Mensch +0x19C) × 4, sonst × 1 [B]. Bedingung „Geschoss +0x68 ≠ 0“ (Raketenmodell)
+## gilt im Nachbau für alle Aufschlaggeschosse [P].
+static func direct_hit_factor(by: Node, single_player: bool, difficulty: int) -> float:
+	if single_player and difficulty == 1 and WeaponDB.orig_side(by) == 1:
+		return 4.0
+	return 1.0
 var _last_vel := Vector3.ZERO
 
 
@@ -58,8 +67,9 @@ func _on_first_contact(body: Node) -> void:
 		if v is Vehicle:
 			_veh_factor = 0.1
 			var dir := _last_vel.normalized() if _last_vel.length() > 0.1 else -global_basis.z
-			(v as Vehicle).projectile_hit(7, data.damage if data else 0.0, global_position, dir,
-				thrower if is_instance_valid(thrower) else null)
+			var by: Node = thrower if is_instance_valid(thrower) else null
+			(v as Vehicle).projectile_hit(7, (data.damage if data else 0.0) * direct_hit_factor(by, not Net.is_online,
+				Game.difficulty()), global_position, dir, by)
 		elif not (body is Soldier):
 			_veh_factor = 0.5
 		explode.call_deferred()

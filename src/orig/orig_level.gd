@@ -509,9 +509,14 @@ func _build_orig_collision() -> void:
 		if e[5]:
 			# Klz-Bit 0x100000 (Grenze „Border - enemy filter“, Drahtgeflecht, Zeltplane): sperrt nur Bewegung, Sicht und
 			# Geschosse gehen durch (Ebene 5 wie Zäune) [P, docs/re_notes_script_anims.md §6]
+			# af1_finale2 [P]: Kartengrenze „Border - enemy filter“ (Frames unter …border…) sperrt nur Spieler/Trupp – die
+			# Gegner-KI läuft hindurch (AFRICA1-Verstärkung AF1_posila_01..10 startet außerhalb von m_af1_border und muss
+			# laut af1_posily_NN.scr hinein; sie blieb an Border_09 hängen). Eigene Ebene LevelBuilder.BORDER_LAYER.
+			var lay := LevelBuilder.BORDER_LAYER if String(mi.get_path()).to_lower().contains("border") \
+				and not Game.cli.has("border_enemy_block") else 1 << 4
 			for c in mi.get_children():
 				if c is StaticBody3D:
-					(c as StaticBody3D).collision_layer = 1 << 4
+					(c as StaticBody3D).collision_layer = lay
 			stats["pass_through"] = int(stats.get("pass_through", 0)) + 1
 
 

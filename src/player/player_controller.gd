@@ -428,6 +428,17 @@ func _select_key(event: InputEvent) -> int:
 	return -1
 
 
+## fix_0103 [D]: Magazin leer und Reserve vorhanden → automatisch nachladen (auch Netzspieler lokal; der Server zählt
+## die Munition wie beim Nachladen per Taste mit). true = Nachladen gestartet.
+static func auto_reload(s: Soldier) -> bool:
+	if s == null or not s.alive or s.vehicle != null:
+		return false
+	var w := s.current_weapon()
+	if w == null or w.in_mag > 0 or w.reserve <= 0 or w.is_reloading():
+		return false
+	return s.reload()
+
+
 func _physics_process(_delta: float) -> void:
 	if not is_instance_valid(active) or not active.alive:
 		return
@@ -440,6 +451,8 @@ func _physics_process(_delta: float) -> void:
 	if _suppress_fire and not Input.is_action_pressed("fire"):
 		_suppress_fire = false
 	var fire_ok := not _suppress_fire and not selection_open
+	if active.vehicle == null:
+		auto_reload(active)
 	var iv := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	if active.vehicle != null:
 		var v: Vehicle = active.vehicle

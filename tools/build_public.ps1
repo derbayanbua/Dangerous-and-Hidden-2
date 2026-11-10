@@ -92,6 +92,9 @@ echo.
 echo Freigabe eingerichtet (Netzwerkprofil "Privat" bzw. "Domaene").
 pause
 "@ | Set-Content -Encoding ASCII "$Out\Firewall_freigeben.cmd"
+# 4c) 0.10.3: Startverknuepfung fuer das Konfigurationsmenue des dedizierten Servers (ServerLauncher-Ersatz,
+#     Konfigurationen in ServerConfigs\*.cfg neben der EXE; Server = eigener kopfloser Prozess)
+[IO.File]::WriteAllText("$Out\DedicatedServer.cmd", "@echo off`r`nrem Dedizierter Server: Konfigurationsmenue (ServerConfigs\*.cfg), Start/Stopp, Status und Konsole.`r`nrem Ohne Menue direkt: DangerousHidden2.exe --headless -- --dedicated=ServerConfigs\Default.cfg`r`nstart `"`" `"%~dp0DangerousHidden2.exe`" -- --server_config`r`n", (New-Object Text.ASCIIEncoding))
   $liesmich = @"
 DANGEROUS AND HIDDEN 2 (inoffizieller Nachbau) – Spieltest-Build v$version
 
