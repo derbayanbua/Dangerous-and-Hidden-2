@@ -2,6 +2,12 @@
 
 
 
+## 0.10.5 (10.11.2026)
+
+- Internet-Mehrspieler: beim ersten Aufruf je Profil Hinweis zur Datenübertragung an den Masterserver (PC-Daten gehasht
+  und verschlüsselt, Profilname, IP-Adressen gehasht; nur für Sicherheit und Serverbrowser; Spielstand/Rang lokal und am
+  Server). Zustimmen speichert die Zustimmung im Profil, Ablehnen führt zurück ins Hauptmenü. Test `test_menu`.
+
 ## 0.10.4 (10.11.2026)
 
 - Bereinigung unfertiger Daten.

@@ -208,6 +208,9 @@ var lan_menu: LanMenu
 
 ## Mehrspieler im LAN (Godot-ENet statt DirectPlay)
 func open_lan(internet := false) -> void:
+	if internet and not online_consent_given():
+		_show_online_disclaimer()
+		return
 	Net.local_name = Game.profile_name if Game.has_profile() else "Spieler"
 	stage.visible = false
 	lan_menu = LanMenu.new()
@@ -219,6 +222,59 @@ func open_lan(internet := false) -> void:
 		lan_menu = null
 		stage.visible = true)
 	lan_menu.open()
+
+
+## Hinweis Datenübertragung beim ersten Internet-Mehrspieler je Profil ([D] 10.11.2026).
+const ONLINE_DISCLAIMER := "Beim Online-Mehrspieler werden folgende Daten an den Masterserver übertragen:\n\n" \
+	+ "• PC-Daten (gehasht und verschlüsselt)\n" \
+	+ "• der Profilname\n" \
+	+ "• IP-Adressen (gehasht)\n\n" \
+	+ "Diese Daten dienen nur der Sicherheit und dem Betrieb des Serverbrowsers.\n\n" \
+	+ "Spielstand und Rang werden im lokalen Profil und auf dem Masterserver gespeichert.\n\n" \
+	+ "Einverstanden?"
+
+var _consent_session := false    # ohne Profil: Zustimmung nur für diese Sitzung
+var online_dialog: ConfirmationDialog
+
+
+static func online_consent_given_for(p: Dictionary) -> bool:
+	return bool(p.get("online_consent", false))
+
+
+func online_consent_given() -> bool:
+	if Game.has_profile():
+		return online_consent_given_for(Game.profile)
+	return _consent_session
+
+
+func _show_online_disclaimer() -> void:
+	if online_dialog:
+		online_dialog.queue_free()
+	online_dialog = ConfirmationDialog.new()
+	online_dialog.title = tr("MEHRSPIELER-SPIEL - INTERNET")
+	online_dialog.dialog_text = tr(ONLINE_DISCLAIMER)
+	online_dialog.ok_button_text = tr("Zustimmen")
+	online_dialog.cancel_button_text = tr("Ablehnen")
+	online_dialog.exclusive = true
+	add_child(online_dialog)
+	online_dialog.confirmed.connect(func():
+		accept_online_consent()
+		online_dialog.queue_free()
+		online_dialog = null
+		open_lan(true))
+	online_dialog.canceled.connect(func():
+		online_dialog.queue_free()
+		online_dialog = null)
+	online_dialog.popup_centered(Vector2i(560, 0))
+
+
+func accept_online_consent() -> void:
+	if Game.has_profile():
+		Game.profile["online_consent"] = true
+		Game.profile["online_consent_date"] = Time.get_datetime_string_from_system()
+		Game.save_profile()
+	else:
+		_consent_session = true
 
 
 ## Hauptmenü-Hintergrund: handschriftlichen Originaltitel entfernen ([D]: statt

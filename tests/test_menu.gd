@@ -34,6 +34,30 @@ func _run() -> void:
 		"Profilordner mit profile.json und saves/ angelegt", ProjectSettings.globalize_path(Game.profile_dir()))
 	check(menu.current_menu == "change_profile", "Profilbildschirm angezeigt")
 	check(btn("profile_Alpha") != null, "Profil in der Liste")
+	# Datenschutz-Hinweis beim ersten Internet-Mehrspieler (neues Profil)
+	check(not menu.online_consent_given(), "Neues Profil: noch keine Online-Zustimmung")
+	menu.open_lan(true)
+	await frames(2)
+	check(menu.online_dialog != null and menu.lan_menu == null and menu.online_dialog.dialog_text.contains("Masterserver"),
+		"Internet: Hinweis erscheint vor dem Menü")
+	menu.online_dialog.canceled.emit()
+	await frames(2)
+	check(menu.lan_menu == null and not menu.online_consent_given(), "Ablehnen: kein Internet-Menü, keine Zustimmung")
+	menu.open_lan(true)
+	await frames(2)
+	menu.online_dialog.confirmed.emit()
+	await frames(3)
+	check(menu.online_consent_given() and menu.lan_menu != null and bool(Game.profile.get("online_consent", false)),
+		"Zustimmen: im Profil gespeichert, Internet-Menü offen")
+	if menu.lan_menu:
+		menu.lan_menu.back_requested.emit()
+		await frames(2)
+	menu.open_lan(true)
+	await frames(2)
+	check(menu.online_dialog == null and menu.lan_menu != null, "Zweites Mal: kein Hinweis mehr")
+	if menu.lan_menu:
+		menu.lan_menu.back_requested.emit()
+		await frames(2)
 	# Schwierigkeitsgrad
 	btn("beasy-war never was so fun!").pressed.emit()
 	await frames(2)
