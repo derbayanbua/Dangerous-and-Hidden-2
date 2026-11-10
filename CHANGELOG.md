@@ -2,6 +2,10 @@
 
 
 
+## 0.10.4 (10.11.2026)
+
+- Bereinigung unfertiger Daten.
+
 ## 0.10.3 (10.11.2026)
 
 - **Dedizierter Server mit Konfigurations-Launcher** (nach dem Original-ServerLauncher): eigenes Fenster ohne Spielstart

@@ -35,3 +35,6 @@ werkzeuge/
 docs/*
 !docs/screenshots/
 CLAUDE.md
+
+# Masterserver bleibt lokal ([D] 10.11.2026)
+server-browser/
