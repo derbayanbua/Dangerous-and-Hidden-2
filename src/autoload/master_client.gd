@@ -290,14 +290,17 @@ func error_text(code: String) -> String:
 func request(method: String, path: String, query := "", body = null, retries := RETRIES) -> Dictionary:
 	if not is_official_build():
 		return {"ok": false, "status": 0, "code": "NO_BUILD", "text": error_text("NO_BUILD")}
-	var raw := PackedByteArray()
-	if typeof(body) == TYPE_PACKED_BYTE_ARRAY:
-		raw = body
-	elif body != null:
-		raw = JSON.stringify(sanitize(body)).to_utf8_buffer()
 	var res := {}
 	var delay := 1.0
 	for attempt in retries + 1:
+		# 0.11.2: signierte Umschläge je Versuch NEU bauen (eigene ts/nonce) – eine Wiederholung mit identischem Umschlag
+		# wertet der Master als REPLAY-Verstoß. Aufrufer übergeben dafür ein Callable, das den Umschlag erzeugt.
+		var b = body.call() if typeof(body) == TYPE_CALLABLE else body
+		var raw := PackedByteArray()
+		if typeof(b) == TYPE_PACKED_BYTE_ARRAY:
+			raw = b
+		elif b != null:
+			raw = JSON.stringify(sanitize(b)).to_utf8_buffer()
 		res = await _send(method, path, query, raw)
 		var st := int(res["status"])
 		var transient: bool = st == 0 or st == 429 or st >= 500
@@ -594,7 +597,7 @@ func login(profile := {}) -> bool:
 	var lp := {"op": "login", "guid_hash": gh, "build": build_info()}
 	if profile.has("rank"):
 		lp["rank"] = int(profile["rank"])     # nur Information, nie maßgeblich
-	var res := await request("POST", "/v1/accounts/login", "", make_envelope("DH2/v1/account", lp, key, akid))
+	var res := await request("POST", "/v1/accounts/login", "", func(): return make_envelope("DH2/v1/account", lp, key, akid))
 	if not res["ok"] and (res["code"] == "UNKNOWN_ACCOUNT" or (int(acc.get("bound_at", 0)) == 0 and res["code"] != "NET_OFFLINE")):
 		var bres := await _bind(acc, key, akid, pname)
 		if not bres["ok"]:
@@ -604,7 +607,7 @@ func login(profile := {}) -> bool:
 		acc["master_kid"] = String(bres["kid"])
 		acc["name"] = String(bres["payload"].get("name", pname))
 		_save_account(path, acc)
-		res = await request("POST", "/v1/accounts/login", "", make_envelope("DH2/v1/account", lp, key, akid))
+		res = await request("POST", "/v1/accounts/login", "", func(): return make_envelope("DH2/v1/account", lp, key, akid))
 	if not res["ok"]:
 		_login_fail(res)
 		return false
@@ -701,7 +704,7 @@ func _bind(acc: Dictionary, key: CryptoKey, akid: String, pname: String) -> Dict
 	var ts := now()
 	var p := {"ts": ts, "op": "bind", "account_pubkey_pem": key.save_to_string(true), "name": pname,
 		"build": build_info(), "guid_box": guid_box(String(acc["guid"]), ts, akid, mkid)}
-	var res := await request("POST", "/v1/accounts/bind", "", make_envelope("DH2/v1/account", p, key, akid))
+	var res := await request("POST", "/v1/accounts/bind", "", func(): return make_envelope("DH2/v1/account", p, key, akid))
 	if not res["ok"]:
 		return res
 	var pl = open_master_envelope(res["json"], "DH2/v1/master-response")
@@ -794,6 +797,9 @@ func _print_dedicated_identity() -> void:
 
 
 ## Registrierung. info: {name, port, public?}. Startet den Heartbeat.
+var _reg_fail_n := 0     ## aufeinanderfolgende Ablehnungen wegen Sperre (gestaffelte Wartezeit)
+
+
 func register_server(info: Dictionary) -> bool:
 	if server_key == null:
 		error.emit("KEY_REJECTED", "Kein Serverschlüssel geladen.")
@@ -804,12 +810,20 @@ func register_server(info: Dictionary) -> bool:
 		"public": bool(info.get("public", true))}
 	if build_hash != "":
 		p["build_hash"] = build_hash
-	var res := await request("POST", "/v1/servers/register", "", make_envelope("DH2/v1/register", p, server_key, server_id))
+	var res := await request("POST", "/v1/servers/register", "", func(): return make_envelope("DH2/v1/register", p, server_key, server_id))
 	if not res["ok"]:
 		registered = false
 		_fail(res)
-		_hb_timer.start(60.0)          # später erneut versuchen
+		# später erneut versuchen; nach einer Sperre nicht jede Minute neu anmelden (zählt sonst als weiterer Verstoß):
+		# retry_after des Masters beachten, sonst gestaffelt 60 s → 5 → 15 → 60 min (0.11.2)
+		var wait := 60.0
+		if String(res.get("code", "")) in ["SERVER_BANNED", "IP_BANNED", "KEY_REJECTED", "REPLAY"]:
+			_reg_fail_n += 1
+			wait = [300.0, 900.0, 3600.0][mini(_reg_fail_n - 1, 2)]
+		wait = maxf(wait, float(res.get("retry_after", 0)))
+		_hb_timer.start(minf(wait, 6.0 * 3600.0))
 		return false
+	_reg_fail_n = 0
 	registered = true
 	_hb_seq = maxi(_hb_seq, Time.get_ticks_msec())
 	var j: Dictionary = res["json"] if typeof(res["json"]) == TYPE_DICTIONARY else {}

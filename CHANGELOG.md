@@ -2,6 +2,21 @@
 
 
 
+## 0.11.3 (11.11.2026) – Hotfix
+
+**DE**
+- **Masterserver-Anmeldung:** Bei kurzen Netzwerkfehlern schickt das Spiel eine Anfrage nicht mehr unverändert erneut,
+  sondern baut sie mit neuem Zeitstempel neu auf. Bisher konnte der Masterserver das als Wiederholungsangriff werten und
+  einen Server sperren.
+- Nach einer Sperre meldet sich ein Server gestaffelt (5/15/60 min bzw. nach der Vorgabe des Masterservers) erneut an
+  statt jede Minute.
+
+**EN**
+- **Master server registration:** after short network errors the game no longer resends an identical request; it builds
+  a new one with a fresh timestamp. Previously the master server could treat this as a replay attack and ban the server.
+- After a ban, a server retries registration with a staggered delay (5/15/60 min or as told by the master server)
+  instead of every minute.
+
 ## 0.11.2 (11.11.2026) – Hotfix
 
 **DE**
