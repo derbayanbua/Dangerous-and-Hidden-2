@@ -2,6 +2,24 @@
 
 
 
+## 0.11.2 (11.11.2026) – Hotfix
+
+**DE**
+- **Spawn-Schutz:** Nach dem Spawn ist man für die Schutzzeit unverwundbar und kann nicht schießen, werfen, stechen
+  oder Ladungen legen (Spieler und KI gleich). Der Schutz endet nach Ablauf der Zeit; der Server verwirft Aktionen in
+  dieser Zeit. Anzeige „Respawn-Schutz N s – Feuern gesperrt“.
+- Diagnose für dedizierte Server: `--bot_trace=1` protokolliert Zustand und Ziele der KI-Soldaten.
+- Paketbau: Skript für den Build-Schlüssel auf reines ASCII umgestellt.
+- Behoben: Fehlermeldung beim Abschießen eines Helms (fehlende Zweitwaffe auf dem Rücken) und vier ähnliche Stellen.
+
+**EN**
+- **Spawn protection:** after spawning you are invulnerable for the protection time and cannot shoot, throw, stab or
+  place charges (players and AI alike). Protection ends when the time runs out; the server rejects such actions during
+  it. HUD shows "Respawn protection N s – firing locked".
+- Diagnostics for dedicated servers: `--bot_trace=1` logs state and targets of AI soldiers.
+- Packaging: build-key script converted to plain ASCII.
+- Fixed: error when a helmet is shot off (no second weapon on the back) and four similar places.
+
 ## 0.11.1 (11.11.2026) – Online-Mehrspieler
 
 - **Internet-Mehrspieler mit Serverbrowser** im Stil des Originals: Serverliste über den Masterserver (sortierbar, Filter,

@@ -375,6 +375,14 @@ func top_text() -> String:
 	return "   |   ".join(parts)
 
 
+## 0.11.2: Hinweis „Spawn-Schutz“ mit Restzeit (Feuern gesperrt), "" ohne Schutz
+func protect_text() -> String:
+	var me: Soldier = Net._soldiers.get(Net.my_id())
+	if not is_instance_valid(me) or not me.alive or not Net.spawn_protected(me):
+		return ""
+	return "%s  %d s – %s" % [Net.tx(20313, "Respawn-Schutz"), int(ceil(Net.spawn_protect_left(me))), tr("Feuern gesperrt")]
+
+
 func state_text() -> String:
 	var me: Soldier = Net._soldiers.get(Net.my_id())
 	var p: Dictionary = Net.players.get(Net.my_id(), {})
@@ -385,8 +393,7 @@ func state_text() -> String:
 		return "ZUSCHAUER%s\n(LMT/RMT: Spieler wechseln, Leertaste: freie Kamera)" % who
 	if is_instance_valid(me) and me.alive:
 		var out := ""
-		if me.has_meta("protect_until") and Time.get_ticks_msec() < int(me.get_meta("protect_until")):
-			out = Net.tx(20313, "Respawn-Schutz")
+		out = protect_text()
 		if me.has_meta("vip"):
 			out += ("\n" if out != "" else "") + "VIP"
 		return out

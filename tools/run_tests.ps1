@@ -120,6 +120,7 @@ $suites = @(
   @{ name = "test_support_strike"; args = "--headless -- --autoplay=test_support_strike"; mp = $true },
   @{ name = "test_net_authority"; args = "--headless -- --autoplay=test_net_authority"; mp = $true },
   @{ name = "test_net_master"; args = "--headless -- --autoplay=test_net_master"; mp = $true },   # 0.11.1 Spiel <-> Master (2 Prozesse, lokaler Mock)
+  @{ name = "test_mp_bots_online"; args = "--headless -- --autoplay=test_mp_bots_online --setup_gate=1 --profiles_dir=user://test_mp_bots_online --noimport"; mp = $true },   # 0.11.2 Bots auf dediziertem Server + Spawn-Schutz
   # B-029: Coop-Stil (zweiprozessig mit test_mp_coop_client)
   @{ name = "test_mp_coop"; args = "--headless -- --autoplay=test_mp_coop"; mp = $true },
   # 0.10.8: Testkarte Bavaria (laufen mit und ohne die lokalen Kartenbilder)

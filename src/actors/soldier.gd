@@ -1041,6 +1041,11 @@ func _update_weapon(delta: float) -> void:
 	_melee_cd = maxf(_melee_cd - delta, 0.0)
 	if is_throwing():
 		return                      # Wurfanimation läuft: Waffe ruht bis die Granate die Hand verlassen hat
+	if not net_puppet and Net.spawn_protected(self):
+		_trigger_prev = trigger     # 0.11.2: Spawn-Schutz sperrt Feuern/Werfen/Stechen/Werkzeug bis zum Ablauf (Spieler und KI)
+		_tool_trigger_prev = trigger
+		_stab_queued = false
+		return
 	if tool != "":
 		if trigger and not _tool_trigger_prev:
 			use_tool()
@@ -1628,7 +1633,7 @@ var _throw_prop := ""     ## Granatenmodell in der Hand während der Wurfanimati
 
 ## override_velocity: von der KI berechnete Abwurfgeschwindigkeit (sonst Blickrichtung).
 func throw_grenade(w: Weapon, override_velocity := Vector3.INF) -> void:
-	if is_throwing():
+	if is_throwing() or (not net_puppet and Net.spawn_protected(self)):
 		return
 	if w.in_mag <= 0:
 		if w.reserve <= 0:
@@ -1704,7 +1709,7 @@ func apply_hit(amount: float, zone: StringName, attacker: Node, direction: Vecto
 	if Net.is_online:
 		if not Net.is_authority():
 			return       # Mehrspieler: Schaden berechnet nur der Server (Gesundheit kommt per Net._hp)
-		if has_meta("protect_until") and Time.get_ticks_msec() < int(get_meta("protect_until")):
+		if Net.spawn_protected(self):
 			return       # Spawnschutz (Original: einige Sekunden nach dem Erscheinen)
 		if attacker is Soldier and attacker != self and (attacker as Soldier).team == team and not Net.friendly_fire():
 			return       # Freund-Feind-Schaden aus

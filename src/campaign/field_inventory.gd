@@ -180,7 +180,7 @@ static func back_weapon(s: Node) -> Weapon:
 	# Akteure ohne Inventardaten / freigegebene Knoten: kein Rückenplatz (B-020-Hinweis: Fehlerflut auf arctic1)
 	if s == null or not is_instance_valid(s) or not s.has_meta("back_weapon"):
 		return null
-	var bw: Variant = s.get_meta("back_weapon", null)
+	var bw: Variant = (s.get_meta("back_weapon") if s.has_meta("back_weapon") else null)
 	return bw if bw is Weapon else null
 
 
@@ -336,7 +336,7 @@ static func weapon_pool(n: Node) -> Array:
 		for w in (n as Soldier).weapons:
 			if w:
 				out.append(w)
-		var bw = n.get_meta("back_weapon", null)
+		var bw = (n.get_meta("back_weapon") if n.has_meta("back_weapon") else null)
 		if bw is Weapon:
 			out.append(bw)
 		for w in n.get_meta("surrendered_weapons", []):

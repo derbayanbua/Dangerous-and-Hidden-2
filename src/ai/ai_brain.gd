@@ -97,7 +97,7 @@ func _on_link_reached(details: Dictionary) -> void:
 	if not link.has_meta("ladder"):
 		return
 	var bottom = link.get_meta("ladder")
-	var top = link.get_meta("ladder_top", null)
+	var top = (link.get_meta("ladder_top") if link.has_meta("ladder_top") else null)
 	if not is_instance_valid(bottom):
 		return
 	var at: Vector3 = details.get("link_entry_position", soldier.global_position)

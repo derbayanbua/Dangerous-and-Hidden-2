@@ -80,7 +80,7 @@ static func decide(s: Node3D, _direction := Vector3.ZERO) -> int:
 	var fresh := now - int(s.get_meta("_gore_ms", 0)) <= RECENT_MS
 	var zone := String(s.get_meta("_gore_zone", "")) if fresh else ""
 	var bullet := now - int(s.get_meta("_rd_hit_ms", -100000)) <= RECENT_MS
-	var w = s.get_meta("_gore_w", null) if bullet else null
+	var w = (s.get_meta("_gore_w") if s.has_meta("_gore_w") else null) if bullet else null
 	if String(s.get_meta("death_kind", "")) == "throat":
 		return 0
 	# Explosion in Reichweite (Effects.explosion → Ragdoll._recent): Stärke nach Abstand

@@ -602,6 +602,18 @@ func _auth_fail_deferred(code: String, info: String) -> void:
 
 
 ## Online-Modus mit Masterserver: Internet-Server eines offiziellen Builds (LAN/Editor ohne Schlüssel: nie).
+## 0.11.2: Spawn-Schutz (Regel spawnprotection): unverwundbar und Feuern gesperrt bis zum Ablauf (Spieler und KI).
+func spawn_protected(s: Node) -> bool:
+	return spawn_protect_left(s) > 0.0
+
+
+## Restzeit des Spawn-Schutzes in s (0 = keiner); nur online, Uhr des jeweiligen Rechners (Meta beim _spawn gesetzt)
+func spawn_protect_left(s: Node) -> float:
+	if not is_online or not is_instance_valid(s) or not s.has_meta("protect_until"):
+		return 0.0
+	return maxf(float(int(s.get_meta("protect_until")) - Time.get_ticks_msec()) / 1000.0, 0.0)
+
+
 func master_mode() -> bool:
 	var ms := get_node_or_null("/root/Master")
 	return is_online and bool(settings.get("internet", false)) and ms != null and ms.is_official_build()
@@ -2694,6 +2706,8 @@ func _act_error(s: Soldier, kind: String, a: Vector3, b: Vector3, wid: String) -
 	var mounted := is_instance_valid(s.mounted) or s.vehicle != null
 	var here := s.global_position
 	var near := minf(a.distance_to(here + Vector3.UP * 1.0), a.distance_to(s.net_target + Vector3.UP * 1.0))
+	if kind in ["shot", "rocket", "grenade", "melee", "charge"] and spawn_protected(s):
+		return "Spawn-Schutz (%.1f s)" % spawn_protect_left(s)     # 0.11.2: Feuer bis Ablauf gesperrt
 	match kind:
 		"shot", "rocket", "grenade":
 			var wd: WeaponData = _net_weapon(wid)
@@ -5025,11 +5039,41 @@ func _make_bot(s: Soldier, id: int) -> void:
 		grp[i].slot = i
 
 
+var _trace_t := 0.0
+
+
+## Diagnose (--bot_trace=1, nur dedizierter Server): je 2 s Lage/Zustand/Ziel jedes KI-Soldaten
+func _bot_trace(_d: float) -> void:
+	if Time.get_ticks_msec() - int(_trace_t) < 2000:
+		return
+	_trace_t = Time.get_ticks_msec()
+	for id in _soldiers:
+		var s: Soldier = _soldiers[id]
+		if not is_instance_valid(s):
+			continue
+		var b = s.get_node_or_null("EnemyBrain")
+		var p = s.get_node_or_null("Perception")
+		var tgt = p.best_target() if p and p.has_method("best_target") else null
+		print("BOTTRACE id=%d team=%d hp=%.0f pos=%s alive=%s ctl=%s puppet=%s state=%s en=%s tgt=%s cand=%d" % [int(id), s.team,
+			s.health, s.global_position.round(), s.alive, s.is_player_controlled, s.net_puppet,
+			str(b.get("state")) if b else "-", str(b.get("enabled")) if b else "-",
+			(String(tgt.name) if is_instance_valid(tgt) else "-"), p.enemy_candidates().size() if p else -1])
+		if int(id) < 0 and p:
+			for hid in _soldiers:
+				var h: Soldier = _soldiers[hid]
+				if int(hid) > 0 and is_instance_valid(h):
+					print("BOTTRACE   -> human %d d=%.1f aw=%.2f vis=%s dis=%s stance=%d moving=%s" % [int(hid),
+						h.global_position.distance_to(s.global_position), float(p.awareness.get(h, 0.0)), str(p.visible_now.get(h, false)),
+						str(h.disguised), h.stance, str(h.is_moving())])
+
+
 func _bot_sync(delta: float) -> void:
 	_bot_sync_t -= delta
 	if _bot_sync_t > 0.0:
 		return
 	_bot_sync_t = SYNC_INTERVAL
+	if dedicated and OS.get_cmdline_user_args().has("--bot_trace=1"):
+		_bot_trace(delta)
 	for id in _soldiers:
 		if int(id) >= 0:
 			continue

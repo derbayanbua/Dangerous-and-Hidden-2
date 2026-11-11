@@ -131,6 +131,57 @@ def _skin_primitives(g, lod, mat_ids, joints4, weights4):
     return prims
 
 
+def _morph_targets(g, morph, lod, prims):
+    """Morph-Block (Singlemorph) -> glTF-Blendshapes „m<Kanal>_<Ziel>“ (Ziel ≥ 1, nur wirksame).
+
+    Belege (docs/re_notes_lipsync.md): je Kanal nv Vertices × Ziele × (Pos vec3, Normale vec3), Vertex-major
+    (Ziel 0 = Grundform, deckt sich exakt mit LOD 0); links[nv] = Vertexindex in LOD 0. LS3DF.dll FUN_10035490
+    legt je Kanal eine Gewichtszeile an (Ziel 0 = 1, Rest 0); die Laufzeit (hd2.exe 0x71EE00) setzt Gewichte je
+    (Kanal, Ziel), die je Kanal zu 1 summieren -> Vertex = Σ w·Ziel = Grundform + Σ w·(Ziel − Grundform)."""
+    if not morph or not morph.get("targets"):
+        return []
+    T = morph["targets"]
+    verts = lod["vertices"]
+    n = len(verts)
+    names = []
+    targets = []
+    for ci, ch in enumerate(morph["channels"]):
+        nv = ch["nv"]
+        if nv == 0:
+            continue
+        vals = struct.unpack_from("<%df" % (nv * T * 6), ch["data"])
+        links = ch.get("links") or list(range(nv))
+        for t in range(1, T):
+            dp = [0.0] * (n * 3)
+            dn = [0.0] * (n * 3)
+            mx = 0.0
+            for i in range(nv):
+                vi = links[i]
+                if vi >= n:
+                    continue
+                o = (i * T + t) * 6
+                b = verts[vi]
+                d = (vals[o] - b[0], vals[o + 1] - b[1], -(vals[o + 2] - b[2]))
+                mx = max(mx, abs(d[0]), abs(d[1]), abs(d[2]))
+                dp[vi * 3:vi * 3 + 3] = d
+                nl = math.sqrt(vals[o + 3] ** 2 + vals[o + 4] ** 2 + vals[o + 5] ** 2) or 1.0
+                bl = math.sqrt(b[3] ** 2 + b[4] ** 2 + b[5] ** 2) or 1.0
+                dn[vi * 3:vi * 3 + 3] = (vals[o + 3] / nl - b[3] / bl, vals[o + 4] / nl - b[4] / bl,
+                                         -(vals[o + 5] / nl - b[5] / bl))
+            if mx < 1e-6:
+                continue
+            mn3 = [min(dp[k::3]) for k in range(3)]
+            mx3 = [max(dp[k::3]) for k in range(3)]
+            pa = g._acc(g._view(struct.pack("<%df" % len(dp), *dp), 34962), 5126, n, "VEC3", mn3, mx3)
+            na = g._acc(g._view(struct.pack("<%df" % len(dn), *dn), 34962), 5126, n, "VEC3")
+            targets.append({"POSITION": pa, "NORMAL": na})
+            names.append("m%d_%d" % (ci, t))
+    if targets:
+        for p in prims:
+            p["targets"] = targets
+    return names
+
+
 def _vertex_weights(skin, nverts, lod_index=0):
     """-> (joints4, weights4) mit Skin-Gelenkindizes (0 = Mesh-Frame, jid+1 = Joint-Frame)."""
     W = skin["lod_weights"][lod_index]
@@ -221,7 +272,12 @@ def export_character(model_4ds_bytes, anims, textures, tex_rel, out_path, name=N
         lod = fr["lods"][0]
         j4, w4 = _vertex_weights(skin, len(lod["vertices"]))
         prims = _skin_primitives(g, lod, mat_ids, j4, w4)
-        g.j["meshes"].append({"name": _frame_name(fr), "primitives": prims})
+        mesh = {"name": _frame_name(fr), "primitives": prims}
+        names = _morph_targets(g, fr.get("morph"), lod, prims)
+        if names:
+            mesh["weights"] = [0.0] * len(names)
+            mesh["extras"] = {"targetNames": names}
+        g.j["meshes"].append(mesh)
         sk_node = g.node({"name": name + "_" + _frame_name(fr) + "_skin", "mesh": len(g.j["meshes"]) - 1,
                           "skin": len(g.j["skins"]) - 1})
         g.j["nodes"][root]["children"].append(sk_node)

@@ -326,7 +326,7 @@ static func pack_fpv_pos(vm: Node3D, aim: bool) -> Vector3:
 	if not aim:
 		return PACK_FPV_POS.get(nm, Vector3(0.17, -0.2, -0.42))
 	var h := 0.15
-	var muz: Variant = vm.get_meta("muzzle", null)
+	var muz: Variant = (vm.get_meta("muzzle") if vm.has_meta("muzzle") else null)
 	if muz is Node3D and (muz as Node3D).get_parent() is Node3D:
 		h = (muz as Node3D).position.y + ((muz as Node3D).get_parent() as Node3D).position.y   # Mündungshöhe über dem Griff
 	var x := 0.07 if nm == "Panzerschreck" else 0.0
