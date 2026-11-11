@@ -114,7 +114,7 @@ func _run() -> void:
 		if acc and not await click(acc):
 			acc.pressed.emit()
 		await frames(5)
-		check(Net.local_class == 0, "Client: Klasse gewählt (MG-Schütze)")
+		check(Net.local_class == MpClasses.MEDIC, "Client: Klasse gewählt (%s)" % tr(MpClasses.NAMES[MpClasses.MEDIC]))
 		var changed := func() -> bool: return int(Net.players[Net.my_id()].get("cls", -1)) == 0 \
 			and int(Net.players[Net.my_id()].get("next_team", Net.players[Net.my_id()]["team"])) == other
 		check(await wait_for(changed, 60.0), "Client: Server übernimmt Klasse und Seite (request_class/request_team)")

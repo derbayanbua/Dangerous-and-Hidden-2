@@ -147,6 +147,7 @@ func on_ai_died(s: Node, attacker: Node) -> void:
 		if Net.players.has(pid) and not Net.match_over and Net.game_state != Net.State.WARMUP:
 			Net.players[pid]["kills"] = int(Net.players[pid]["kills"]) + 1
 			Net.players[pid]["score"] = int(Net.players[pid]["score"]) + Net.PTS_KILL
+			Net.players[pid]["ai_kills"] = int(Net.players[pid].get("ai_kills", 0)) + 1     # 0.11.1 Master-Bericht
 			ai_kills += 1
 			Net._update_ranks()
 			Net._players.rpc(Net.players)

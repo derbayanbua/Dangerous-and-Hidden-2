@@ -687,13 +687,38 @@ func send_console(line: String) -> void:
 	_stdio.flush()
 
 
+var server_id := ""                 ## 0.11.1: Server-ID aus der Konsolenzeile „MASTER: Server-ID <64 hex>“
+var server_id_edit: LineEdit         ## schreibgeschützt, zum Kopieren für die Freigabeliste des Masters
+
+
 func _append_log(s: String) -> void:
+	var rx := RegEx.create_from_string("MASTER: Server-ID ([0-9a-f]{64})")
+	var mt := rx.search(s)
+	if mt:
+		server_id = mt.get_string(1)
+		_show_server_id()
 	log_text += s
 	if log_text.length() > 60000:
 		log_text = log_text.substr(log_text.length() - 40000)
 	if log_view:
 		log_view.text = log_text
 		log_view.scroll_vertical = log_view.get_line_count()
+
+
+func _show_server_id() -> void:
+	if status_label == null:
+		return
+	if server_id_edit == null:
+		server_id_edit = LineEdit.new()
+		server_id_edit.name = "ServerId"
+		server_id_edit.editable = false
+		server_id_edit.select_all_on_focus = true
+		server_id_edit.add_theme_font_size_override("font_size", 12)
+		status_label.get_parent().add_child(server_id_edit)
+		status_label.get_parent().move_child(server_id_edit, status_label.get_index() + 1)
+	server_id_edit.text = "%s %s" % [tr("Server-ID:"), server_id]
+	server_id_edit.visible = server_id != ""
+	status_label.text = "%s\n%s %s" % [status_label.text.get_slice("\n", 0), tr("Server-ID:"), server_id]
 
 
 func _update_buttons() -> void:

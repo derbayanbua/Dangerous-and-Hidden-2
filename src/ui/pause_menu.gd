@@ -28,9 +28,24 @@ func open_player_setup() -> void:
 	ps.name = "PlayerSetup"
 	_root.add_child(ps)
 	player_setup = ps
-	ps.accepted.connect(_close_player_setup)
+	ps.accepted.connect(func():
+		var first := Net.setup_pending
+		_close_player_setup()
+		if first:
+			Net.confirm_setup()        # 0.11.1: erst jetzt gibt der Server den Spawn frei
+			close())
 	ps.back_requested.connect(_close_player_setup)
 	ps.open(String(Net.settings.get("map", Game.current_mission_id)), int(Net.rule("respawn_s")))
+
+
+## 0.11.1: nach dem Beitritt (LAN/Internet, auch Host) öffnet das SPIELER-SETUP automatisch; gespawnt wird erst
+## nach AKZEPTIEREN (Net.confirm_setup). ZURÜCK lässt das Pausenmenü offen, SPIELER-SETUP dort erneut wählbar.
+func open_initial_setup() -> void:
+	if not Net.setup_pending or Net.dedicated:
+		return
+	if not _open:
+		open()
+	open_player_setup()
 
 
 func _close_player_setup() -> void:

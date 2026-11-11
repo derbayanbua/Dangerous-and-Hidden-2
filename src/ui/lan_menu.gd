@@ -51,6 +51,12 @@ var _max_ping: SpinBox
 var _max_freq: SpinBox
 var _max_idle: SpinBox
 var _autorestart: CheckBox
+var _flood: CheckBox               ## floodprotect (Konsole/Config, jetzt auch im Formular)
+var _spawn_start: CheckBox         ## spawnonstart (T20214 RESPAWN BEIM NEUSTART)
+var _precise: CheckBox             ## preciseaim (Ergänzung 0.10.1)
+## 0.11.1: Formular = Datenmodell; sichtbar ist der Original-Bildschirm CreateServerScreen (create server.4ds)
+var create_screen: CreateServerScreen
+var _form: Control
 ## Internet-Variante (Hauptmenü „MEHRSPIELER-SPIEL – INTERNET“, T2116/2321): Favoriten statt LAN-Liste,
 ## Server standardmäßig als Internet-Server (UPnP). Ersatz für GameSpy: kein Masterserver.
 var internet := false
@@ -106,6 +112,9 @@ func _apply_style_defaults() -> void:
 	_coop_lives.value = d["coop_lives"]
 	_team_lives.button_pressed = d["team_lives"]
 	_crosshair.button_pressed = d["allow_crosshair"]
+	if _flood:
+		_flood.button_pressed = bool(d.get("flood_protect", true))
+		_spawn_start.button_pressed = bool(d.get("spawn_on_start", false))
 	_fill_map_choice()
 
 
@@ -114,9 +123,9 @@ func _apply_style_defaults() -> void:
 const MAPLIST_PATH := "user://mp_maplists.json"
 
 
-func _style_maps() -> Array:
+func _style_maps(style := -1) -> Array:
 	var out: Array = []
-	var m := _mode.selected
+	var m := _mode.selected if style < 0 else style
 	for id in Game.MP_MAPS:
 		var st = Game.MISSIONS[id].get("mp_mode")
 		if (st == null and m <= Net.Mode.TEAM_DEATHMATCH) or (st != null and int(st) == m) \
@@ -239,8 +248,8 @@ func open() -> void:
 	_mode.item_selected.connect(func(_i): _apply_style_defaults())
 	_cls = _option(g, "Klasse")
 	for i in Net.CLASS_NAMES.size():
-		_cls.add_item(Net.CLASS_NAMES[i], i)
-	_cls.select(2)
+		_cls.add_item(tr(Net.CLASS_NAMES[i]), i)
+	_cls.select(MpClasses.DEFAULT)
 	# Wertebereiche wie im Original-Servermenü (docs/re_notes_multiplayer.md §2.1), Standards je Stil §2.2
 	_maxp = _spin(g, SAS.text(2364, "MAXIMALE SPIELERZAHL"), 2, 32, 32)
 	_score = _spin(g, SAS.text(2365, "PUNKTELIMIT") + " (0 = aus)", 0, 999, 20)
@@ -309,6 +318,10 @@ func open() -> void:
 	_crosshair = _check(g, SAS.text(20212, "FADENKREUZ ZULASSEN"), true)
 	_crosshair.tooltip_text = "Wie im Original nur Serverinfo, ohne Wirkung (allowcrosshair)"
 	_coop_lives = _spin(g, SAS.text(20213, "RESPAWN-ANZAHL") + " (-1 = ∞)", -1, 99, -1)
+	# 0.11.1: übrige Regeln aus Net.RULE_KEYS (bisher nur Konsole/Config)
+	_spawn_start = _check(g, SAS.text(20214, "RESPAWN BEIM NEUSTART"), false)
+	_flood = _check(g, "FLOOD-SCHUTZ", true)
+	_precise = _check(g, "PRÄZISES ZIELEN", Settings.precise_aim)
 	# 0.10.3: Konfigurationsmenü des dedizierten Servers (ServerLauncher-Nachbau) – letzte Formularzeile, damit die
 	# Original-Felder und die Höhe der Bildlaufliste unverändert bleiben (test_lan_e2e)
 	_label(g, tr("DEDIZIERTER SERVER"))
@@ -326,9 +339,10 @@ func open() -> void:
 	_map_choice.multi_selected.connect(func(_i, _s): _save_map_choice())
 	left.add_child(_map_choice)
 	_sync_mode()
-	var host_b := UIKit.button("Server starten", _host, left)
-	host_b.name = "HostButton"
-	UIKit.button(SAS.text(2551, "SPIELER-SETUP"), open_player_setup, left).name = "PlayerSetupButton"
+	# 0.11.1: das Formular bleibt Datenmodell (Felder, Regeln, Kartenrotation), bedient wird es über den
+	# Original-Bildschirm SERVER ERSTELLEN (CreateServerScreen, open_create)
+	_form = left
+	left.visible = false
 	# --- rechts: Serverliste ---
 	var right := VBoxContainer.new()
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -341,6 +355,10 @@ func open() -> void:
 	_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_list.item_activated.connect(func(i): _join_listed(i))
 	right.add_child(_list)
+	var row0 := HFlowContainer.new()
+	right.add_child(row0)
+	UIKit.button(SAS.text(2311, "SERVER ERSTELLEN"), open_create, row0).name = "CreateServerButton"
+	UIKit.button(SAS.text(2551, "SPIELER-SETUP"), open_player_setup, row0).name = "LanPlayerSetupButton"
 	var row := HFlowContainer.new()
 	right.add_child(row)
 	UIKit.button("Beitreten", func():
@@ -384,7 +402,7 @@ func open() -> void:
 	g2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UIKit.button("Per IP beitreten", func(): _do_join(_ip.text.strip_edges(), Net.PORT), right)
 	# Knöpfe der rechten Spalte schmaler (UIKit 320 px) – Zeilen brechen bei Bedarf um
-	for r in [row, row2]:
+	for r in [row0, row, row2]:
 		for b in r.get_children():
 			if b is Button:
 				b.custom_minimum_size.x = 250
@@ -409,9 +427,9 @@ func open() -> void:
 		back_requested.emit(), v)
 	Net.servers_updated.connect(_refresh)
 	Net.status_changed.connect(func(t): if is_instance_valid(_status): _status.text = t)
-	Net.browsing_favorites = internet
+	Net.browsing_favorites = false
 	if internet:
-		pass
+		_open_browser()
 	elif not Net.start_browse():
 		_status.text = Net.last_error
 	elif Net.last_error != "":
@@ -420,6 +438,72 @@ func open() -> void:
 
 
 var player_setup: PlayerSetupScreen
+var browser: ServerBrowserScreen
+
+
+## 0.11.1: Internet = Original-Serverbrowser (multiplayer menu.4ds) über dem Formular; SERVER ERSTELLEN blendet
+## ihn aus (Formular = Server erstellen), ZURÜCK im Formular kehrt zum Browser zurück
+func _open_browser() -> void:
+	browser = ServerBrowserScreen.new()
+	browser.name = "ServerBrowser"
+	add_child(browser)
+	browser.create_requested.connect(open_create)
+	browser.back_requested.connect(func():
+		Net.stop_browse()
+		Net.browsing_favorites = false
+		back_requested.emit())
+	browser.open(self)
+
+
+## SERVER ERSTELLEN (create server.4ds) über dem Menü; ZURÜCK kehrt zum Browser bzw. zur LAN-Liste zurück
+func open_create() -> void:
+	if is_instance_valid(create_screen):
+		create_screen.queue_free()
+	create_screen = CreateServerScreen.new()
+	create_screen.name = "CreateServer"
+	add_child(create_screen)
+	if is_instance_valid(browser):
+		browser.visible = false
+	create_screen.back_requested.connect(close_create)
+	create_screen.open(self)
+
+
+func close_create() -> void:
+	if is_instance_valid(create_screen):
+		create_screen.queue_free()
+	create_screen = null
+	if is_instance_valid(browser):
+		browser.visible = true
+		browser.build()
+
+
+## Statusmeldung (Fehler beim Start) auch im Original-Bildschirm zeigen
+func status_text() -> String:
+	return _status.text if is_instance_valid(_status) else ""
+
+
+## Beitritt aus dem Browser (Liste, SERVER-IP EINGEBEN, SPIEL-INFO)
+func join_server(ip: String, port: int) -> void:
+	_do_join(ip, port)
+	if is_instance_valid(browser) and Net.last_error != "" and not Net.is_online:
+		browser.status_text = Net.last_error
+		browser.build()
+
+
+func open_game_info_for(s: Dictionary) -> void:
+	info_screen = GameInfoScreen.new()
+	info_screen.name = "GameInfo"
+	add_child(info_screen)
+	info_screen.closed.connect(_close_info)
+	info_screen.join_requested.connect(func(d: Dictionary):
+		_close_info()
+		if is_instance_valid(browser):
+			browser.request_join(d)
+		else:
+			_do_join(String(d.get("ip", "")), int(d.get("port", Net.PORT))))
+	info_screen.open(s)
+
+
 var _reread_btn: Button
 var _update_btn: Button
 
@@ -605,6 +689,8 @@ func _close_filter(_accepted: bool) -> void:
 		filter_screen.queue_free()
 	filter_screen = null
 	_refresh()
+	if is_instance_valid(browser):
+		browser.build()
 
 
 ## SPIEL-INFO zum markierten Server (gameinfo.4ds); SPIEL BEITRETEN tritt bei
@@ -648,9 +734,9 @@ func server_settings() -> Dictionary:
 		"autorestart": _autorestart.button_pressed,
 		"coop_difficulty": _coop_diff.get_selected_id(), "coop_lives": int(_coop_lives.value),
 		"team_lives": _team_lives.button_pressed, "allow_crosshair": _crosshair.button_pressed,
-		# 0.10.1: Regel „precise_aim“ (Kugelfall-Ausgleich, für alle gleich) – ohne eigenes Formularfeld (LAN-Formular
-		# bleibt unverändert), übernimmt die Option „Präzises Zielen“ des Hosts; Konsole/Config: preciseaim
-		"precise_aim": Settings.precise_aim}
+		"flood_protect": _flood.button_pressed, "spawn_on_start": _spawn_start.button_pressed,
+		# 0.10.1: Regel „precise_aim“ (Kugelfall-Ausgleich, für alle gleich); Vorgabe = Option „Präzises Zielen“ des Hosts
+		"precise_aim": _precise.button_pressed}
 
 
 ## Konfigurationsdatei im Original-ServerLauncher-Stil (Konsolenzeilen) für den dedizierten Server

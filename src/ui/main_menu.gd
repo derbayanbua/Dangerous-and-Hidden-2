@@ -1175,6 +1175,15 @@ func _profile_menu() -> void:
 	var info := _label(_rect_of(_item("change_profile", "text01"), Rect2(525.4, 304.1, 414.0, 228.4)),
 		_profile_info(), 13, TEXT_COLOR)
 	info.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	if prof:          # 0.11.1: Abzeichen-Platzhalter des Dienstgrads (Career)
+		var badge := TextureRect.new()
+		badge.name = "CareerBadge"
+		badge.texture = Career.badge_texture(int(career_info()["level"]), 64)
+		badge.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		badge.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		badge.position = Vector2(885, 304)
+		badge.size = Vector2(54, 54)
+		stage.add_child(badge)
 	_button("change_profile", "bcreate profile", text(2152), Rect2(BTN_X, 550.7, BTN_W, BTN_H), _create_profile_dialog)
 	_button("change_profile", "brename profile", text(2154), Rect2(BTN_X, 590.2, BTN_W, BTN_H), _rename_profile_dialog, prof)
 	_button("change_profile", "bdelete profile", text(2155), Rect2(BTN_X, 629.6, BTN_W, BTN_H), _delete_profile_dialog, prof)
@@ -1224,7 +1233,41 @@ func _profile_info() -> String:
 		lines.append("Übernommen aus: " + String(p["imported_from"]))
 	if p.has("orig_last_save"):
 		lines.append("Original-Spielstand: " + String(p["orig_last_save"]))
+	lines.append_array(career_lines())
 	return "\n".join(lines)
+
+
+## 0.11.1 Karriere im Profil: online (angemeldet) Master-Wert, sonst lokales Einzelspieler-Profil (zählt nie global).
+func career_info() -> Dictionary:
+	var c := Career.load_profile(Game.profile_dir())
+	var st := Career.status(int(c["xp"]))
+	st["source"] = "local"
+	st["stats"] = c
+	var ms := get_node_or_null("/root/Master")
+	if ms and String(ms.account.get("guid_hash", "")) != "":
+		var mc: Dictionary = ms.career_of(String(ms.account["guid_hash"]))
+		if not mc.is_empty() and mc.has("xp"):
+			var online := Career.status(int(mc["xp"]))
+			online["source"] = "master"
+			online["stats"] = mc
+			return online
+	return st
+
+
+func career_lines() -> PackedStringArray:
+	var ci := career_info()
+	var out: PackedStringArray = ["",
+		"%s %s%s" % [tr("Dienstgrad:"), tr(String(ci["name"])), " (%s)" % tr("Masterserver") if ci["source"] == "master" else ""],
+		"%s %d" % [tr("Karriere-XP:"), int(ci["xp"])]]
+	if bool(ci.get("over_max", false)):
+		out.append("%s %d" % [tr("Dienststerne:"), int(ci.get("stars", 0))])
+	else:
+		out.append("%s %d %% – %s %d XP (%s)" % [tr("Fortschritt:"), int(float(ci.get("progress", 0.0)) * 100.0),
+			tr("noch"), int(ci.get("remaining", 0)), tr(String(ci.get("next_name", "")))])
+	var s: Dictionary = ci["stats"]
+	out.append("%s %d   %s %d   %s %d" % [tr("Einsätze:"), int(s.get("missions", 0)), tr("Erfolge:"), int(s.get("successes", 0)),
+		tr("KI-Abschüsse:"), int(s.get("ai_kills", 0))])
+	return out
 
 
 ## Eingabedialog (Profilname) auf Papier-Optik

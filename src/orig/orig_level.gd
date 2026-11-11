@@ -947,6 +947,11 @@ func _place_objects(collide := true) -> void:
 		var n: Node3D = pair[0]
 		var parent_name: String = pair[1].get("parent", "")
 		var parent: Node3D = nodes.get(parent_name) if parent_name != "" and parent_name != "Primary sector" else null
+		if parent == null and parent_name.contains(".") and String(Game.cli.get("model_child_parent", "1")) != "0" \
+				and not String(n.name) in String(Game.cli.get("mcp_skip", "")).split(","):
+			parent = _model_child_parent(parent_name)
+			if parent and Game.cli.has("mcp_debug"):
+				print("MCP ", n.name, " -> ", parent.get_path(), " welt ", parent.global_position if parent.is_inside_tree() else Vector3.INF)
 		if parent == null or parent == n:
 			root.add_child(n)
 		else:
@@ -958,6 +963,25 @@ func _place_objects(collide := true) -> void:
 			var n: Node3D = pair[0]
 			if n.has_meta("backdrop") and not (n.get_parent() != null and _in_backdrop(n.get_parent())):
 				SkyBackdrop.convert(n)
+
+
+## Elternangabe „Objekt.Frame“ (scene2.bin): Frame im Modell eines anderen Objekts, z. B. ARCTIC2 m_A1_balza_2 →
+## „g_A1_pol08.Box07“ (Regalboden), m_bed63 → „k_paletta21.deska02“. Vorher nicht aufgelöst → Objekt lag relativ zum
+## Weltursprung (b0110_a2_tuer). Erst der längste bekannte Objektname vor einem Punkt, dann der Frame darin.
+func _model_child_parent(parent_name: String) -> Node3D:
+	# Zwischensequenz-Requisiten an Darsteller-Gelenken („CUTit6.Reye“) bleiben wie bisher (LsAnim führt sie)
+	if parent_name.to_upper().begins_with("CUT"):
+		return null
+	var i := parent_name.rfind(".")
+	while i > 0:
+		var base: Node3D = nodes.get(parent_name.substr(0, i))
+		if base:
+			var sub := parent_name.substr(i + 1).validate_node_name()
+			var c := base.find_child(sub, true, false) as Node3D
+			if c:
+				return c
+		i = parent_name.rfind(".", i - 1)
+	return null
 
 
 func actor(name: String) -> Dictionary:

@@ -416,11 +416,24 @@ func _doors() -> void:
 	var it: OrigInteractive = _m.get("interactive")
 	var only := String(Game.cli.get("doors", "")).to_upper().split(",", false)
 	var pc: PlayerController = _m.controller
+	# b0110: jeder geschlossene Flügel steht hochkant (Höhe ≥ 1,5 m und größer als die waagrechte Ausdehnung)
+	var flat: PackedStringArray = []
+	for k in it.controls:
+		var dd = it.controls[k]
+		if dd is OrigInteractive.OrigDoor and not dd.slide and dd.amount == 0.0:
+			var bb := OrigInteractive.world_aabb(dd.frame)
+			if maxf(bb.size.x, bb.size.z) > 2.5:
+				continue     # Schranke (liegender Balken)
+			if bb.size.y < 1.5 or bb.size.y < maxf(bb.size.x, bb.size.z):
+				flat.append("%s %s" % [k, bb.size])
+	check(flat.is_empty(), "Türflügel hochkant im Rahmen", ", ".join(flat))
 	for k in it.controls:
 		var d = it.controls[k]
 		if not (d is OrigInteractive.OrigDoor):
 			continue
 		if not only.is_empty() and not only.has(String(k)):
+			continue
+		if String(Game.cli.get("skip_doors", "")).to_upper().split(",", false).has(String(k)):
 			continue
 		if d.is_open:
 			d.set_open(false)

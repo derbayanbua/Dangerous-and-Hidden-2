@@ -158,12 +158,22 @@ func _run() -> void:
 	var hs: Array = Net.heroes()                    # Helden nur mit lokaler Datei (nicht im Repository)
 	var h_axis: Dictionary = Net.hero_of("axis")
 	var pick: String = "hero:axis" if not h_axis.is_empty() else String(fids[0])
+	# 0.11.1: Reihenfolge SAS-Kader „sas:N“ → „MP 1…27“ → Helden (ganz hinten)
+	var fig_rank := func(f) -> int:
+		var s := String(f)
+		return 0 if s.begins_with("sas:") else (1 if s.begins_with("mp:") else (2 if s.begins_with("hero:") else 9))
+	var ranks: Array = fids.map(fig_rank)
+	var ordered := not ranks.has(9)
+	for i in range(1, ranks.size()):
+		if int(ranks[i]) < int(ranks[i - 1]):
+			ordered = false
+	var n_mp := ranks.count(1)
 	if hs.is_empty():
-		check(fids.size() >= 20 and fids.all(func(f): return String(f).begins_with("mp:")),
-			"Figurliste ohne lokale Helden: nur MP 1…27", str(fids.size()))
+		check(ordered and n_mp >= 20 and not ranks.has(2),
+			"Figurliste ohne lokale Helden: SAS-Kader, dann MP 1…27", str(fids.size()))
 	else:
-		check(String(fids[fids.size() - 1]).begins_with("hero:") and String(fids[0]).begins_with("mp:"),
-			"Figurliste: Helden ganz hinten (nach MP 1…27)")
+		check(ordered and n_mp >= 20 and int(ranks[ranks.size() - 1]) == 2,
+			"Figurliste: Helden ganz hinten (nach SAS-Kader und MP 1…27)")
 	ps.fig_ofs = maxi(fids.size() - 4, 0)          # Porträtstreifen ans Ende blättern (Helden)
 	ps.build()
 	await frames(2)

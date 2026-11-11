@@ -133,3 +133,80 @@ Spielstand und Rang werden im lokalen Profil und auf dem Masterserver gespeicher
 Einverstanden?,Einverstanden?,Do you agree?,Acceptez-vous ?,Sei d'accordo?,¿Está de acuerdo?,Souhlasíte?
 Zustimmen,Zustimmen,Agree,Accepter,Accetta,Aceptar,Souhlasím
 Ablehnen,Ablehnen,Decline,Refuser,Rifiuta,Rechazar,Odmítnout
+Möglicherweise kein Original-Server – keine Ränge,Möglicherweise kein Original-Server – keine Ränge,Possibly not an original server – no ranks,Peut-être pas un serveur original – pas de grades,Forse non è un server originale – nessun grado,Posiblemente no es un servidor original – sin rangos,Možná nejde o původní server – bez hodností
+Verbinde mit dem Masterserver …,Verbinde mit dem Masterserver …,Connecting to the master server …,Connexion au serveur maître …,Connessione al server master …,Conectando con el servidor maestro …,Připojování k hlavnímu serveru …
+Masterserver nicht erreichbar – Favoriten und Direktverbindung per IP bleiben nutzbar.,Masterserver nicht erreichbar – Favoriten und Direktverbindung per IP bleiben nutzbar.,Master server unreachable – favourites and direct IP connection remain available.,Serveur maître injoignable – favoris et connexion directe par IP restent disponibles.,Server master non raggiungibile – preferiti e connessione diretta via IP restano disponibili.,Servidor maestro inaccesible – favoritos y conexión directa por IP siguen disponibles.,Hlavní server nedostupný – oblíbené a přímé připojení přes IP zůstávají k dispozici.
+Serverliste geladen,Serverliste geladen,Server list loaded,Liste des serveurs chargée,Elenco server caricato,Lista de servidores cargada,Seznam serverů načten
+Passwort,Passwort,Password,Mot de passe,Password,Contraseña,Heslo
+Sanitäter,Sanitäter,Medic,Infirmier,Medico,Sanitario,Zdravotník
+Scharfschütze,Scharfschütze,Sniper,Tireur d'élite,Cecchino,Francotirador,Odstřelovač
+Panzerabwehr,Panzerabwehr,Anti-tank,Antichar,Anticarro,Antitanque,Protitankový voják
+Sturmsoldat,Sturmsoldat,Assault soldier,Soldat d'assaut,Assaltatore,Soldado de asalto,Útočník
+Schleicher,Schleicher,Infiltrator,Infiltrateur,Infiltratore,Infiltrador,Plížák
+Schwerer Schütze,Schwerer Schütze,Heavy gunner,Mitrailleur lourd,Mitragliere pesante,Ametrallador pesado,Těžký kulometčík
+Aufklärer,Aufklärer,Scout,Éclaireur,Esploratore,Explorador,Průzkumník
+Überspritze,Überspritze,Revive syringe,Seringue de réanimation,Siringa di rianimazione,Jeringa de reanimación,Oživovací injekce
+"Sanitäter: MP oder Karabiner, zwei kleine und ein großer Verbandskasten, Überspritze. Soldat mit bestem Erste-Hilfe-Wert.","Sanitäter: MP oder Karabiner, zwei kleine und ein großer Verbandskasten, Überspritze. Soldat mit bestem Erste-Hilfe-Wert.","Medic: SMG or carbine, two small and one large medkit, revive syringe. Soldier with the best first aid.","Infirmier : PM ou carabine, deux petites et une grande trousse de soins, seringue de réanimation. Soldat avec les meilleurs premiers secours.","Medico: mitra o carabina, due kit medici piccoli e uno grande, siringa di rianimazione. Soldato con il miglior primo soccorso.","Sanitario: subfusil o carabina, dos botiquines pequeños y uno grande, jeringa de reanimación. Soldado con los mejores primeros auxilios.","Zdravotník: samopal nebo karabina, dvě malé a jedna velká lékárnička, oživovací injekce. Voják s nejlepší první pomocí."
+"Scharfschütze: schweres Scharfschützengewehr. Soldat mit bestem Schießen-Wert.","Scharfschütze: schweres Scharfschützengewehr. Soldat mit bestem Schießen-Wert.","Sniper: heavy sniper rifle. Soldier with the best shooting.","Tireur d'élite : fusil de précision lourd. Soldat avec le meilleur tir.","Cecchino: fucile di precisione pesante. Soldato con la migliore mira.","Francotirador: fusil de precisión pesado. Soldado con la mejor puntería.","Odstřelovač: těžká odstřelovačská puška. Voják s nejlepší střelbou."
+"Panzerabwehr: leichter Karabiner, Raketen, Minen und Sprengstoff (ohne Werfer auf der Karte: mehr Granaten). Soldat mit hoher Kraft.","Panzerabwehr: leichter Karabiner, Raketen, Minen und Sprengstoff (ohne Werfer auf der Karte: mehr Granaten). Soldat mit hoher Kraft.","Anti-tank: light carbine, rockets, mines and explosives (no launcher on the map: more grenades). Soldier with high strength.","Antichar : carabine légère, roquettes, mines et explosifs (sans lance-roquettes sur la carte : plus de grenades). Soldat très fort.","Anticarro: carabina leggera, razzi, mine ed esplosivi (senza lanciarazzi sulla mappa: più granate). Soldato con molta forza.","Antitanque: carabina ligera, cohetes, minas y explosivos (sin lanzacohetes en el mapa: más granadas). Soldado con mucha fuerza.","Protitankový voják: lehká karabina, rakety, miny a výbušniny (bez raketometu na mapě: více granátů). Voják s velkou silou."
+"Sturmsoldat: Maschinenpistole oder Sturmgewehr und viele Granaten. Soldat mit ausgewogenen Werten.","Sturmsoldat: Maschinenpistole oder Sturmgewehr und viele Granaten. Soldat mit ausgewogenen Werten.","Assault soldier: SMG or assault rifle and many grenades. Soldier with balanced values.","Soldat d'assaut : pistolet-mitrailleur ou fusil d'assaut et beaucoup de grenades. Soldat aux valeurs équilibrées.","Assaltatore: mitra o fucile d'assalto e molte granate. Soldato con valori equilibrati.","Soldado de asalto: subfusil o fusil de asalto y muchas granadas. Soldado con valores equilibrados.","Útočník: samopal nebo útočná puška a mnoho granátů. Voják s vyváženými hodnotami."
+"Schleicher: schallgedämpfte Waffen mit weniger Streuung. Soldat mit hoher Tarnung.","Schleicher: schallgedämpfte Waffen mit weniger Streuung. Soldat mit hoher Tarnung.","Infiltrator: silenced weapons with less spread. Soldier with high stealth.","Infiltrateur : armes silencieuses avec moins de dispersion. Soldat très discret.","Infiltratore: armi silenziate con meno dispersione. Soldato molto furtivo.","Infiltrador: armas con silenciador y menos dispersión. Soldado con mucho sigilo.","Plížák: tlumené zbraně s menším rozptylem. Voják s vysokým maskováním."
+"Schwerer Schütze: schweres MG, Minen und Granaten. Soldat mit mittlerer Traglast.","Schwerer Schütze: schweres MG, Minen und Granaten. Soldat mit mittlerer Traglast.","Heavy gunner: heavy machine gun, mines and grenades. Soldier with medium carrying capacity.","Mitrailleur lourd : mitrailleuse lourde, mines et grenades. Soldat à capacité de charge moyenne.","Mitragliere pesante: mitragliatrice pesante, mine e granate. Soldato con capacità di carico media.","Ametrallador pesado: ametralladora pesada, minas y granadas. Soldado con capacidad de carga media.","Těžký kulometčík: těžký kulomet, miny a granáty. Voják se střední nosností."
+"Aufklärer: leichtes Scharfschützengewehr, Fernglas und Granaten. Soldat mit hoher Ausdauer und wenig Gesundheit.","Aufklärer: leichtes Scharfschützengewehr, Fernglas und Granaten. Soldat mit hoher Ausdauer und wenig Gesundheit.","Scout: light sniper rifle, binoculars and grenades. Soldier with high endurance and low health.","Éclaireur : fusil de précision léger, jumelles et grenades. Soldat endurant mais peu résistant.","Esploratore: fucile di precisione leggero, binocolo e granate. Soldato molto resistente alla fatica ma con poca salute.","Explorador: fusil de precisión ligero, prismáticos y granadas. Soldado con mucha resistencia y poca salud.","Průzkumník: lehká odstřelovačská puška, dalekohled a granáty. Voják s vysokou výdrží a malým zdravím."
+Private,Soldat,Private,Soldat,Soldato,Soldado,Vojín
+Private First Class,Gefreiter,Private First Class,Soldat de 1re classe,Soldato scelto,Soldado de primera,Svobodník
+Corporal,Korporal,Corporal,Caporal,Caporale,Cabo,Desátník
+Sergeant,Sergeant,Sergeant,Sergent,Sergente,Sargento,Četař
+Staff Sergeant,Staff Sergeant,Staff Sergeant,Sergent-chef,Sergente maggiore,Sargento primero,Rotný
+Technical Sergeant,Technical Sergeant,Technical Sergeant,Sergent technicien,Sergente tecnico,Sargento técnico,Rotmistr
+First Sergeant,First Sergeant,First Sergeant,Premier sergent,Primo sergente,Sargento mayor de compañía,Nadrotmistr
+Master Sergeant,Master Sergeant,Master Sergeant,Adjudant,Maresciallo,Sargento maestro,Praporčík
+Second Lieutenant,Leutnant,Second Lieutenant,Sous-lieutenant,Sottotenente,Alférez,Poručík
+First Lieutenant,Oberleutnant,First Lieutenant,Lieutenant,Tenente,Teniente,Nadporučík
+Captain,Hauptmann,Captain,Capitaine,Capitano,Capitán,Kapitán
+Major,Major,Major,Commandant,Maggiore,Comandante,Major
+Lieutenant Colonel,Oberstleutnant,Lieutenant Colonel,Lieutenant-colonel,Tenente colonnello,Teniente coronel,Podplukovník
+Colonel,Oberst,Colonel,Colonel,Colonnello,Coronel,Plukovník
+Brigadier General,Brigadegeneral,Brigadier General,Général de brigade,Generale di brigata,General de brigada,Brigádní generál
+Befördert zu,Befördert zu,Promoted to,Promu au grade de,Promosso a,Ascendido a,Povýšen na
+KARRIERE,KARRIERE,CAREER,CARRIÈRE,CARRIERA,CARRERA,KARIÉRA
+DIENSTGRAD,DIENSTGRAD,RANK,GRADE,GRADO,RANGO,HODNOST
+ABZEICHEN,ABZEICHEN,INSIGNIA,INSIGNE,MOSTRINA,INSIGNIA,ODZNAK
+XP bis zur Beförderung,XP bis zur Beförderung,XP to next promotion,XP avant la promotion,XP alla promozione,XP para el ascenso,XP do povýšení
+Einsätze,Einsätze,Missions,Missions,Missioni,Misiones,Mise
+Erfolgreich,Erfolgreich,Successful,Réussies,Riuscite,Con éxito,Úspěšné
+KI-Abschüsse,KI-Abschüsse,AI kills,Éliminations IA,Uccisioni IA,Bajas IA,Zabití AI
+Ziele erfüllt,Ziele erfüllt,Objectives completed,Objectifs remplis,Obiettivi completati,Objetivos cumplidos,Splněné cíle
+Dienststerne,Dienststerne,Service stars,Étoiles de service,Stelle di servizio,Estrellas de servicio,Služební hvězdy
+Lokales Profil (zählt nicht online),Lokales Profil (zählt nicht online),Local profile (does not count online),Profil local (ne compte pas en ligne),Profilo locale (non conta online),Perfil local (no cuenta en línea),Místní profil (nepočítá se online)
+Kein offizieller Build – Masterserver nicht verfügbar.,Kein offizieller Build – Masterserver nicht verfügbar.,Not an official build – master server unavailable.,Version non officielle – serveur maître indisponible.,Build non ufficiale – master server non disponibile.,Compilación no oficial – servidor maestro no disponible.,Neoficiální sestavení – hlavní server nedostupný.
+Masterserver nicht erreichbar – LAN und Favoriten weiter nutzbar.,Masterserver nicht erreichbar – LAN und Favoriten weiter nutzbar.,Master server unreachable – LAN and favourites still available.,Serveur maître injoignable – LAN et favoris toujours disponibles.,Master server non raggiungibile – LAN e preferiti ancora disponibili.,Servidor maestro inaccesible – LAN y favoritos siguen disponibles.,Hlavní server nedostupný – LAN a oblíbené stále fungují.
+Serverliste ungültig.,Serverliste ungültig.,Server list invalid.,Liste des serveurs invalide.,Elenco server non valido.,Lista de servidores no válida.,Neplatný seznam serverů.
+Bitte Spiel aktualisieren.,Bitte Spiel aktualisieren.,Please update the game.,Veuillez mettre le jeu à jour.,Aggiorna il gioco.,Actualiza el juego.,Aktualizujte prosím hru.
+HINZUFÜGEN,HINZUFÜGEN,ADD,AJOUTER,AGGIUNGI,AÑADIR,PŘIDAT
+ENTFERNEN,ENTFERNEN,REMOVE,RETIRER,RIMUOVI,QUITAR,ODEBRAT
+WEITERE EINSTELLUNGEN,WEITERE EINSTELLUNGEN,MORE SETTINGS,AUTRES RÉGLAGES,ALTRE IMPOSTAZIONI,MÁS AJUSTES,DALŠÍ NASTAVENÍ
+MAX. PING [ms],MAX. PING [ms],MAX. PING [ms],PING MAX. [ms],PING MAX. [ms],PING MÁX. [ms],MAX. PING [ms]
+MAX. FREQUENZ [Hz],MAX. FREQUENZ [Hz],MAX. FREQUENCY [Hz],FRÉQUENCE MAX. [Hz],FREQUENZA MAX. [Hz],FRECUENCIA MÁX. [Hz],MAX. FREKVENCE [Hz]
+MAX. INAKTIVITÄT [s],MAX. INAKTIVITÄT [s],MAX. INACTIVITY [s],INACTIVITÉ MAX. [s],INATTIVITÀ MAX. [s],INACTIVIDAD MÁX. [s],MAX. NEČINNOST [s]
+FUNK-SCHLAG,FUNK-SCHLAG,RADIO STRIKE,FRAPPE RADIO,ATTACCO RADIO,ATAQUE POR RADIO,ÚDER RÁDIEM
+Klasse,Klasse,Class,Classe,Classe,Clase,Třída
+DEDIZIERTER SERVER,DEDIZIERTER SERVER,DEDICATED SERVER,SERVEUR DÉDIÉ,SERVER DEDICATO,SERVIDOR DEDICADO,DEDIKOVANÝ SERVER
+Dienstgrad,Dienstgrad,Rank,Grade,Grado,Rango,Hodnost
+Dienstgrad:,Dienstgrad:,Rank:,Grade :,Grado:,Rango:,Hodnost:
+Karriere-XP:,Karriere-XP:,Career XP:,XP de carrière :,XP carriera:,XP de carrera:,Kariérní XP:
+Dienststerne:,Dienststerne:,Service stars:,Étoiles de service :,Stelle di servizio:,Estrellas de servicio:,Služební hvězdy:
+Fortschritt:,Fortschritt:,Progress:,Progression :,Progresso:,Progreso:,Postup:
+noch,noch,remaining,restant,mancano,faltan,zbývá
+Einsätze:,Einsätze:,Missions:,Missions :,Missioni:,Misiones:,Mise:
+Erfolge:,Erfolge:,Successes:,Réussites :,Successi:,Éxitos:,Úspěchy:
+KI-Abschüsse:,KI-Abschüsse:,AI kills:,Ennemis IA tués :,Uccisioni IA:,Bajas IA:,Zabití AI:
+Masterserver,Masterserver,master server,serveur maître,server master,servidor maestro,hlavní server
+Server-ID:,Server-ID:,Server ID:,ID du serveur :,ID server:,ID del servidor:,ID serveru:
+Andere Spielversion (Server %s / du %s).,Andere Spielversion (Server %s / du %s).,Different game version (server %s / you %s).,Version de jeu différente (serveur %s / vous %s).,Versione di gioco diversa (server %s / tu %s).,Versión del juego distinta (servidor %s / tú %s).,Jiná verze hry (server %s / ty %s).
+Du bist auf diesem Server gesperrt.,Du bist auf diesem Server gesperrt.,You are banned from this server.,Vous êtes banni de ce serveur.,Sei bannato da questo server.,Estás bloqueado en este servidor.,Na tomto serveru máš zákaz.
+Serveridentität stimmt nicht – Verbindung abgebrochen.,Serveridentität stimmt nicht – Verbindung abgebrochen.,Server identity does not match – connection aborted.,L'identité du serveur ne correspond pas – connexion interrompue.,L'identità del server non corrisponde – connessione interrotta.,La identidad del servidor no coincide: conexión cancelada.,Identita serveru nesouhlasí – připojení přerušeno.
+Server ist voll.,Server ist voll.,Server is full.,Le serveur est plein.,Il server è pieno.,El servidor está lleno.,Server je plný.
+Zu viele Verbindungsversuche – bitte kurz warten.,Zu viele Verbindungsversuche – bitte kurz warten.,Too many connection attempts – please wait a moment.,Trop de tentatives de connexion – veuillez patienter.,Troppi tentativi di connessione – attendi un momento.,Demasiados intentos de conexión: espera un momento.,Příliš mnoho pokusů o připojení – chvíli počkej.
+Zeitüberschreitung bei der Anmeldung.,Zeitüberschreitung bei der Anmeldung.,Login to the server timed out.,Délai de connexion au serveur dépassé.,Tempo scaduto per l'accesso al server.,Se agotó el tiempo de conexión al servidor.,Vypršel čas přihlášení k serveru.
+Anmeldung am Server fehlgeschlagen.,Anmeldung am Server fehlgeschlagen.,Joining the server failed.,Échec de la connexion au serveur.,Accesso al server non riuscito.,No se pudo entrar en el servidor.,Připojení k serveru selhalo.

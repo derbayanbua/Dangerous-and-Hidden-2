@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cbodd8ypjcup2"
-path="res://.godot/imported/05_hud_befehlsmenue.png-788b556d4712643bb505b11de7d847e4.ctex"
+uid="uid://bbex6nf288amb"
+path="res://.godot/imported/05_kampf_explosion.png-eba037c3354f06f525f00462e47387cc.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://docs/screenshots/05_hud_befehlsmenue.png"
-dest_files=["res://.godot/imported/05_hud_befehlsmenue.png-788b556d4712643bb505b11de7d847e4.ctex"]
+source_file="res://docs/screenshots/05_kampf_explosion.png"
+dest_files=["res://.godot/imported/05_kampf_explosion.png-eba037c3354f06f525f00462e47387cc.ctex"]
 
 [params]
 

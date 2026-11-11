@@ -13,7 +13,8 @@ const PORT := 11001
 const PORT_MIN := 1024
 const PORT_MAX := 65530
 const DISCOVERY_PORT := 27101
-const PROTOCOL := "DH2-LAN-5"         ## 4: B-022 Zustand/Aktionen nur an den Server, Weitergabe geprüft (30.10.2026); 5: B-037 Gore-Bitmaske in _killed/_corpse_pose (31.10.2026)
+const PROTOCOL := "DH2-LAN-6"         ## 4: B-022 Zustand/Aktionen nur an den Server, Weitergabe geprüft (30.10.2026); 5: B-037 Gore-Bitmaske in _killed/_corpse_pose (31.10.2026); 6: ENet-Auth (JOIN_HELLO/Challenge/Beitrittsbeleg, net_auth.gd, 0.11.1)
+const NET_AUTH := preload("res://src/autoload/net_auth.gd")
 const QUERY_TAG := "DH2-QUERY"
 const SYNC_INTERVAL := 0.05
 ## Spielstile des Originals (docs/re_notes_multiplayer.md): DEATHMATCH (2891), BESETZUNG (2892),
@@ -183,6 +184,10 @@ var _info_t := 0.0
 var voice: VoiceChat
 var coop: NetCoop             ## B-029: Coop-KI der Originalmission (src/autoload/net_coop.gd)
 var chat_focus := false       ## Chat-/Konsolen-Eingabe offen (Push-to-talk und Steuerung ruhen)
+var auth: Node                ## 0.11.1: ENet-Auth (src/autoload/net_auth.gd)
+var auth_accounts := {}       ## Server: Peer-ID -> {gh, proof} aus JOIN_OK (gh "" = ohne Konto/Beleg)
+var _round_started_unix := 0  ## 0.11.1: Rundenbeginn (Unix-Zeit) und match_id für den Master-Bericht
+var _round_started_ms := 0
 
 var _peer: ENetMultiplayerPeer
 var _bc: PacketPeerUDP
@@ -217,6 +222,10 @@ func _ready() -> void:
 	coop = NetCoop.new()          # B-029: KI-Abgleich im Coop (Pfad /root/Net/Coop auf allen Rechnern gleich)
 	coop.name = "Coop"
 	add_child(coop)
+	auth = NET_AUTH.new()         # 0.11.1: ENet-Auth (DH2-LAN-6), Pfad /root/Net/Auth
+	auth.name = "Auth"
+	auth.net = self
+	add_child(auth)
 	Events.soldier_damaged.connect(_on_soldier_damaged)      # Trefferfeedback (nur Server wertet aus)
 	_check_dedicated_cli()
 
@@ -241,10 +250,14 @@ func host(cfg: Dictionary) -> bool:
 	leave(false)
 	_peer = ENetMultiplayerPeer.new()
 	var port := clampi(int(cfg.get("port", PORT)), PORT_MIN, PORT_MAX)
-	var err := _peer.create_server(port, clampi(int(cfg.get("max_players", 8)), 2, 32))   # Original-Servermenü: 2–32
+	# Original-Servermenü: 2–32 Spieler; +4 ENet-Plätze für Auth-Peers ohne Spieler (Probe/Ping, Protokoll 7.1)
+	var err := _peer.create_server(port, clampi(int(cfg.get("max_players", 8)), 2, 32) + 4)
 	if err != OK:
 		last_error = "Server konnte nicht gestartet werden (Port %d belegt?)" % port
 		return false
+	auth.reset()
+	auth_accounts.clear()
+	auth.install()                # vor dem Setzen des Peers (DH2-LAN-6)
 	multiplayer.multiplayer_peer = _peer
 	is_online = true
 	settings = cfg.duplicate(true)
@@ -262,6 +275,7 @@ func host(cfg: Dictionary) -> bool:
 	coop_team_spawns = 0
 	var my_team: int = local_team if local_team in [Soldier.TEAM_ALLIED, Soldier.TEAM_AXIS] and mode() != Mode.DEATHMATCH else _pick_team()
 	players = {} if dedicated else {1: _new_player(local_name, my_team, local_class)}
+	setup_pending = not dedicated and setup_gate_on()     # 0.11.1: Host ebenfalls zuerst ins SPIELER-SETUP
 	if not dedicated:
 		players[1]["admin"] = true          # wer den Server im Spiel erstellt, ist Admin
 		players[1]["figure"] = local_figure  # Figurwahl aus dem SPIELER-SETUP
@@ -276,6 +290,7 @@ func host(cfg: Dictionary) -> bool:
 	if bool(settings.get("internet", false)):
 		_upnp_open(port)
 	_begin_match()
+	_master_start()
 	return true
 
 
@@ -290,8 +305,20 @@ func join(ip: String, port: int = PORT, password := "") -> bool:
 	if err != OK:
 		last_error = "Verbindung nicht möglich (%s)" % error_string(err)
 		return false
+	# Host-Identität (Protokoll 8): Eintrag der Masterliste = strenge Erwartung, sonst known_hosts (TOFU)
+	auth.reset()
+	auth.host_key = "%s:%d" % [ip.to_lower(), port]
+	auth.expect = {}
+	var ms := get_node_or_null("/root/Master")
+	if ms:
+		for e in ms.list:
+			if String(e.get("host", "")).to_lower() == ip.to_lower() and int(e.get("port", 0)) == port \
+					and String(e.get("id", "")) != "":
+				auth.expect = {"server_id": String(e["id"]), "pubkey_pem": String(e.get("pubkey_pem", ""))}
+	auth.install()
 	multiplayer.multiplayer_peer = _peer
 	is_online = true
+	setup_pending = setup_gate_on()      # 0.11.1: nach dem Beitritt zuerst SPIELER-SETUP
 	_join_pw = password
 	status_changed.emit("Verbinde mit %s:%d …" % [ip, port])
 	return true
@@ -299,8 +326,13 @@ func join(ip: String, port: int = PORT, password := "") -> bool:
 
 ## Verbindung beenden. to_menu: zurück ins Hauptmenü
 func leave(to_menu := true) -> void:
+	if _peer and is_online and multiplayer.is_server():
+		_master_stop()
 	if _peer:
 		_peer.close()
+	if auth:
+		auth.reset()
+	auth_accounts.clear()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	_peer = null
 	_bc = null
@@ -309,6 +341,7 @@ func leave(to_menu := true) -> void:
 	_query = null
 	_upnp_close()
 	is_online = false
+	setup_pending = false
 	players.clear()
 	_soldiers.clear()
 	_respawn.clear()
@@ -331,7 +364,58 @@ func leave(to_menu := true) -> void:
 
 
 func _new_player(n: String, team: int, cls := 2) -> Dictionary:
-	return {"name": n, "team": team, "kills": 0, "deaths": 0, "score": 0, "teamkills": 0, "cls": cls, "spectator": false}
+	return {"name": n, "team": team, "kills": 0, "deaths": 0, "score": 0, "teamkills": 0, "cls": cls, "spectator": false,
+		"in_setup": setup_gate_on()}
+
+
+# --- 0.11.1: Beitritt → zuerst SPIELER-SETUP (Spawn erst nach AKZEPTIEREN; nicht für Bots/dedizierten Server) ------
+## Server: Spieler mit players[id]["in_setup"] werden nicht gespawnt. Client/Host: setup_pending bis confirm_setup().
+## Tests (--autoplay) ohne „--setup_gate=1“: Sperre aus (bisheriger Ablauf mit sofortigem Spawn).
+var setup_gate := true
+var setup_pending := false
+signal setup_required
+
+
+func setup_gate_on() -> bool:
+	if not setup_gate:
+		return false
+	var a := " ".join(OS.get_cmdline_user_args())
+	if a.contains("--setup_gate=0"):          # Tests: kopfloser dedizierter Server ohne --autoplay
+		return false
+	return not a.contains("--autoplay") or a.contains("--setup_gate=1")
+
+
+## Spieler im Setup (Server-Sicht, auch für Anzeigen)
+func in_setup(id: int) -> bool:
+	return bool(players.get(id, {}).get("in_setup", false))
+
+
+## SPIELER-SETUP bestätigt → Server gibt den Spawn frei
+func confirm_setup() -> void:
+	setup_pending = false
+	if not is_online:
+		return
+	if multiplayer.is_server():
+		_server_setup_done(1)
+	else:
+		_setup_done.rpc_id(1)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func _setup_done() -> void:
+	if not multiplayer.is_server() or _guest("setup_done"):
+		return
+	_server_setup_done(multiplayer.get_remote_sender_id())
+
+
+func _server_setup_done(id: int) -> void:
+	if not players.has(id) or not in_setup(id):
+		return
+	players[id]["in_setup"] = false
+	_players.rpc(players)
+	var s: Soldier = _soldiers.get(id)
+	if (not is_instance_valid(s) or not s.alive) and not _respawn.has(id) and Game.current_mission() != null:
+		_server_spawn(id)
 
 
 ## Team-Deathmatch: kleineres Team; Deathmatch: eigene Seite je Spieler (für Freund/Feind-Logik)
@@ -489,6 +573,139 @@ func _on_server_lost() -> void:
 	status_changed.emit(last_error)
 
 
+# --- 0.11.1: Anbindung an den Masterserver (Protokoll 7–10, 15.u/y/z) ---------------------------------------------
+
+const AUTH_TEXTS := {"VERSION_MISMATCH": "Andere Spielversion (Server %s / du %s).",
+	"BANNED": "Du bist auf diesem Server gesperrt.", "HOST_KEY_MISMATCH": "Serveridentität stimmt nicht – Verbindung abgebrochen.",
+	"SERVER_FULL": "Server ist voll.", "RATE_LIMITED": "Zu viele Verbindungsversuche – bitte kurz warten.",
+	"BAD_SIGNATURE": "Serveridentität stimmt nicht – Verbindung abgebrochen.", "TIMEOUT": "Zeitüberschreitung bei der Anmeldung.",
+	"BAD_REQUEST": "Anmeldung am Server fehlgeschlagen."}
+
+
+## Client: Auth-Schritt gescheitert (Fehlercode Protokoll 6/7) → Verbindung beenden, Spieltext.
+func auth_failed(code: String, info: String) -> void:
+	if not is_online:
+		return
+	is_online = false                  # nur einmal; Trennen erst nach dem Rückruf (sonst Absturz im SceneMultiplayer)
+	_auth_fail_deferred.call_deferred(code, info)
+
+
+func _auth_fail_deferred(code: String, info: String) -> void:
+	is_online = true
+	var t := tr(String(AUTH_TEXTS.get(code, AUTH_TEXTS["BAD_REQUEST"])))
+	if code == "VERSION_MISMATCH":
+		t = t % [info if info != "" else "?", String(ProjectSettings.get_setting("application/config/version"))]
+	last_error = t
+	print("NET: Anmeldung abgewiesen (%s)" % code)
+	leave(Game.current_mission() != null)
+	status_changed.emit(last_error)
+
+
+## Online-Modus mit Masterserver: Internet-Server eines offiziellen Builds (LAN/Editor ohne Schlüssel: nie).
+func master_mode() -> bool:
+	var ms := get_node_or_null("/root/Master")
+	return is_online and bool(settings.get("internet", false)) and ms != null and ms.is_official_build()
+
+
+## Server: Konto aus dem geprüften Beitrittsbeleg dem Spieler zuordnen (Rang holen und verteilen).
+func _bind_account(id: int) -> void:
+	var a: Dictionary = auth_accounts.get(id, {})
+	var ms := get_node_or_null("/root/Master")
+	if ms == null or String(a.get("gh", "")) == "":
+		return
+	players[id]["gh"] = String(a["gh"])
+	ms.set_peer_proof(id, a.get("proof", {}))
+	if master_mode():
+		ms.set_peer_account(id, String(a["gh"]))
+
+
+func _server_key_path() -> String:
+	var cfg := ""
+	for a in OS.get_cmdline_user_args():
+		if a.begins_with("--server_key="):
+			return a.get_slice("=", 1)
+		if a.begins_with("--dedicated="):
+			cfg = a.get_slice("=", 1)
+	return cfg.get_basename() + ".key" if cfg != "" else "user://server.key"
+
+
+## Serverstart (gehostet und dediziert): beim Master registrieren (+ Heartbeat), nur Internet + offizieller Build.
+func _master_start() -> void:
+	var ms := get_node_or_null("/root/Master")
+	if not master_mode() or not multiplayer.is_server():
+		return
+	if ms.server_key == null and ms.load_server_key(_server_key_path()) == "":
+		return
+	if ms.build_hash == "":
+		ms.compute_build_hash()
+	print("MASTER: Server-ID %s" % ms.server_id)
+	ms.register_server({"name": String(settings.get("name", "DH2-Server")), "port": int(settings.get("port", PORT)),
+		"public": true})
+
+
+## Server beenden: laufende Runde als Teilbericht (partial) melden, abmelden.
+func _master_stop() -> void:
+	var ms := get_node_or_null("/root/Master")
+	if ms == null or not master_mode():
+		return
+	if not match_over and game_state != State.WARMUP:
+		_master_report(-1, true)
+	if ms.registered:
+		ms.unregister_server("shutdown")
+
+
+## Rundenbericht (Protokoll 10.3/15.z): nur Spieler mit geprüftem Beitrittsbeleg, Bots nicht enthalten.
+func master_report_data(winner: int, partial := false) -> Dictionary:
+	var ms := get_node_or_null("/root/Master")
+	var now_ms := Time.get_ticks_msec()
+	var pls := []
+	for id in players.keys():
+		var gh: String = ms.peer_account(int(id)) if ms and int(id) > 0 else ""
+		if gh == "":
+			continue
+		var p: Dictionary = players[id]
+		var team := int(p.get("team", -1)) if team_mode() else -1
+		var e := {"gh": gh, "name": String(p["name"]), "team": team, "kills": int(p.get("pvp_kills", 0)),
+			"deaths": int(p.get("deaths", 0)), "assists": 0, "score": int(p.get("score", 0)),
+			"teamkills": int(p.get("teamkills", 0)), "suicides": int(p.get("suicides", 0)),
+			"time_s": int((now_ms - maxi(int(p.get("joined_ms", 0)), _round_started_ms)) / 1000),
+			"won": winner in [0, 1] and team == winner, "proof": ms.peer_proof(int(id)),
+			"ai_kills": int(p.get("ai_kills", 0)), "objectives": int(p.get("objectives", 0)), "revives": 0,
+			"victims": (p.get("victims", {}) as Dictionary).duplicate()}
+		if mode() == Mode.COOP:
+			e["extracted"] = winner == Soldier.TEAM_ALLIED and not bool(p.get("spectator", false))
+		pls.append(e)
+	var res := {"winner": winner if winner in [0, 1] else -1, "team_score": [int(team_score[0]), int(team_score[1])]}
+	if mode() == Mode.COOP:
+		res["mission_success"] = winner == Soldier.TEAM_ALLIED
+	return {"map": String(settings.get("map", "")), "mode": mode(), "round": round_no, "started_at": _round_started_unix,
+		"ended_at": int(Time.get_unix_time_from_system()), "partial": partial, "result": res, "players": pls}
+
+
+var last_report := {}             ## Tests: zuletzt gesendeter Bericht
+
+
+func _master_report(winner: int, partial := false) -> void:
+	var ms := get_node_or_null("/root/Master")
+	if not master_mode() or not multiplayer.is_server() or ms.server_key == null:
+		return
+	last_report = master_report_data(winner, partial)
+	ms.report_match(last_report)          # Coroutine: Wiederholung 5/30/120 s läuft im Hintergrund
+
+
+## Anzeige-Rang eines Spielers: online Master-Dienstgrad (leer, solange unbekannt), LAN Original-Rang.
+## {text, level, master}; level = Karrierestufe 1..15 (online) bzw. Original-Rang 0..7 (LAN).
+func shown_rank(id) -> Dictionary:
+	var p: Dictionary = players.get(id, {})
+	if bool(settings.get("internet", false)) and get_node_or_null("/root/Master") and get_node("/root/Master").is_official_build():
+		var lv := int(p.get("master_rank", -1))
+		if lv < 1:
+			return {"text": "", "level": -1, "master": true}
+		return {"text": tr(Career.rank_name(lv)), "level": lv, "master": true}
+	var r := int(p.get("rank", 0))
+	return {"text": SAS.rank_name(r, true), "level": r, "master": false}
+
+
 ## Kartenladen blockiert ein Spiel bis zu Minuten: ENet-Zeitlimit großzügig (sonst Trennung beim Laden)
 const PEER_TIMEOUT_MS := 300000
 
@@ -517,6 +734,10 @@ func _on_peer_disconnected(id: int) -> void:
 	if players.has(id):
 		Events.say("%s hat das Spiel verlassen." % players[id]["name"], 3.0)
 	players.erase(id)
+	auth_accounts.erase(id)
+	var ms := get_node_or_null("/root/Master")
+	if ms:
+		ms.clear_peer(id)
 	for d in [_active_ms, _ready_peers, _ping_over, _chat_times, _muted_until, _last_st_ms, ping_override, _guest_rejects]:
 		(d as Dictionary).erase(id)
 	_remove_player.rpc(id)
@@ -524,7 +745,7 @@ func _on_peer_disconnected(id: int) -> void:
 
 
 var local_team := -1          ## gewünschte Seite aus dem SPIELER-SETUP (−1 automatisch)
-var local_class := 2         ## gewünschte Klasse (0 MG-, 1 Scharf-, 2 Gewehr-, 3 Grenadier, 4 Sturmschütze)
+var local_class := 3         ## gewünschte Klasse (0.11.1, MpClasses: 0 Sanitäter … 3 Sturmsoldat … 6 Aufklärer)
 var local_figure := ""       ## Figurwahl SPIELER-SETUP: "" Standard, "hero:axis"/"hero:allied", "mp:<HumanStore 30–56>"
 var local_loadout := {}      ## Einzel-Ausrüstung SPIELER-SETUP (SAS-Inventar), {} = Klassen-Vorlage
 
@@ -554,6 +775,8 @@ func _register(pname: String, password: String, proto: String, cls: int = 2, tea
 		get_tree().create_timer(1.0).timeout.connect(func(): if _peer: _peer.disconnect_peer(id))
 		return
 	players[id] = _new_player(pname.substr(0, 24), _pick_team(), cls)
+	players[id]["joined_ms"] = Time.get_ticks_msec()
+	_bind_account(id)
 	if team_pref in [Soldier.TEAM_ALLIED, Soldier.TEAM_AXIS] and team_mode() and mode() != Mode.COOP:
 		var auto_team := int(players[id]["team"])
 		players[id]["team"] = -1
@@ -803,7 +1026,8 @@ func loadout_error(id: int, inv: Dictionary) -> String:
 	var side := "axis" if team == Soldier.TEAM_AXIS else "allied"
 	var style := MpLoadout.map_style(String(settings.get("map", "")))
 	var heads := MpLoadout.heads_for(inv, style.get("presets", []), side)
-	return MpLoadout.check(inv, loadout_allowed(), team, MpLoadout.strength_of(String(p.get("figure", ""))), heads)
+	var fig := MpClasses.effective_figure(String(p.get("figure", "")), int(p.get("cls", MpClasses.DEFAULT)))
+	return MpLoadout.check(inv, loadout_allowed(), team, MpLoadout.strength_of(fig), heads)
 
 
 func _server_set_loadout(id: int, inv: Dictionary) -> void:
@@ -1307,7 +1531,8 @@ func _update_ranks() -> void:
 		var old := int(p.get("rank", 0))
 		if r != old:
 			p["rank"] = r
-			_rank_msg.rpc(int(id), r, r > old)
+			if not master_mode():          # 0.11.1: online gilt der Master-Dienstgrad (Protokoll 15.y), keine Original-Meldung
+				_rank_msg.rpc(int(id), r, r > old)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -1486,6 +1711,9 @@ func _begin_match() -> void:
 		p["spectator"] = false
 		p["rank"] = 0
 		p["lives_used"] = 0
+		_reset_report_stats(p)
+	_round_started_unix = int(Time.get_unix_time_from_system())
+	_round_started_ms = Time.get_ticks_msec()
 	_soldiers.clear()
 	_respawn.clear()
 	_vip.clear()
@@ -1514,6 +1742,11 @@ func mission_ready(_m: Node) -> void:
 	else:
 		_client_ready.rpc_id(1)
 	_ensure_hud(_m)
+	if setup_pending and not dedicated:
+		setup_required.emit()
+		var pm = _m.get_node_or_null("PauseMenu") if _m else null
+		if pm and pm.has_method("open_initial_setup"):
+			pm.call_deferred("open_initial_setup")
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -1605,6 +1838,8 @@ func _server_spawn(id: int) -> void:
 		return
 	if bool(players[id].get("spectator", false)):
 		return
+	if in_setup(id):
+		return                # 0.11.1: noch im SPIELER-SETUP, Spawn nach confirm_setup
 	_touch(id)                # Inaktivität zählt ab dem (Wieder-)Einstieg
 	if players[id].has("next_team"):
 		players[id]["team"] = int(players[id]["next_team"])      # Teamwechsel aus dem SPIELER-SETUP
@@ -1665,7 +1900,7 @@ func _server_spawn(id: int) -> void:
 	_count_spawn(id)
 	_gen[id] = int(_gen.get(id, 0)) + 1
 	print("NET: Spawn für ", id, " bei ", pos)
-	var kit: Array = bot_kit(team, int(players[id].get("role", 0)), bool(players[id].get("hero", false))) if id < 0 else []
+	var kit: Array = []          # 0.11.1: KI-Soldaten nutzen dieselben Klassen wie Spieler (MpClasses, _apply_class)
 	players[id]["kit"] = kit
 	if players[id].has("loadout"):
 		# Einzel-Ausrüstung erneut prüfen (Seite/Karte/Figur können sich geändert haben), sonst Klassen-Vorlage
@@ -1723,15 +1958,19 @@ func _spawn(id: int, pname: String, team: int, pos: Vector3, yaw: float, gen: in
 	s.set_meta("net_gen", gen)           # B-016: Endpose nur für diese Generation (_corpse_pose)
 	m._default_kit(s)
 	var own_inv = players.get(id, {}).get("loadout", {})
+	var pcls := clampi(int(players.get(id, {}).get("cls", MpClasses.DEFAULT)), 0, MpClasses.COUNT - 1)
+	# 0.11.1: Figur = eigene Wahl, sonst Kadersoldat der Klasse; Werte nur aus roster.json (MpClasses.apply_stats)
+	var pfig := MpClasses.effective_figure(String(players.get(id, {}).get("figure", "")), pcls)
+	MpClasses.apply_stats(s, pfig, pcls)
 	if kit.is_empty() and own_inv is Dictionary and not (own_inv as Dictionary).is_empty():
 		_apply_inventory(s, own_inv)
+		MpClasses.finish_weapons(s, pcls, team)
 	elif kit.is_empty():
-		_apply_class(m, s, team, int(players.get(id, {}).get("cls", 2)))
+		_apply_class(m, s, team, pcls)
 	else:
 		_apply_kit(s, kit)
-	s.max_health = 100.0
-	s.health = 100.0
 	var pinfo: Dictionary = players.get(id, {}).duplicate()
+	pinfo["figure"] = pfig
 	if vip_model != "":
 		pinfo["model"] = vip_model
 		s.set_meta("vip", true)
@@ -2644,6 +2883,9 @@ func _warmup_finished() -> void:
 		for k in ["kills", "deaths", "score", "teamkills", "rank", "lives_used"]:
 			p[k] = 0
 		p["spectator"] = false
+		_reset_report_stats(p)
+	_round_started_unix = int(Time.get_unix_time_from_system())     # Aufwärmen zählt nicht zur Matchdauer
+	_round_started_ms = Time.get_ticks_msec()
 	_respawn.clear()
 	_vip.clear()
 	coop_team_spawns = 0             # B-029: Leben zählen ab Rundenbeginn (Aufwärmen frei)
@@ -2663,6 +2905,13 @@ func _warmup_finished() -> void:
 	_announce("Aufwärmen beendet – die Runde beginnt.")
 	for id in players.keys():
 		_server_spawn(int(id))           # alle neu aufstellen (Aufwärmphase zählt nicht)
+
+
+## 0.11.1: Zähler nur für den Master-Bericht (je Runde)
+static func _reset_report_stats(p: Dictionary) -> void:
+	for k in ["pvp_kills", "ai_kills", "suicides", "objectives"]:
+		p[k] = 0
+	p["victims"] = {}
 
 
 ## Nächste Runde bzw. nach `roundcount` Runden nächste Karte der Kartenliste (Original 0x6997B0/0x69B9F0)
@@ -2808,6 +3057,16 @@ func on_soldier_died(s: Node, attacker: Node) -> void:
 		pts = PTS_TEAMKILL if same else PTS_KILL
 		players[killer]["kills"] += 1 if pts > 0 else 0
 		players[killer]["score"] += pts
+		# 0.11.1 Master-Bericht: Abschüsse von Menschen (kills) und KI-Soldaten (ai_kills) getrennt, Opfer je Konto
+		if pts > 0 and victim < 0:
+			players[killer]["ai_kills"] = int(players[killer].get("ai_kills", 0)) + 1
+		elif pts > 0:
+			players[killer]["pvp_kills"] = int(players[killer].get("pvp_kills", 0)) + 1
+			var vgh := String(players.get(victim, {}).get("gh", ""))
+			if vgh != "":
+				var vm: Dictionary = players[killer].get("victims", {})
+				vm[vgh] = int(vm.get(vgh, 0)) + 1
+				players[killer]["victims"] = vm
 		if same:
 			players[killer]["teamkills"] += 1
 			if int(players[killer]["teamkills"]) >= TEAMKILL_KICK and killer > 1:
@@ -2817,6 +3076,7 @@ func on_soldier_died(s: Node, attacker: Node) -> void:
 			team_score[int(players[killer]["team"])] += pts
 	elif players.has(victim) and not by_ai:          # B-029: Tod durch die Missions-KI ist keine Selbsttötung
 		players[victim]["score"] += PTS_SUICIDE
+		players[victim]["suicides"] = int(players[victim].get("suicides", 0)) + 1
 	_update_ranks()
 	_players.rpc(players)
 	var lim := int(rule("score_limit"))
@@ -3067,6 +3327,7 @@ func _server_end(reason: String, winner := -1) -> void:
 	if winner in [0, 1]:
 		team_wins[winner] += 1
 	_end.rpc(reason, players, team_score, winner, team_wins)
+	_master_report(winner)             # 0.11.1: Rundenbericht an den Master (nur Internet + offizieller Build)
 
 
 @rpc("authority", "call_local", "reliable")
@@ -3106,15 +3367,24 @@ func board_text() -> String:
 	if mode() == Mode.OCCUPATION and not zone_owner.is_empty():
 		lines.append("Zonen: " + " ".join(zone_owner.map(func(o): return "A" if o == Soldier.TEAM_ALLIED else ("X" if o == Soldier.TEAM_AXIS else "–"))))
 	# Spalten wie im Original (2611 Spieler Name, 2616 Punkte, 2613 Getötet, 2614 Gestorben, 2612 Ping) + MP-Rang
-	lines.append("%-24s %-6s %6s %6s %6s %6s" % [tx(2611, "Spieler Name"), "Rang", tx(2616, "Punkte"), tx(2613, "Getötet"),
+	# 0.11.1: Spalte Abzeichen (Grafik links neben der Zeile, board_rows) + Dienstgrad: online Master, LAN Original
+	lines.append("%-24s %-18s %6s %6s %6s %6s" % [tx(2611, "Spieler Name"), tr("Dienstgrad") if master_mode() else "Rang", tx(2616, "Punkte"), tx(2613, "Getötet"),
 		tx(2614, "Gestorben"), tx(2612, "Ping")])
+	board_rows = [-1]
+	board_rows.resize(lines.size())
+	board_rows.fill(-1)
 	var ids := players.keys()
 	ids.sort_custom(func(a, b): return int(players[a]["score"]) > int(players[b]["score"]))
 	for id in ids:
 		var p: Dictionary = players[id]
-		lines.append("%-24s %-6s %6d %6d %6d %6d" % [String(p["name"]).substr(0, 24), SAS.rank_name(int(p.get("rank", 0)), true).substr(0, 6),
+		var rk := shown_rank(id)
+		board_rows.append(int(rk["level"]) if bool(rk["master"]) else -1)
+		lines.append("%-24s %-18s %6d %6d %6d %6d" % [String(p["name"]).substr(0, 24), String(rk["text"]).substr(0, 18),
 			int(p["score"]), int(p["kills"]), int(p["deaths"]), shown_ping(int(id))])
 	return "\n".join(lines)
+
+
+var board_rows: Array = []          ## je Zeile der Punktetabelle: Karrierestufe für das Abzeichen (-1 = keins)
 
 
 ## Ping für Anzeigen: Server misst selbst, Clients erhalten die Werte mit dem HUD-Zustand (2 Hz)
@@ -3139,13 +3409,45 @@ func _show_board(on: bool) -> void:
 		p.custom_minimum_size = Vector2(660, 0)
 		p.theme = UIKit.theme()
 		_board.add_child(p)
+		var hb := HBoxContainer.new()
+		p.add_child(hb)
+		_board_badges = VBoxContainer.new()
+		_board_badges.name = "Badges"
+		_board_badges.add_theme_constant_override("separation", 0)
+		hb.add_child(_board_badges)
 		_board_label = Label.new()
 		var mono := SystemFont.new()
 		mono.font_names = PackedStringArray(["Consolas", "Courier New", "monospace"])
 		_board_label.add_theme_font_override("font", mono)
-		p.add_child(_board_label)
+		hb.add_child(_board_label)
 	_board_label.text = board_text()
+	_update_board_badges()
 	_board.visible = true
+
+
+var _board_badges: VBoxContainer
+
+
+## Abzeichen-Spalte (Career-Platzhalter) zeilengenau neben der Textliste; LAN-Zeilen ohne Abzeichen.
+func _update_board_badges() -> void:
+	var lh := float(_board_label.get_line_height()) if _board_label.get_line_count() > 0 else 16.0
+	while _board_badges.get_child_count() < board_rows.size():
+		var tr_ := TextureRect.new()
+		tr_.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		tr_.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		_board_badges.add_child(tr_)
+	for i in _board_badges.get_child_count():
+		var t := _board_badges.get_child(i) as TextureRect
+		t.visible = i < board_rows.size()
+		t.custom_minimum_size = Vector2(lh, lh)
+		var lv := int(board_rows[i]) if i < board_rows.size() else -1
+		if lv >= 1 and not _badge_cache.has(lv):
+			_badge_cache[lv] = Career.badge_texture(lv, 32)
+		t.texture = _badge_cache.get(lv) if lv >= 1 else null
+		t.name = "Badge%d" % i
+
+
+var _badge_cache := {}
 
 
 # --- LAN-Suche (UDP-Broadcast) -------------------------------------------------------------
@@ -3198,7 +3500,7 @@ func _info_players() -> Array:
 	for id in players:
 		var p: Dictionary = players[id]
 		out.append([String(p["name"]).substr(0, 24), int(p["team"]), int(p.get("kills", 0)), int(p.get("score", 0)),
-			bool(p.get("bot", false))])
+			bool(p.get("bot", false)), String(shown_rank(id)["text"]).substr(0, 24)])     # 0.11.1: Dienstgrad (SPIEL-INFO)
 		if out.size() >= 40:
 			break
 	return out
@@ -3646,6 +3948,8 @@ func _wd_spawn() -> void:
 	if OS.has_feature("editor"):
 		a.append_array(["--path", ProjectSettings.globalize_path("res://")])
 	a.append_array(["--", "--dedicated=" + _wd_cfg, "--autorestart_child"])
+	if OS.get_cmdline_user_args().has("--setup_gate=0"):
+		a.append("--setup_gate=0")
 	var r := OS.execute_with_pipe(OS.get_executable_path(), a, false)
 	_wd_pid = int(r.get("pid", 0))
 	_wd_io = r.get("stdio")
@@ -3752,10 +4056,24 @@ func _team_players(t: int) -> int:
 
 ## Original-Klassen (mp.json presets, 5 je Seite): Waffe in der Hand + Taschenliste
 const CLASS_ORDER := ["gunner", "sniper", "rifleman", "heavy gunner", "assault gunner"]
-const CLASS_NAMES := ["MG-Schütze", "Scharfschütze", "Gewehrschütze", "Grenadier", "Sturmschütze", "Schleicher (Schalldämpfer)"]
+## 0.11.1 BEWUSSTE ABWEICHUNG [D]: 7 eigene Klassen (MpClasses) statt der 5 Original-Klassen je Seite
+const CLASS_NAMES := MpClasses.NAMES
 
 
+## Klassen-Ausrüstung (MpClasses.build: Kartenlager, Seite, Traglast der Figur) – auf allen Rechnern gleich
 func _apply_class(m: Node, s: Soldier, team: int, cls: int) -> void:
+	cls = clampi(cls, 0, MpClasses.COUNT - 1)
+	var fig := String(s.get_meta("mp_figure", MpClasses.best_figure(cls)))
+	var map_id := String(settings.get("map", ""))
+	var inv := MpClasses.build(cls, team, _current_allowed(), map_id, MpClasses.strength_of(fig))
+	_apply_inventory(s, inv)
+	MpClasses.finish_weapons(s, cls, team)
+	s.set_meta("mp_class", MpClasses.label(cls))
+	s.set_meta("mp_class_id", cls)
+
+
+## Bis 0.11.0: Original-Klassenvorlagen (mp.json presets, 5 je Seite) – nur noch Vergleich/Tests
+func _apply_orig_class(m: Node, s: Soldier, team: int, cls: int) -> void:
 	if cls == 5:
 		# Ergänzung: Schleicher mit Schalldämpferwaffe (Achse: K98k/MP 40 mit Schalldämpfer; Alliierte: De Lisle/Sten),
 		# nur kartenerlaubte Waffen; auf allen Rechnern gleich (Auswahl über den Namen statt Zufall)
@@ -3857,6 +4175,7 @@ func _apply_inventory(s: Soldier, inv: Dictionary) -> void:
 				w.in_mag = w.data.magazine_size
 				w.reserve = w.data.magazine_size * int(lo["mags"].get(String(w.data.id), 0))
 	s.medkits = int(lo["medkits"])
+	s.set_meta("big_medkits", SAS.count_of(inv, MpClasses.BIG_MEDKIT))     # 0.11.1: großer Verbandskasten (× 2)
 	s.explosives = int(lo["explosives"])
 	s.mines = int(lo["mines"])
 	s.has_binoculars = bool(lo["binoculars"])
@@ -4085,6 +4404,7 @@ func objective_done(index: int) -> void:
 				var s: Soldier = _soldiers[id]
 				if is_instance_valid(s) and s.alive and s.team == int(o["team"]) and players.has(id):
 					players[id]["score"] += int(o["value"])
+					players[id]["objectives"] = int(players[id].get("objectives", 0)) + 1     # 0.11.1 Master-Bericht
 			_update_ranks()
 			_players.rpc(players)
 			_objective.rpc(index, team_score)
@@ -4163,6 +4483,8 @@ static func heroes() -> Array:
 ## Gesicht e_fNNN wechselt, Körper = Modell der Seite, roster.json „face_texture“). Spielerwahl = players[id]["figure"].
 static func figure_ids() -> Array:
 	var out: Array = []
+	for i in SAS.store_indices():   # 0.11.1: SAS-Kader „sas:N“ mit Kaderwerten (MpClasses), vor „MP 1…27“
+		out.append("sas:%d" % int(i))
 	for i in range(30, 57):
 		if String(SAS.store(i).get("category", "")) == "mp_slot":
 			out.append("mp:%d" % i)
@@ -4181,8 +4503,8 @@ static func hero_of(side: String) -> Dictionary:
 static func figure_name(fig: String) -> String:
 	if fig.begins_with("hero:"):
 		return String(hero_of(fig.substr(5)).get("name", "Held"))
-	if fig.begins_with("mp:"):
-		var s := SAS.store(int(fig.substr(3)))
+	if MpClasses.figure_store(fig) >= 0:
+		var s := SAS.store(MpClasses.figure_store(fig))
 		return "%s %s" % [s.get("first_name", "MP"), s.get("last_name", "")]
 	return ""
 
@@ -4212,8 +4534,8 @@ static func figure_face(fig: String) -> Texture2D:
 			path = hero_face_path(pub)
 		if path == "" and pub != "" and ResourceLoader.exists(LOCAL_HERO_DIR + "/" + pub):
 			return load(LOCAL_HERO_DIR + "/" + pub)
-	elif fig.begins_with("mp:"):
-		var ft := String(SAS.store(int(fig.substr(3))).get("face_texture", "")).to_lower()
+	elif MpClasses.figure_store(fig) >= 0:
+		var ft := String(SAS.store(MpClasses.figure_store(fig)).get("face_texture", "")).to_lower()
 		if ft != "" and FileAccess.file_exists(OrigLevel.cache_root() + "/textures/%s.png" % ft):
 			path = OrigLevel.cache_root() + "/textures/%s.png" % ft
 	if path == "":
@@ -4283,7 +4605,9 @@ func _add_bots() -> void:
 						nm = String(h.get("name", nm))
 						hero = true
 			players[next_id] = {"name": nm, "team": team, "kills": 0, "deaths": 0, "score": 0, "teamkills": 0,
-				"cls": 0, "spectator": false, "bot": true, "role": i % 5, "hero": hero, "side": side}
+				"cls": i % MpClasses.COUNT, "spectator": false, "bot": true, "hero": hero, "side": side,
+				"role": int(MpClasses.BOT_ROLE[i % MpClasses.COUNT]),            # 0.11.1: Klassen wie Spieler
+				"figure": MpClasses.best_figure(i % MpClasses.COUNT)}
 			next_id -= 1
 	_players.rpc(players)
 	for id in players.keys():

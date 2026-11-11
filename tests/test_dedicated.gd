@@ -69,7 +69,7 @@ func _run() -> void:
 	f.close()
 	var exe := OS.get_executable_path()
 	var r := OS.execute_with_pipe(exe, ["--headless", "--log-file", ProjectSettings.globalize_path("res://test_output/dedicated_server.log"),
-		] + _project_args() + ["--", "--dedicated=" + cfg], false)
+		] + _project_args() + ["--", "--dedicated=" + cfg, "--setup_gate=0"], false)
 	_stdio = r.get("stdio")
 	_stderr = r.get("stderr")
 	_pid = int(r.get("pid", 0))
@@ -161,7 +161,7 @@ func _autorestart_part() -> void:
 	f.close()
 	out_text = ""
 	var r := OS.execute_with_pipe(OS.get_executable_path(), ["--headless", "--log-file",
-		ProjectSettings.globalize_path("res://test_output/dedicated_watchdog.log")] + _project_args() + ["--", "--dedicated=" + cfg], false)
+		ProjectSettings.globalize_path("res://test_output/dedicated_watchdog.log")] + _project_args() + ["--", "--dedicated=" + cfg, "--setup_gate=0"], false)
 	_stdio = r.get("stdio")
 	_stderr = r.get("stderr")
 	_pid = int(r.get("pid", 0))

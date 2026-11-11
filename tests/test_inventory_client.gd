@@ -60,6 +60,28 @@ func _run() -> void:
 	if d0 > 2.2:
 		me.global_position = corpse.global_position + Vector3(0.8, 0.3, 0.0)
 		me.velocity = Vector3.ZERO
+	# Spawnpunkte sind zufällig: steht ein anderes Benutzen-Objekt (z. B. MG-Stellung der Karte) in Reichweite, auf die
+	# davon abgewandte Seite der Leiche stellen (Leiche bleibt 0,9 m vor dem Soldaten) – geprüft wird die Zielwahl der Leiche
+	var others: Array = get_tree().get_nodes_in_group("interactables").filter(func(n):
+		return n is Node3D and not corpse.is_ancestor_of(n) and not me.is_ancestor_of(n) and n != corpse \
+			and (n as Node3D).global_position.distance_to(corpse.global_position) < 4.0)
+	if not others.is_empty():
+		var best_p := me.global_position
+		var best_d := -1.0
+		for k in 16:
+			var cand := corpse.global_position + Vector3(cos(k * TAU / 16.0), 0.0, sin(k * TAU / 16.0)) * 0.9
+			var dmin := INF
+			for o in others:
+				var dv: Vector3 = (o as Node3D).global_position - cand
+				dv.y = 0.0
+				dmin = minf(dmin, dv.length())
+			if dmin > best_d:
+				best_d = dmin
+				best_p = cand
+		print("INV-CLIENT: andere Benutzen-Objekte nahe der Leiche %s → Standpunkt %s (%.1f m Abstand)" % [
+			others.map(func(n): return String(n.name)), best_p, best_d])
+		me.global_position = best_p + Vector3(0.0, 0.3, 0.0)
+		me.velocity = Vector3.ZERO
 	await get_tree().create_timer(2.0).timeout
 	print("INV-CLIENT: nach 2 s ich %s, Leiche %s" % [me.global_position if is_instance_valid(me) else Vector3.INF, corpse.global_position])
 	if not is_instance_valid(me) or not me.alive:

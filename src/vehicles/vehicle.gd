@@ -795,6 +795,9 @@ var _best_dist := INF
 
 var _recover_t := 0.0
 var _dbg_t := 0.0
+var _unstuck := false          # Anheben (aufgesessen) je Routenpunkt schon versucht
+var hull_unsticks := 0         # Zähler (Tests/Diagnose)
+var _lift_t := 0.0
 
 
 ## Skriptfahrt fährt physikalisch (VehicleDrive.ai_control: Zielpunkt mit Vorausschau, Kurven-/Zielbremsung);
@@ -814,6 +817,7 @@ func drive_path(points: Array, kmh: float) -> void:
 	_stuck_t = 0.0
 	_best_dist = INF
 	_recover_t = 0.0
+	_unstuck = false
 
 
 var _passable_done := false
@@ -1004,6 +1008,28 @@ func _script_drive(delta: float) -> void:
 		# fix_0103: Hangstillstand (_slope_stall läuft) → keine Rückwärtsphase, sondern Nachführen (s. u.)
 		if _stuck_t > 2.5 and _recover_t <= 0.0 and absf(drive.speed) < 0.4 and _slope_stall <= 0.0 and _slope_glide_t <= 0.0:
 			_recover_t = 1.6
+		# b0110_a2_tuer [E]: aufgesessen (nicht alle Räder am Boden, Rückwärtsphase ohne Wirkung, AFRICA1 BMW-Gespann nach
+		# dem Zusammenstoß mit panzer01 auf der Grubenkante bei (112,6; 7,2; −237,4)) → einmal je Routenpunkt 0,4 m anheben
+		# und 0,3 m vorsetzen. Sonst übersprang es Punkt für Punkt bis zum Routenende. `--hull_unstick=0` = alter Stand.
+		elif _stuck_t > 4.3 and not _unstuck and absf(drive.speed) < 0.3 and drive.grounded < drive.wheels.size() \
+				and _slope_glide_t <= 0.0 and _void_t <= 0.0 and String(Game.cli.get("hull_unstick", "1")) != "0":
+			_unstuck = true
+			hull_unsticks += 1
+			_lift_t = 0.5      # kinematisch über 0,5 s (ein Sprung in einem Bild galt als „hochgeschleudert“)
+			if Game.cli.has("drive_debug"):
+				print("DRIVEDBG %s AUFGESESSEN, Anheben ab %s" % [name, global_position])
+	if _lift_t > 0.0:
+		_lift_t -= delta
+		freeze_mode = RigidBody3D.FREEZE_MODE_KINEMATIC
+		freeze = true
+		var hd2 := global_basis.z * dirsign
+		hd2.y = 0.0
+		global_position += (Vector3.UP * 0.8 + hd2.normalized() * 0.6) * delta
+		linear_velocity = Vector3.ZERO
+		angular_velocity = Vector3.ZERO
+		if _lift_t <= 0.0:
+			freeze = false
+		return
 	# Vorausschaupunkt auf der Route (glatte Kurven statt Zickzack über die Netzknoten)
 	var look := clampf(4.0 + absf(drive.speed) * 0.7, 4.0, 16.0)
 	var target := _drive_goal
@@ -1068,7 +1094,7 @@ func _script_drive(delta: float) -> void:
 					hq.collision_mask = 1
 					hq.exclude = [get_rid()]
 					for r in get_world_3d().direct_space_state.intersect_shape(hq, 4):
-						hits.append(String((r["collider"] as Node).get_path()).get_file())
+						hits.append(String((r["collider"] as Node).get_path()).get_file() + "<" + String((r["collider"] as Node).get_parent().name))
 			print("DRIVEDBG2 kind %s grounded %d/%d thr %.2f brk %.2f hb %s park %s gear %d rpm %.0f force %.0f mass %.0f pow %.0f freeze %s sleep %s hull %s" % [drive.kind, drive.grounded, drive.wheels.size(), drive.throttle, drive.brake_in, drive.handbrake, drive.parked, drive.gear, drive.rpm, drive.drive_force, drive.mass, drive.power_w, freeze, sleeping, hits])
 	# fix_0103: Hangstillstand messen (Vollgas, alle Räder am Boden, keine Wand/kein Fahrzeug voraus)
 	# nur Gelände voraus zählt als frei – ein Fahrzeug/Soldat voraus nie (AFRICA1: Panzer hinter dem BMW-Gespann in der
@@ -1141,6 +1167,7 @@ func _next_drive_point() -> void:
 	_best_dist = INF
 	_stuck_t = 0.0
 	_recover_t = 0.0
+	_unstuck = false
 	if not _drive_goal.is_finite():
 		if _slope_glide_t > 0.0:
 			_end_slope_glide(0.0)

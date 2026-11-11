@@ -216,7 +216,10 @@ const LAUNCHER_AMMO := {39: 206, 264: 205, 38: PANZERFAUST_AMMO}
 ## Eigene Gegenstände für Inventar/Lager/Waffenliste (SAS): Werte [D], Symbol/Modell der Panzerfaust
 const EXTRA_ITEMS := {PANZERFAUST_AMMO: {"item": PANZERFAUST_AMMO, "id": PANZERFAUST_AMMO, "name": "Panzerfaust-Rakete",
 	"kind": "ammo", "weight_kg": 3.0, "size_class": 2, "space_units": 4, "icon": "wi_ge-panzfau60", "model": "w_panzer",
-	"text_id": -1, "team_flag": 1, "u70": 9, "behaviours": [], "rounds": 1.0}}
+	"text_id": -1, "team_flag": 1, "u70": 9, "behaviours": [], "rounds": 1.0},
+	# 0.11.1 [D] PLATZHALTER „Überspritze“ (MpClasses.REVIVE_SYRINGE, Sanitäter): noch ohne Wirkung, kommt mit dem Coop-Block
+	901: {"item": 901, "id": 901, "name": "Überspritze", "kind": "equipment", "weight_kg": 0.3, "size_class": 1,
+	"space_units": 1, "icon": "ii_aid", "model": "l_medkit", "text_id": -1, "team_flag": 2, "u70": 9, "behaviours": []}}
 const ORIG_PISTOLS := [0, 1, 2, 3, 5, 260, 261]
 ## Granaten/Handwaffen, die ein Soldat tragen kann (Bordwaffen, Geschütze, Flak u. a. nicht)
 const ORIG_HANDHELD_MAX_KG := 15.0

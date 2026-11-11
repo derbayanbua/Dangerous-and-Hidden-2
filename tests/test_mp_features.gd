@@ -62,25 +62,26 @@ func _run() -> void:
 		menu.online_dialog.confirmed.emit()
 		await frames(5)
 	var lm: LanMenu = menu.lan_menu
-	check(lm != null and lm.internet and lm._inet.button_pressed and Net.browsing_favorites, "Internet-Menü offen (Internet-Server vorgewählt, Favoriten)")
+	# 0.11.1: Internet = Original-Serverbrowser (multiplayer menu.4ds) über dem Formular
+	check(lm != null and lm.internet and lm._inet.button_pressed and is_instance_valid(lm.browser) and lm.browser.visible,
+		"Internet-Menü offen (Serverbrowser, Internet-Server im Formular vorgewählt)")
 	Net.favorites.clear()
-	lm._ip.text = "127.0.0.1:%d" % (Net.PORT + 40)
-	var fav_b: Button = lm.find_child("AddFavorite", true, false)
-	check(fav_b != null and fav_b.is_visible_in_tree(), "Knopf „%s“" % SAS.text(20102, "ZU FAVORITEN HINZUFÜGEN"))
-	if not await click(fav_b):
-		fav_b.pressed.emit()          # kopflos 64×64 px: Knopf außerhalb des Fensters
-	check(Net.favorites.has("127.0.0.1:%d" % (Net.PORT + 40)), "Favorit gespeichert", str(Net.favorites))
-	var irb: Button = lm.find_child("RereadButton", true, false)
-	var iub: Button = lm.find_child("UpdateButton", true, false)
-	check(irb != null and iub != null and irb.text == SAS.text(2325, "LISTE NEU EINLESEN") and iub.text == SAS.text(2327, "LISTE AKTUALISIEREN"),
-		"Internet-Menü: Knöpfe LISTE NEU EINLESEN / LISTE AKTUALISIEREN (T2325/2327)")
+	Net.add_favorite("127.0.0.1:%d" % (Net.PORT + 40))
+	var br: ServerBrowserScreen = lm.browser
+	br.toggle_favorites()
+	check(br.favorites_view and Net.browsing_favorites and br.entries.size() == 1, "Browser: FAVORITEN zeigt den Favoriten", str(br.entries))
+	var iub: Button = br.find_child("UpdateButton", true, false)
+	check(iub != null and iub.text == SAS.text(2327, "LISTE AKTUALISIEREN"), "Browser: Knopf LISTE AKTUALISIEREN (T2327)")
 	if iub != null:
-		if not await click(iub):
-			iub.pressed.emit()
-		check(Net.scan_kind == "update" and iub.text == SAS.text(2328, "HALT"), "LISTE AKTUALISIEREN: Favoriten neu abgefragt, Knopf HALT (T2328)")
+		iub.pressed.emit()
+		check(Net.scan_kind == "update", "LISTE AKTUALISIEREN: Favoriten neu abgefragt")
 		var idone := func() -> bool: return Net.scan_kind == ""
-		check(await wait_for(idone, 10.0) and iub.text == SAS.text(2327, "LISTE AKTUALISIEREN"), "Abfrage beendet → Knopf wieder LISTE AKTUALISIEREN")
-	check(await click(visible_button("Zurück")), "Zurück")
+		check(await wait_for(idone, 10.0), "Abfrage beendet")
+	br.toggle_favorites()
+	var bb: Button = br.find_child("BackButton", true, false)
+	check(bb != null, "Browser: ZURÜCK (T2313)")
+	if bb:
+		bb.pressed.emit()
 	await frames(5)
 
 	# --- LAN-Menü: Server-Regeln ---

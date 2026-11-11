@@ -62,10 +62,19 @@ func _run() -> void:
 	lm._map.item_selected.emit(arena_idx)
 	check(not lm._mode.is_item_disabled(1) and lm._mode.is_item_disabled(2), "Arena-Karte: Deathmatch/Team-Deathmatch wählbar")
 	lm._mode.select(1)
-	# --- Formular per Tastatur ---
-	await type_into(lm._name_edit, "E2E-Server")
+	# --- SERVER ERSTELLEN (Original-Bildschirm create server.4ds), Name/Passwort per Tastatur ---
+	check(await click(visible_button("CreateServerButton")), "„%s“ angeklickt" % SAS.text(2311, "SERVER ERSTELLEN"))
+	await frames(3)
+	var cs: CreateServerScreen = lm.create_screen
+	check(cs != null and cs.is_visible_in_tree(), "Bildschirm SERVER ERSTELLEN offen")
+	if cs == null:
+		_finish()
+		return
+	await type_into(cs.find_child("HostnameEdit", true, false), "E2E-Server")
 	check(lm._name_edit.text == "E2E-Server", "Servername eingetippt", lm._name_edit.text)
-	await type_into(lm._pw, PW)
+	cs.show_rule("pw")
+	await frames(1)
+	await type_into(cs.find_child("Rule_pw", true, false), PW)
 	check(lm._pw.text == PW, "Passwort eingetippt")
 	lm._bots.value = 2
 	lm._respawn.value = 5
@@ -76,8 +85,16 @@ func _run() -> void:
 	var cfg := lm.server_settings()
 	check(cfg["name"] == "E2E-Server" and cfg["mode"] == Net.Mode.TEAM_DEATHMATCH and cfg["bots_per_team"] == 2
 		and cfg["password"] == PW, "Servereinstellungen aus dem Formular", str(cfg))
-	# --- Server starten (Klick) ---
-	check(await click(lm.find_child("HostButton", true, false)), "„Server starten“ angeklickt")
+	# --- SERVER ERSTELLEN (Original-Bildschirm create server.4ds) zeigt das Formular, START (Klick) ---
+	cs.scroll = 0
+	cs.build()
+	await frames(2)
+	var hn: LineEdit = cs.find_child("HostnameEdit", true, false)
+	check(hn != null and hn.text == "E2E-Server" and (cs.find_child("StyleText", true, false) as Label).text == Net.MODE_NAMES[1]
+		and (cs.find_child("Rule_maxp", true, false) as LineEdit).text == "8", "SERVER ERSTELLEN zeigt Name, Stil und Regeln des Formulars")
+	check(lm._cls.item_count == MpClasses.COUNT and lm._cls.get_item_text(MpClasses.DEFAULT) == tr(MpClasses.NAMES[MpClasses.DEFAULT]),
+		"Klassenauswahl mit den 7 MP-Klassen")
+	check(await click(cs.find_child("HostButton", true, false)), "„%s“ angeklickt" % SAS.text(2357, "START"))
 	check(Net.is_online and multiplayer.is_server(), "Server läuft", Net.last_error)
 	# Ladebildschirm (Original loader.4ds) mit Fortschrittsbalken während des Hintergrundladens
 	var loading := func() -> bool:

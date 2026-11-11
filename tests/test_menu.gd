@@ -257,8 +257,8 @@ func _run() -> void:
 	get_tree().root.add_child(ps)
 	ps.open(String(Game.MP_MAPS[0]) if not Game.MP_MAPS.is_empty() else "")
 	await frames(2)
-	check(ps.has_layout() and ps.find_child("Accept", true, false) != null and ps.class_label(1) != "",
-		"SPIELER-SETUP: Originallayout, Klassenliste aus mp.json", ps.class_label(1))
+	check(ps.has_layout() and ps.find_child("Accept", true, false) != null and ps.class_label(1) == MpClasses.label(1),
+		"SPIELER-SETUP: Originallayout, Klassenliste (MpClasses, 7 Klassen)", ps.class_label(1))
 	ps.cls = 1
 	ps.accept()
 	check(Net.local_class == 1, "AKZEPTIEREN übernimmt die Klasse (Net.local_class)")

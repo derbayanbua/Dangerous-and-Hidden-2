@@ -7,7 +7,7 @@ Kein offizielles Spiel des Herstellers, keine kommerzielle Absicht – einfach n
 > 🛒 **Kauft das Original!** *Hidden & Dangerous 2* gibt es z. B. bei [GOG](https://www.gog.com/) – ohne eine
 > eigene Original-Installation funktioniert dieses Projekt auch gar nicht.
 >
-**Hinweis: Die Entwicklung fand rein mit dem Orignal Spiel (CD) statt, daher nicht mit der Version Hidden & Dangerous 2: Courage Under Fire und auch ohne das Addon Sabre Squadron**
+**Hinweis: Die Entwicklung fand rein mit dem Original-Spiel (CD) statt, daher nicht mit der Version Hidden & Dangerous 2: Courage Under Fire und auch ohne das Addon Sabre Squadron.**
 
 ---
 
@@ -19,25 +19,54 @@ SAS-Trupp, Kampagnen in Arktis, Nordafrika, Norwegen, Burma, Alpen, Normandie un
 Tarnung, Fahrzeuge, Original-Missionsabläufe.
 
 - **Nah am Original:** Leveldesign, Missionsziele, Missionsskripte, Dialoge, Musik und Klänge sollen sich so
-  anfühlen wie damals. Die Original-Missionsskripte wurden von einem eigenen neuen Compiler/Interpreter ausgeführt.
+  anfühlen wie damals. Die Original-Missionsskripte werden von einem eigenen neuen Compiler/Interpreter ausgeführt.
 - **Quality of Life:** wo es dem Spielgefühl hilft, ist die Bedienung moderner (siehe unten).
 - **Neu geschrieben:** Engine-Code, KI, Physik, Oberfläche und Werkzeuge sind eigene Entwicklungen.
   Es wird kein Code des Originals verwendet.
-- Texturen und Sounds sind aus dem Original und müssen manuel exportiert und Importiert werden
-- LAN Modus mit BOTs ist implementiert
-- **Mehrspieler – Koop (KOOPERATIV):** im LAN- und Internet-Menü wählbar. Die Kartenliste sind die
-  Einzelspieler-Missionen (Einträge „Arena: …“) 1:1 – gleiche Karten, Skripte, Ziele und Gegner; nur mehrere
-  menschliche Spieler statt Trupp-KI. Abweichend sind lediglich Spielerzahl und Leben (Standard 6 Spieler).
+- Texturen, Modelle und Klänge stammen aus dem Original und müssen aus der eigenen Installation manuell
+  exportiert und importiert werden (siehe unten).
 
-## Screenshots (v0.9.8)
+### Funktionen im Überblick
+
+- **Kampagnen aller Einsatzgebiete** (Arktis, Nordafrika, Norwegen, Burma, Alpen, Normandie, Tschechien) mit den
+  Original-Missionsskripten, Zielen, Zwischensequenzen, Filmen, Nachbesprechung, Orden und Spielständen; dazu
+  Einzelmission, Einzelgänger und Blutbad.
+- **Gegner-KI näher am Original:** Wahrnehmung (Sicht, Gehör, Licht), Kampfablauf, Flankieren, Alarm und Suche
+  nach den Abläufen des Originals; Verbündete und Kameraden mit eigener KI.
+- **Befehlsmenü am Ziffernblock** wie im Original (Bewegung, Angriff, Aktion, Formation, Taktik-Modus),
+  **leise Befehle** (geduckt schleichen, schallgedämpfte Waffen), taktische Karte mit Wegpunkten.
+- **Tarnung** in Feinduniform, **Kameraden heilen** mit dem Erste-Hilfe-Kit, **Soldatenwerte** (Gesundheit, Kraft,
+  Ausdauer, Schießen, Tarnung, Erste Hilfe, Schlösser) wirken im Spiel; SAS-Kader mit Training und Inventar.
+- **Grafik:** Grafikstufen von Niedrig bis „4K Ultra“, neues Wasser je Klimazone (Original-Wasser wählbar), moderne
+  Explosionen, Himmel und Wolken, wählbare Sichtweite; optional KI-hochskalierte HD-/4K-Texturen.
+- **Ragdoll-Physik** und mehrstufige **Blut-Optionen** (aus bis „Extra Gore“), jeweils abschaltbar.
+- **Mehrspieler im LAN und Internet:** Deathmatch, Team-Deathmatch, Besetzung, HD2-Aufgaben und **Koop**
+  (Einzelspieler-Missionen 1:1 mit mehreren Spielern), KI-Soldaten (Bots), Chat und Sprachchat.
+  Internet: **Serverbrowser** über einen Masterserver und **Ranglisten (online)**; Direktverbindung per IP und
+  Favoriten gehen auch ohne Masterserver.
+- **Dedizierter Server** mit eigenem Konfigurations-Launcher (nach dem Vorbild des Original-ServerLaunchers).
+- **Testkarte „Bavaria (Test)“**: eigener Kartenentwurf für Mehrspieler und als Übungseinsatz.
+- **Sprachen:** Deutsch, Englisch, Französisch, Italienisch, Spanisch, Tschechisch (Originaltexte der jeweiligen
+  Installation; Sprachaufnahmen nur deutsch).
+
+### Datenschutz (Internet-Mehrspieler)
+
+Beim ersten Aufruf des Internet-Mehrspielers erscheint ein Hinweis zur Datenübertragung an den Masterserver:
+übertragen werden gehashte und verschlüsselte PC-Daten, der Profilname und gehashte IP-Adressen – ausschließlich für
+Sicherheit und den Serverbrowser. Ohne Zustimmung bleibt der Internet-Teil gesperrt; LAN und Einzelspieler sind davon
+nicht betroffen.
+
+## Screenshots (v0.11)
 
 | Hauptmenü | Einsatz Arktis |
 |---|---|
 | ![Hauptmenü](docs/screenshots/01_hauptmenue.png) | ![Einsatz Arktis](docs/screenshots/02_einsatz_arktis.png) |
-| **Gefecht: Explosion mit Ragdoll-Physik** | **LAN-Mehrspieler** |
-| ![Gefecht](docs/screenshots/03_kampf_explosion.png) | ![LAN-Menü](docs/screenshots/04_lan.png) |
-| **HUD mit Befehlsmenü** | |
-| ![HUD und Befehlsmenü](docs/screenshots/05_hud_befehlsmenue.png) | |
+| **Einsatz Nordafrika** | **Normandie mit neuem Wasser** |
+| ![Einsatz Nordafrika](docs/screenshots/03_einsatz_afrika.png) | ![Normandie Wasser](docs/screenshots/04_normandie_wasser.png) |
+| **Gefecht: Explosion** | **HUD mit Befehlsmenü** |
+| ![Gefecht](docs/screenshots/05_kampf_explosion.png) | ![HUD und Befehlsmenü](docs/screenshots/06_hud_befehlsmenue.png) |
+| **Mehrspieler** | |
+| ![Mehrspieler-Menü](docs/screenshots/07_mehrspieler.png) | |
 
 ## Keine Originaldaten im Repository
 
@@ -112,15 +141,20 @@ Die erzeugten Daten stammen aus dem eigenen Spiel und dürfen nicht weitergegebe
 
 ## Stand
 
-In aktiver Entwicklung. Die Arktis-Kampagne läuft mit Originaldaten teilweise, weitere Kampagnen sind
-konvertiert und werden Schritt für Schritt spielbar gemacht.
-- Es gibt noch diverse BUGS! -> 
+In aktiver Entwicklung (Version 0.10.x, 0.11 in Arbeit). Alle Kampagnen sind mit Originaldaten spielbar und werden
+laufend mit dem Original abgeglichen; vollständig fehlerfrei ist noch keine davon.
+- **Es gibt noch diverse Fehler**, z. B. hängende oder unpassend reagierende KI, Abweichungen in einzelnen
+  Missionsabläufen, Darstellungsfehler und Performance-Einbrüche auf großen Karten.
+- Werte, die im Original nicht entschlüsselt sind, sind geschätzt und im Code gekennzeichnet.
+- Der Mehrspieler (besonders Internet, Koop und Ranglisten) ist noch wenig im Praxiseinsatz erprobt.
+- Rückmeldungen und Fehlerberichte bitte über die GitHub Issues.
 
 ## Steuerung (Standard)
 
 WASD bewegen · Shift sprinten · C hocken · Z/Y liegen · Leertaste springen/klettern · Q/E lehnen ·
 LMT feuern · RMT zielen · R nachladen · Mausrad Ausrüstungswahl (oder 1-9) · G Granate · F benutzen ·
-V 1./3. Person · F1–F4 Soldat wählen · M taktische Karte · F5/F9 Schnellspeichern/-laden · Esc Pause, NUM 0-4 Soldaten befehle [funktionieren nur teilweise]
+V 1./3. Person · F1–F4 Soldat wählen · M taktische Karte · F5/F9 Schnellspeichern/-laden · Esc Pause
+· Befehlsmenü: Num 0 = Befehl an alle, Num 1–6 = einzelner Kamerad (der aktive Soldat wird übersprungen)
 
 Weitere Tasten wie im Original: P Pause · I Inventar · Rücktaste Gegenstand fallen lassen · B Fernglas · ' Aktionsmenü ·
 Komma bzw. O Missionsziele · Alt Handbremse · H Erste Hilfe · MMT Feuermodus · X/U/J/K/L/N/T Direktbefehle.

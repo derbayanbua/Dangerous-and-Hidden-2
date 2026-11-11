@@ -83,8 +83,10 @@ func build() -> void:
 		var team_t := ""
 		if team_mode and int(p[1]) in [0, 1]:
 			team_t = " [%s]" % Net.team_name(int(p[1]))
-		var pl := label(Rect2(area.position.x - 40, y, 230, ROW_H), "%s%s%s" % [String(p[0]), team_t,
-			" (KI)" if p.size() > 4 and bool(p[4]) else ""], 13)
+		var rk := String(p[5]) if p.size() > 5 else ""      # 0.11.1: Dienstgrad (online Master, LAN Original)
+		var pl := label(Rect2(area.position.x - 40, y, 230, ROW_H), "%s%s%s%s" % [String(p[0]), team_t,
+			" (KI)" if p.size() > 4 and bool(p[4]) else "", " – " + rk if rk != "" else ""], 13)
+		pl.clip_text = true
 		pl.name = "Player%d" % i
 		label(Rect2(area.position.x + 199, y, 75, ROW_H), str(int(p[2])), 13, INK, HORIZONTAL_ALIGNMENT_RIGHT)
 		label(Rect2(area.position.x + 279, y, 75, ROW_H), str(int(p[3])), 13, INK, HORIZONTAL_ALIGNMENT_RIGHT)

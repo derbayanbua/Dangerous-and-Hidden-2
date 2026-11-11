@@ -71,6 +71,60 @@ func _ready() -> void:
 	root.add_child(kill_cam)
 	root.resized.connect(_layout_graphics)
 	_layout_graphics.call_deferred()
+	_build_promotion(root)
+
+
+# --- 0.11.1: Beförderungsmeldung (Master-Karriere, nur gewertete Berichte; Signal Master.promoted) ---------------
+const PROMO_SHOW_S := 7.0
+var promo: Control                 ## Tests: promo.visible / promo_text
+var promo_text := ""
+var _promo_t := 0.0
+
+
+func _build_promotion(root: Control) -> void:
+	promo = PanelContainer.new()
+	promo.name = "Promotion"
+	promo.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	promo.position += Vector2(-260, 150)
+	promo.custom_minimum_size = Vector2(520, 0)
+	promo.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.08, 0.07, 0.05, 0.82)
+	sb.border_color = UIKit.ACCENT
+	sb.set_border_width_all(2)
+	sb.set_content_margin_all(12)
+	promo.add_theme_stylebox_override("panel", sb)
+	var hb := HBoxContainer.new()
+	hb.name = "Row"
+	hb.alignment = BoxContainer.ALIGNMENT_CENTER
+	hb.add_theme_constant_override("separation", 14)
+	promo.add_child(hb)
+	var icon := TextureRect.new()
+	icon.name = "Badge"
+	icon.custom_minimum_size = Vector2(56, 56)
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	hb.add_child(icon)
+	var l := Label.new()
+	l.name = "Text"
+	l.add_theme_font_size_override("font_size", 26)
+	l.add_theme_color_override("font_color", UIKit.ACCENT)
+	l.add_theme_color_override("font_outline_color", Color.BLACK)
+	l.add_theme_constant_override("outline_size", 5)
+	hb.add_child(l)
+	promo.visible = false
+	root.add_child(promo)
+	var ms := get_node_or_null("/root/Master")
+	if ms:
+		ms.promoted.connect(show_promotion)
+
+
+func show_promotion(level: int, rank_name: String) -> void:
+	promo_text = "%s %s" % [tr("Befördert zu"), tr(rank_name)]
+	(promo.get_node("Row/Text") as Label).text = promo_text
+	(promo.get_node("Row/Badge") as TextureRect).texture = Career.badge_texture(level, 64)
+	promo.visible = true
+	_promo_t = PROMO_SHOW_S
 
 
 # --- Original-HUD-Grafiken (gameinterface.4ds, orig_cache/ui/hud/crops; hd2.exe 0x4AE7C0/0x4AD8F0/0x4AED20) -------
@@ -261,6 +315,9 @@ static func _mmss(s: float) -> String:
 # --- Anzeige -----------------------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
+	if _promo_t > 0.0:
+		_promo_t -= delta
+		promo.visible = _promo_t > 0.0
 	if not Net.is_online:
 		return
 	var hi: Dictionary = Net.hud_info

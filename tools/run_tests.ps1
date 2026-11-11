@@ -48,6 +48,7 @@ $suites = @(
   @{ name = "test_a3";       args = "--headless -- --mission=a3_rendezvous --autoplay=test_orig_part --commandos=4" },
   @{ name = "test_sas";      args = "--headless -- --autoplay=test_sas" },
   @{ name = "test_sas_values"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_sas_values" },
+  @{ name = "test_mp_classes"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_mp_classes" },
   @{ name = "test_ui_flow";  args = "--headless -- --autoplay=test_ui_flow --profiles_dir=user://test_ui_flow --noimport" },
   @{ name = "test_language"; args = "--headless -- --autoplay=test_language --profiles_dir=user://test_language --noimport" },
   @{ name = "test_b022b";    args = "--headless -- --autoplay=test_b022b --profiles_dir=user://test_b022b --noimport" },
@@ -62,6 +63,7 @@ $suites = @(
   @{ name = "test_normandie_doors"; args = "--headless -- --autoplay=test_normandie_doors"; mp = $true },
   # B-017: Türflügel/Zäune/Wasser/Zielmarker (echte Benutzen-/Vorwärtstaste)
   @{ name = "test_b017_af1"; args = "--headless -- --mission=af1_spaghetti_airport --autoplay=test_b017 --phase=doors" },
+  @{ name = "test_b017_a2"; args = "--headless -- --mission=a2_erkundung --autoplay=test_b017 --phase=doors --skip_doors=M_D_PO34" },
   @{ name = "test_b017_no2"; args = "--headless -- --mission=no2_schwerttaenzer --autoplay=test_b017 --phase=doors" },
   @{ name = "test_b017_arctic"; args = "--headless -- --mission=a1_blizzard --autoplay=test_b017 --phase=arctic" },
   @{ name = "test_arctic2_licht"; args = "--headless -- --mission=a2_erkundung --autoplay=test_arctic2_licht" },
@@ -86,6 +88,8 @@ $suites = @(
   @{ name = "test_commands"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_commands" },
   @{ name = "test_follow_spacing"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_follow_spacing" },
   @{ name = "test_quick_line"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_quick_line" },
+  @{ name = "test_master_client"; args = "--headless -- --autoplay=test_master_client --profiles_dir=user://test_master_client --noimport" },   # 0.11.1 Master (lokaler Mock)
+  @{ name = "test_career"; args = "--headless -- --autoplay=test_career --profiles_dir=user://test_career --noimport" },   # 0.11.1 Karriere-XP
   @{ name = "test_surrender"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_surrender" },
   @{ name = "test_blood";    args = "--headless -- --mission=m01_funkfeuer --autoplay=test_blood --profiles_dir=user://test_blut" },
   @{ name = "test_weapons_orig"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_weapons_orig" },
@@ -111,9 +115,11 @@ $suites = @(
   @{ name = "test_dedicated"; args = "--headless -- --autoplay=test_dedicated --profiles_dir=user://test_ded --noimport"; mp = $true },
   @{ name = "test_dedicated_ui"; args = "--headless -- --autoplay=test_dedicated_ui --profiles_dir=user://test_ded_ui --noimport"; mp = $true },   # 0.10.3 Konfigurationsmenue dedizierter Server
   @{ name = "test_mp_setup_ui"; args = "--headless -- --autoplay=test_mp_setup_ui --profiles_dir=user://test_mp_setup --noimport"; mp = $true },
+  @{ name = "test_mp_browser"; args = "--headless -- --autoplay=test_mp_browser --profiles_dir=user://test_mp_browser --noimport --setup_gate=1"; mp = $true },   # 0.11.1 Serverbrowser + Setup vor Spawn
   @{ name = "test_mp_feedback"; args = "--headless -- --autoplay=test_mp_feedback"; mp = $true },
   @{ name = "test_support_strike"; args = "--headless -- --autoplay=test_support_strike"; mp = $true },
   @{ name = "test_net_authority"; args = "--headless -- --autoplay=test_net_authority"; mp = $true },
+  @{ name = "test_net_master"; args = "--headless -- --autoplay=test_net_master"; mp = $true },   # 0.11.1 Spiel <-> Master (2 Prozesse, lokaler Mock)
   # B-029: Coop-Stil (zweiprozessig mit test_mp_coop_client)
   @{ name = "test_mp_coop"; args = "--headless -- --autoplay=test_mp_coop"; mp = $true },
   # 0.10.8: Testkarte Bavaria (laufen mit und ohne die lokalen Kartenbilder)

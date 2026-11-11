@@ -724,6 +724,8 @@ func commit_debrief() -> void:
 	campaign = _pending
 	_pending = {}
 	save_campaign()
+	# 0.11.1: lokale Karriere-XP je Spielerprofil (zählt nie global, Original-SAS-Ränge unverändert)
+	last_career = preload("res://src/campaign/career.gd").apply_mission(profile_dir(), last_result) if has_profile() and not last_result.is_empty() else {}
 	var ord := -1
 	for id in campaign.get("completed", []):
 		ord = maxi(ord, CAMPAIGN_ORDER.find(id) + 1)
@@ -1237,6 +1239,7 @@ func _record_mission_result(id: String, success: bool, fallen_pids: Array) -> vo
 var current_mission_id := ""
 var pending_load: Dictionary = {}   ## wird nach dem Laden der Mission angewandt
 var last_result := {}               ## für das Nachbesprechungsmenü
+var last_career := {}               ## 0.11.1: Karriere-Ergebnis der letzten übernommenen Mission (Career.apply_mission)
 
 var cli := {}
 

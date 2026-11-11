@@ -85,6 +85,35 @@ func _run() -> void:
 	Net.is_online = false
 	_r("aHlkcm9zaG9jayAw")
 
+	# Taste ^ (physisch links neben 1) öffnet die Zeile; Tottasten-Variante (nur keycode ^) ebenso
+	for variant in ["physical", "circumflex"]:
+		var ev := InputEventKey.new()
+		ev.pressed = true
+		if variant == "physical":
+			ev.physical_keycode = KEY_QUOTELEFT
+		else:
+			ev.keycode = KEY_ASCIICIRCUM
+			ev.unicode = 0x5E
+		_ql._input(ev)
+		check(_ql.is_open(), "Taste ^ öffnet Zeile (%s)" % variant)
+		_ql._close()
+	# pos: Antwort sichtbar im HUD, Zwischenablage, auch mit vorangestelltem ^ der Tottaste
+	var msgs: Array = []
+	var cb := func(t: String, sec: float): msgs.append([t, sec])
+	Events.message.connect(cb)
+	_ql._on_submit("^pos")
+	Events.message.disconnect(cb)
+	check(msgs.size() == 1 and String(msgs[0][0]).begins_with("pos ") and float(msgs[0][1]) >= 5.0,
+		"pos zeigt Lage mehrere Sekunden", str(msgs))
+	check(DisplayServer.clipboard_get().begins_with("pos ") or DisplayServer.get_name() == "headless",
+		"pos in Zwischenablage")
+	var shown := false
+	if m.hud and m.hud.get("_msg_box"):
+		for l in m.hud._msg_box.get_children():
+			if l is Label and l.text.begins_with("pos "):
+				shown = l.visible
+	check(shown, "pos-Zeile im HUD")
+
 	# Aktiver Soldat
 	var mate: Soldier = null
 	for mm in m.squad.members:

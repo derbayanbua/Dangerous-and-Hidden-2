@@ -44,7 +44,11 @@ try {
     "-- Import"
     cmd /c "`"$godot`" --headless --path `"$wt`" --import > `"$proj\test_output\public_import.log`" 2>&1"
     "-- Export"
-    cmd /c "`"$godot`" --headless --path `"$wt`" --export-release `"Windows Public`" `"$Out\DangerousHidden2.exe`" > `"$proj\test_output\public_export.log`" 2>&1"
+    . "$PSScriptRoot\build_key.ps1"
+    Add-BuildKey -Root $wt | Out-Host
+    try {
+      cmd /c "`"$godot`" --headless --path `"$wt`" --export-release `"Windows Public`" `"$Out\DangerousHidden2.exe`" > `"$proj\test_output\public_export.log`" 2>&1"
+    } finally { Remove-BuildKey -Root $wt | Out-Host }
   } finally { Release-TestSlots -Slots $slots -Name "build_public" }
   foreach ($f in @("DangerousHidden2.exe", "DangerousHidden2.pck")) {
     if (-not (Test-Path "$Out\$f") -or (Get-Item "$Out\$f").Length -eq 0) { throw "Export fehlgeschlagen: $f fehlt (test_output\public_export.log)." }

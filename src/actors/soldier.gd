@@ -106,6 +106,8 @@ var heal_time_left := 0.0           ## > 0: legt gerade einen Verband an
 var heal_target: Soldier
 const HEAL_DURATION := 3.0
 const HEAL_AMOUNT := 45.0
+## 0.11.1 MP-Klasse Schleicher [D]: Streuungsfaktor mit schallgedämpfter Waffe (MpClasses.SNEAK_SPREAD_K), sonst 1
+var silenced_spread_k := 1.0
 ## Platzierbare Ausrüstung (Original: Dynamit/Sprengstofftasche 67/68, Minen 70/71)
 var explosives := 0
 var mines := 0
@@ -271,6 +273,10 @@ func apply_bandage(target: Soldier) -> float:
 		return 0.0
 	medkits -= 1
 	var amount := bandage_amount()
+	var big := int(get_meta("big_medkits", 0))
+	if big > 0:
+		set_meta("big_medkits", big - 1)       # 0.11.1: großer Verbandskasten zuerst, Wirkung × 2 [D]
+		amount *= MpClasses.BIG_MEDKIT_K
 	target.heal(amount)
 	train("heals")
 	if medkits <= 0 and tool == "medkit":
@@ -1511,6 +1517,8 @@ func current_spread() -> float:
 	var move_k := clampf(current_speed() / 2.0, 0.0, 1.0) * w.data.spread_move_add
 	var fatigue := (1.0 - stamina / 100.0) * (0.6 if aiming else 0.3)
 	var skill := skill_k(skill_shooting, 1.5, 0.7)
+	if silenced_spread_k < 1.0 and (String(w.data.sound).begins_with("silenced") or w.data.noise_radius < 20.0):
+		skill *= silenced_spread_k      # 0.11.1 Schleicher-Bonus mit Schalldämpferwaffe [D]
 	return (base * stance_k + move_k + w.bloom * (0.6 if aiming else 1.0) + fatigue) * skill + extra_spread
 
 

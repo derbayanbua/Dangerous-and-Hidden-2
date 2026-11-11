@@ -9,6 +9,8 @@ extends OrigScreen
 ## Anbindung an Net: local_class / request_class / request_loadout / request_team / request_figure / send_chat.
 ## Einzel-Ausrüstung (MpLoadout): erlaubte Gegenstände per Doppelklick, Klick auf Platz oder Ziehen an den Soldaten,
 ## Doppelklick/„Ablegen“/Zurückziehen nimmt sie ab; Gewicht/Raum wie im Original (Überladung 2023, Lager 9522).
+## 0.11.1: Klassenliste = eigene Klassen (MpClasses, BEWUSSTE ABWEICHUNG [D]); Klassenwahl wählt den Kadersoldaten
+## mit den passenden Werten und stellt die Klassen-Ausrüstung (Karte/Klima/Traglast) zusammen; beides frei änderbar.
 ## Klassen-Vorlagen bleiben als Vorlage; dazu je Seite 6 eigene Vorlagen (user_presets_orig.def, SPEICHERN/UMBENENNEN).
 ## PUNKTESTAND schaltet die rechte Seite auf den Punktestand um, Knopf dann „SOLDATEN-STATUS ANZEIGEN“ (T2530;
 ## Umschalter zweier Felder mit Knopftext 2529/2530 in hd2.exe 0x685EE0 [P Zuordnung]).
@@ -106,16 +108,16 @@ func allowed_list() -> Array:
 
 
 func strength() -> float:
-	return MpLoadout.strength_of(figure)
+	return MpLoadout.strength_of(MpClasses.effective_figure(figure, cls))
 
 
 func _heads(i: Dictionary) -> Array:
 	return MpLoadout.heads_for(i, mp.get("presets", []), _side())
 
 
-## Ausrüstung = Klassen-Vorlage der Seite (an das Lager angepasst)
+## Ausrüstung = Klassen-Ausrüstung (0.11.1 MpClasses, an Lager/Seite/Klima der Karte und Traglast angepasst)
 func reset_to_class() -> void:
-	inv = MpLoadout.from_preset(class_preset(cls), allowed_list(), ui_team())
+	inv = MpClasses.build(cls, ui_team(), allowed_list(), map_id, strength())
 	custom = false
 	user_sel = -1
 	sel_inv = ""
@@ -260,11 +262,9 @@ func class_preset(c: int) -> Dictionary:
 	return {}
 
 
+## 0.11.1 [D]: eigene Klassen (MpClasses) statt der Original-Vorlagen; class_preset bleibt für eigene Auswertungen
 func class_label(c: int) -> String:
-	var p := class_preset(c)
-	if not p.is_empty():
-		return _t(int(p.get("text_id", 0)), String(p.get("text", Net.CLASS_NAMES[c])))
-	return String(Net.CLASS_NAMES[clampi(c, 0, Net.CLASS_NAMES.size() - 1)])
+	return MpClasses.label(c)
 
 
 func build() -> void:
@@ -288,7 +288,9 @@ func build() -> void:
 		_scores_panel()
 	else:
 		text_at("text_selected soldier stats", _t(2537, "Soldaten-Status:").strip_edges(), 15)
-		var st_idx: int = int(figure.substr(3)) if figure.begins_with("mp:") else 30
+		var st_idx: int = MpClasses.figure_store(MpClasses.effective_figure(figure, cls))
+		if st_idx < 0:
+			st_idx = 30
 		stat_rows(SAS.store(st_idx).get("stats", {}), 3)
 		_preview()
 	_chat_box()
@@ -499,6 +501,13 @@ func _pick_class(_d: bool, c: int) -> void:
 	click_sound()
 	cls = c
 	dropdown = ""
+	# 0.11.1: Soldat mit den passenden Werten automatisch wählen (Figur danach frei änderbar)
+	var bf := MpClasses.best_figure(c)
+	if bf != "":
+		figure = bf
+		var fid: Array = Net.figure_ids()
+		if fid.has(figure):
+			fig_ofs = clampi(fid.find(figure) - 1, 0, maxi(fid.size() - 4, 0))
 	reset_to_class()
 	build()
 
@@ -707,6 +716,8 @@ func _allowed_items() -> void:
 		if not al.is_empty():
 			lines.append("Lager : %d" % maxi(MpLoadout.remaining(inv, al, ui_team(), sel_item), 0))
 		text_at("text_weapons info", "\n".join(lines), 12, HORIZONTAL_ALIGNMENT_LEFT, INK, true)
+	elif user_sel < 0:
+		text_at("text_weapons info", MpClasses.description(cls), 11, HORIZONTAL_ALIGNMENT_LEFT, INK, true).name = "ClassDesc"
 	if last_msg != "":
 		text_at("text_weapons info", "\n\n\n\n\n" + last_msg, 11, HORIZONTAL_ALIGNMENT_LEFT, INK_RED, true).name = "SetupMsg"
 
@@ -790,8 +801,8 @@ func _pick_figure(_dbl: bool, fid: String) -> void:
 ## Porträt (54×79) der Figur: MP-Figur = Original-Porträt x_f_NNN; Held = lokales Foto (user_assets, nie im
 ## Repository) bzw. Ausschnitt der Gesichtstextur
 func figure_portrait(fid: String) -> Texture2D:
-	if fid.begins_with("mp:"):
-		return tex_file(SAS.portrait_path(int(fid.substr(3))))
+	if MpClasses.figure_store(fid) >= 0:          # MP-Figur bzw. SAS-Kader (0.11.1)
+		return tex_file(SAS.portrait_path(MpClasses.figure_store(fid)))
 	var photo := ProjectSettings.globalize_path("res://user_assets/hero_photo.jpg")
 	if FileAccess.file_exists(photo):
 		return tex_file(photo)

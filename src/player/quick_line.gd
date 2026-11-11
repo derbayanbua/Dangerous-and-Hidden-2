@@ -61,15 +61,28 @@ func _input(event: InputEvent) -> void:
 			_close()
 			get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed("console") and not get_tree().paused:
+	if _is_console_key(event) and not get_tree().paused:
 		_open()
 		get_viewport().set_input_as_handled()
+
+
+## Konsolentaste: Aktion „console“ (physisch links neben 1) oder – deutsches Layout, Tottaste ^ – der
+## gemeldete Zirkumflex selbst (Windows liefert je nach Treiber keycode statt physical_keycode).
+func _is_console_key(event: InputEvent) -> bool:
+	if not (event is InputEventKey) or not event.pressed or (event as InputEventKey).echo:
+		return false
+	if event.is_action_pressed("console"):
+		return true
+	var k := event as InputEventKey
+	return k.keycode == KEY_ASCIICIRCUM or k.unicode == 0x5E
 
 
 func _open() -> void:
 	_line.text = ""
 	_line.visible = true
 	_line.grab_focus()
+	# Tottaste ^: ein nachlaufendes Zeichen der Taste selbst nicht in der Zeile lassen
+	_line.set_deferred("text", "")
 	if controller:
 		controller.input_enabled = false
 
@@ -85,14 +98,15 @@ func _on_submit(text: String) -> void:
 	_close()
 	var r := run(text)
 	if r != "":
-		Events.say(r, 2.0)
+		Events.say(r, 8.0 if r.begins_with("pos") else 2.0)
 
 
 ## Führt eine Zeile aus; Rückgabe = Antworttext wie im Original (leer bei leerer Zeile)
 func run(text: String) -> String:
 	if Net.is_online:
 		return ""
-	var t := text.strip_edges()
+	# Tottaste ^ (deutsches Layout) setzt ihr Zeichen vor den ersten Buchstaben („^pos“) → Präfix entfernen
+	var t := text.strip_edges().lstrip("^`°´ ").strip_edges()
 	if t == "":
 		return ""
 	var sp := t.find(" ")

@@ -2,16 +2,16 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://cluwh322nhatd"
-path="res://.godot/imported/03_kampf_explosion.png-3ae144a988f2d140efb53fa8c55b939e.ctex"
+uid="uid://rj7ayj0y0vsb"
+path="res://.godot/imported/03_einsatz_afrika.png-6cf952f770c718a8e45f09d0987e3a7b.ctex"
 metadata={
 "vram_texture": false
 }
 
 [deps]
 
-source_file="res://docs/screenshots/03_kampf_explosion.png"
-dest_files=["res://.godot/imported/03_kampf_explosion.png-3ae144a988f2d140efb53fa8c55b939e.ctex"]
+source_file="res://docs/screenshots/03_einsatz_afrika.png"
+dest_files=["res://.godot/imported/03_einsatz_afrika.png-6cf952f770c718a8e45f09d0987e3a7b.ctex"]
 
 [params]
 

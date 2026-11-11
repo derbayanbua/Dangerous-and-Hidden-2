@@ -50,6 +50,10 @@ CLAUDE.md
 # Masterserver bleibt lokal ([D] 10.11.2026)
 server-browser/
 
+# Build-Client-Schlüssel nur während des Exports (tools/build_key.ps1), nie ins Repo
+build_key/
+*.key
+
 # Arbeitsaufträge, TODOs, Prompts nie ins Repo ([D] 10.11.2026)
 TODO*
 *TODO*

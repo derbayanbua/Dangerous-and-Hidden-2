@@ -2,6 +2,26 @@
 
 
 
+## 0.11.1 (11.11.2026) – Online-Mehrspieler
+
+- **Internet-Mehrspieler mit Serverbrowser** im Stil des Originals: Serverliste über den Masterserver (sortierbar, Filter,
+  Spiel-Info, Favoriten, Direktverbindung per IP). Nicht verifizierte Server sind mit „!“ markiert und werden vor dem
+  Beitritt gewarnt (keine Ränge).
+- **Server erstellen** im Stil des Originals, alle Server-Regeln bedienbar; neue Regel Gesundheit ORIGINAL / MEHR LEBEN.
+- **Spieler-Setup vor dem Spawnen:** Nach jedem Beitritt wird zuerst der Soldat ausgerüstet.
+- **Neue Mehrspieler-Klassen:** Sanitäter, Scharfschütze, Panzerabwehr, Sturmsoldat, Schleicher, Schwerer Schütze,
+  Aufklärer – mit Soldatenwerten wie im Einzelspieler, automatischer Soldatenwahl, Uniform passend zur Karte und
+  Ersatzwaffen nach Kartenfreigabe. Doppelklick legt im Ausrüstungsmenü ab.
+- **Ränge und Karriere:** 15 Dienstgrade mit XP; online maßgeblich der Masterserver (Abzeichen und Dienstgrad in der
+  Punktetabelle, Beförderungsmeldung, Profilseite), im Einzelspieler lokales Karriereprofil, im LAN wie im Original.
+  Faire Wertung von Unterstützung und Heilen.
+- **Dedizierter Server** meldet sich als Internet-Server beim Masterserver an (Server-ID im Launcher).
+- Netzprotokoll DH2-LAN-6 (ältere Versionen können nicht mehr mitspielen).
+- **Kartenobjekte**, die an Teilen anderer Modelle hängen (z. B. Regalbretter), liegen jetzt richtig; festgefahrene
+  Skriptfahrzeuge befreien sich.
+- **Arktis 2 / Konsole:** Konsole öffnet zuverlässig mit ^ auf deutscher Tastatur, `pos` gut lesbar.
+- README mit aktuellem Stand und neuen Screenshots.
+
 ## 0.10.9 (11.11.2026)
 
 - **Fehlende Missionsobjekte ergänzt:** tief verschachtelte Akteursdefinitionen werden jetzt vollständig gelesen –

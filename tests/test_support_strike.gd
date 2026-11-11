@@ -228,6 +228,7 @@ func _host() -> void:
 		"Artillerie 20 m stark, Luftangriff 25 m schwächer")
 	await wait_for(func(): return _read(STEP_CLIENT).begins_with("second_done"), 60.0)
 	# Bots (supportbots)
+	var log0 := sup.ev_log.size()
 	Net.server_command("supportbots 1", 0)
 	await wait_for(func(): return sup.radio_state == 1, 30.0)
 	var bot: Soldier = null
@@ -237,13 +238,21 @@ func _host() -> void:
 	if bot:
 		var bb = bot.get_node_or_null("EnemyBrain")
 		check(bb == null or sup.bot_goal(bb).is_finite() or not bb.is_leader(), "KI-Führer läuft zum Funkgerät (bot_goal)")
+		# Aufnahme durch einen Bot laut Ereignisprotokoll: ein KI-Funker mit Ziel ruft sofort an (Zustand 2 dann nur
+		# Bruchteile einer Sekunde – die Abfrage alle 0,2 s verpasst ihn sonst)
+		var bot_took := func() -> bool:
+			for i in range(log0, sup.ev_log.size()):
+				var ev: Dictionary = sup.ev_log[i]
+				if String(ev.get("ev", "")) == "pickup" and int(ev.get("carrier", 0)) < 0:
+					return true
+			return sup.radio_state == 2 and sup.carrier < 0
 		# Bot bis zur Aufnahme auf dem Funkgerät halten (seine KI läuft sonst ggf. sofort weiter)
 		await wait_for(func():
 			if is_instance_valid(bot) and bot.alive and sup.radio_state == 1:
 				bot.global_position = sup.radio_pos + Vector3.UP * 0.2
 				bot.velocity = Vector3.ZERO
-			return sup.radio_state == 2 and sup.carrier < 0, 8.0)
-		check(sup.radio_state == 2 and sup.carrier < 0, "KI nimmt das Funkgerät auf (supportbots)",
+			return bot_took.call(), 8.0)
+		check(bot_took.call(), "KI nimmt das Funkgerät auf (supportbots)",
 			"state=%d carrier=%d bot_alive=%s d=%.2f log=%s" % [sup.radio_state, sup.carrier,
 			str(is_instance_valid(bot) and bot.alive),
 			bot.global_position.distance_to(sup.radio_pos) if is_instance_valid(bot) else -1.0, str(sup.ev_log.slice(-4))])

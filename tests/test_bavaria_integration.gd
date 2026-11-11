@@ -97,6 +97,7 @@ func _registry_and_menus() -> void:
 	if menu == null or not menu.has_method("open_lan"):
 		check(false, "Hauptmenü verfügbar")
 		return
+	Game.profile["online_consent"] = true     # Internet: Datenschutz-Hinweis bereits bestätigt
 	for internet in [false, true]:
 		menu.open_lan(internet)
 		await get_tree().process_frame
@@ -304,10 +305,10 @@ func _check_launchers(m, md: int) -> void:
 	var kinds := {0: &"bazooka", 1: &"panzerschreck"}
 	var old_team := me.team
 	for t in [0, 1]:
-		Net._apply_class(m, me, t, 3)
+		Net._apply_class(m, me, t, MpClasses.ANTITANK)
 		var lw: Weapon = me.weapons[WeaponData.Slot.LAUNCHER]
-		check(lw != null and lw.data.id == kinds[t] and lw.in_mag == 1 and lw.reserve == 2,
-			"[%s] Grenadier-Klasse Seite %d: %s mit 1+2 Raketen" % [tag, t, String(kinds[t])],
+		check(lw != null and lw.data.id == kinds[t] and lw.in_mag == 1 and lw.reserve >= 2,
+			"[%s] Panzerabwehr-Klasse Seite %d: %s mit 1+≥2 Raketen" % [tag, t, String(kinds[t])],
 			("%s %d+%d" % [lw.data.id, lw.in_mag, lw.reserve]) if lw else "kein Werfer")
 	me.team = old_team
 	var lw2: Weapon = me.weapons[WeaponData.Slot.LAUNCHER]

@@ -91,8 +91,12 @@ static func rename_user_preset(block: int, j: int, nm: String) -> void:
 
 ## Kraft (= Traglast kg) der gewählten Figur: MP-Figur HumanStore 30–56, sonst Satz 30
 static func strength_of(figure: String) -> float:
-	var idx: int = int(figure.substr(3)) if figure.begins_with("mp:") else 30
-	return float(SAS.store(idx).get("stats", {}).get("strength", 30.0))
+	var idx: int = MpClasses.figure_store(figure)       # 0.11.1: auch SAS-Kader „sas:N“
+	return float(SAS.store(idx if idx >= 0 else 30).get("stats", {}).get("strength", 30.0))
+
+
+## 0.11.1 [D]: Klassen-Gegenstände ohne Kartenlager (Überspritze, Platzhalter) – Höchstzahl je Soldat
+const CLASS_ONLY := {901: 1}
 
 
 ## Typfeld der Ausrüstung (items.sav equip_raw[1]: 15 Uniform, 16 Kopf, 17 Rucksack)
@@ -156,6 +160,8 @@ static func storage(allowed: Array, team: int) -> Dictionary:
 
 ## Noch verfügbare Anzahl eines Gegenstands (Lager − bereits am Soldaten); ohne Freigabeliste unbegrenzt
 static func remaining(inv: Dictionary, allowed: Array, team: int, id: int) -> int:
+	if CLASS_ONLY.has(id):
+		return int(CLASS_ONLY[id]) - SAS.count_of(inv, id)
 	if allowed.is_empty():
 		return 99
 	return int(storage(allowed, team).get(id, 0)) - SAS.count_of(inv, id)
@@ -193,6 +199,10 @@ static func check(inv: Dictionary, allowed: Array, team: int, strength: float, h
 	for e in inv.get("items", []):
 		need[int(e[0])] = int(need.get(int(e[0]), 0)) + int(e[1])
 	var head := int(inv.get("head", -1))
+	for id in CLASS_ONLY:
+		if int(need.get(id, 0)) > int(CLASS_ONLY[id]):
+			return SAS.text(9522, "Gegenstand steht nicht in der Liste der verfügbaren Gegenstände.") + " (%s)" % SAS.item_label(int(id))
+		need.erase(id)
 	if allowed.is_empty():
 		for id in need:
 			if OrigInteractive.item_info(int(id)).is_empty() and SAS.item(int(id)).is_empty():

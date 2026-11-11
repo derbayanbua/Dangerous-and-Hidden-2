@@ -77,7 +77,11 @@ try {
   New-Item -ItemType Directory -Force $Out | Out-Null
   Remove-Item "$Out\DangerousHidden2.exe", "$Out\DangerousHidden2.pck", "$Out\version.txt" -ErrorAction SilentlyContinue
   "-- Export"
-  cmd /c "`"$godot`" --headless --export-release `"Windows Desktop`" `"$Out\DangerousHidden2.exe`" > `"$proj\test_output\release_export.log`" 2>&1"
+  . "$PSScriptRoot\build_key.ps1"
+  Add-BuildKey -Root $proj | Out-Host
+  try {
+    cmd /c "`"$godot`" --headless --export-release `"Windows Desktop`" `"$Out\DangerousHidden2.exe`" > `"$proj\test_output\release_export.log`" 2>&1"
+  } finally { Remove-BuildKey -Root $proj | Out-Host }
   foreach ($f in @("DangerousHidden2.exe", "DangerousHidden2.pck")) {
     if (-not (Test-Path "$Out\$f") -or (Get-Item "$Out\$f").Length -eq 0) { throw "Export fehlgeschlagen: $f fehlt (test_output\release_export.log)." }
   }

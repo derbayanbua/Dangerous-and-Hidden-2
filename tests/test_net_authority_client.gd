@@ -1,4 +1,5 @@
 extends Node
+const NA := preload("res://src/autoload/net_auth.gd")
 ## B-022 Serverautorität (Client-Seite, von test_net_authority als zweiter Prozess gestartet): erst legitim spielen,
 ## dann als manipulierter Client unzulässige RPCs direkt an den Server senden. Ergebnisse nach
 ## user://net_authority_client_result.txt.
@@ -203,6 +204,16 @@ func _b023(me: Soldier, ip: String) -> void:
 	mp2.root_path = NodePath("/root")
 	var p2 := ENetMultiplayerPeer.new()
 	p2.create_client(ip, int(Net.settings.get("port", Net.PORT)))
+	# DH2-LAN-6: ENet-Auth (JOIN_HELLO/Challenge/JOIN_OK) durchlaufen, danach aber KEIN _register
+	mp2.auth_callback = func(_pid: int, data: PackedByteArray) -> void:
+		var f: Dictionary = NA.parse(data)
+		if not f.is_empty() and int(f["type"]) == NA.CHALLENGE:
+			var env = NA.body_json(f["body"])
+			var pl = JSON.parse_string(Marshalls.base64_to_raw(String(env.get("payload", ""))).get_string_from_utf8())
+			mp2.send_auth(1, NA.frame_json(NA.JOIN_OK, {"hn": String(pl.get("hn", ""))}))
+			mp2.complete_auth(1)
+	mp2.peer_authenticating.connect(func(_pid: int) -> void:
+		mp2.send_auth(1, NA.frame_json(NA.HELLO, {"n": "G".repeat(43), "build": get_node("/root/Master").build_info()})))
 	mp2.multiplayer_peer = p2
 	var connected := false
 	var sent := false
@@ -212,7 +223,7 @@ func _b023(me: Soldier, ip: String) -> void:
 		await get_tree().process_frame
 		mp2.poll()
 		var stt := p2.get_connection_status()
-		if stt == MultiplayerPeer.CONNECTION_CONNECTED:
+		if stt == MultiplayerPeer.CONNECTION_CONNECTED and mp2.get_peers().has(1):     # nach abgeschlossener Auth
 			connected = true
 			if not sent:
 				sent = true

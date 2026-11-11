@@ -314,15 +314,15 @@ func _phase_server() -> void:
 	# Achse; z. B. alliierter Scharfschütze auf Africa1_obj → K98k optics); Schleicher: eigene Seite
 	for t in [Soldier.TEAM_ALLIED, Soldier.TEAM_AXIS]:
 		var st_all := Net.map_storage(t)
-		for c in 6:
+		for c in MpClasses.COUNT:        # 0.11.1: eigene Klassen (MpClasses), nur Lager der eigenen Seite
 			Net._apply_class(m, host, t, c)
 			for w in host.weapons:
 				var oi: int = WeaponDB.orig_item_of(w.data.id) if w else -1
-				var ok_w: bool = Net.is_item_allowed(t, w.data.id) if (w and c == 5) else (w == null or st_all.has(oi) or w.data.slot == WeaponData.Slot.MELEE)
+				var ok_w: bool = w == null or Net.is_item_allowed(t, w.data.id) or st_all.has(oi) or w.data.slot == WeaponData.Slot.MELEE
 				if w and not ok_w:
 					cls_ok = false
 					cls_bad.append("%d/%d %s" % [t, c, w.data.id])
-	check(cls_ok, "Alle 6 Klassen beider Seiten nur mit kartenerlaubten Waffen (inkl. Schleicher)", str(cls_bad))
+	check(cls_ok, "Alle 7 Klassen beider Seiten nur mit kartenerlaubten Waffen (inkl. Schleicher)", str(cls_bad))
 	if String(Game.cli.get("skip_mg", "")) == "":
 		await _mg_stance_server(bots)
 	await _hits(m, bots)

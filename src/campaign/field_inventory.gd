@@ -255,6 +255,8 @@ static func strength(n: Node) -> float:
 	if n is Soldier and n.has_meta("sas"):
 		var st: Dictionary = Game.sas_states().get(str(int(n.get_meta("sas"))), {})
 		return float((st.get("stats", {}) as Dictionary).get("strength", DEFAULT_STRENGTH))
+	if n is Soldier and n.has_meta("mp_strength"):
+		return float(n.get_meta("mp_strength"))      # 0.11.1: MP-Figur mit Kaderwert (MpClasses.apply_stats)
 	return DEFAULT_STRENGTH if n is Soldier else 9999.0
 
 

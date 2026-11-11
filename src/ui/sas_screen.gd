@@ -453,12 +453,13 @@ func _column(entries: Array, boxes: Array, ofs: int) -> void:
 
 func _slot_click(slot: String, dbl: bool) -> void:
 	click_sound()
+	if dbl:
+		sel_store = -1                 # 0.11.1: Doppelklick legt immer ab (auch mit markiertem Lager-Gegenstand)
+		unequip(focus_idx, slot)
+		return
 	if sel_store >= 0:
 		var id := sel_store
 		give(focus_idx, id, 1, slot)
-		return
-	if dbl:
-		unequip(focus_idx, slot)
 		return
 	sel_inv = slot if int(Game.sas_inventory(focus_idx).get(slot, -1)) >= 0 else ""
 	show_equipment()
