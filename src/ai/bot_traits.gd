@@ -60,5 +60,34 @@ static func pick(role: int, s: Soldier) -> int:
 	return Trait.RIFLEMAN
 
 
+## Menschliche Reaktionszeit (s) bis zum ersten Schuss: Grundwert der Rolle, länger auf Distanz und gegen
+## geduckte/liegende Ziele, kürzer gegen laufende (fallen auf); ±20 % Streuung.
+## Human-like reaction time (s) before the first shot: role base, longer at range and against crouched/prone
+## targets, shorter against moving ones (they stand out); ±20 % jitter.
+static func reaction(base: float, dist: float, stance: int, moving: bool) -> float:
+	var r := base + clampf(dist / 50.0 * 0.25, 0.0, 0.8)
+	if stance == Soldier.Stance.CROUCH:
+		r += 0.1
+	elif stance == Soldier.Stance.PRONE:
+		r += 0.25
+	if moving:
+		r -= 0.1
+	return maxf(r * randf_range(0.8, 1.2), 0.35)
+
+
+## Anfänglicher Zielfehler (Meter am Ziel): wächst mit Distanz, kleinem Ziel und geringem Können; senkrecht nur
+## nach unten (Brust/Bauch statt Kopf – kein sofortiger Kopfschuss). Wird in BotBrain.engage über die Zielzeit abgebaut.
+## Initial aim error (metres at the target): grows with range, small target and low skill; vertical part only
+## downwards (chest/belly instead of head – no instant headshot). BotBrain.engage reduces it over tracking time.
+static func aim_offset(dist: float, stance: int, skill: float) -> Vector3:
+	var m := (0.15 + dist * 0.012) * clampf(1.3 - skill, 0.3, 1.3)
+	if stance == Soldier.Stance.PRONE:
+		m *= 1.4
+	elif stance == Soldier.Stance.CROUCH:
+		m *= 1.15
+	var a := randf() * TAU
+	return Vector3(cos(a) * m, -absf(sin(a)) * m * 0.6, sin(a) * m * 0.5)
+
+
 static func trait_name(t: int) -> String:
 	return NAMES[t] if t >= 0 and t < NAMES.size() else "?"

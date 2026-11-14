@@ -155,7 +155,7 @@ func _unit_auth() -> void:
 	var k := Crypto.new().generate_rsa(2048)
 	var sid: String = M.fingerprint(k)
 	var kh_bak := AUTH.load_known_hosts()
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(AUTH.KNOWN_HOSTS))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(AUTH.known_hosts_path()))
 	a._cnonce = "N".repeat(43)
 	var env: Dictionary = M.make_envelope("DH2/v1/join", {"n": a._cnonce, "sid": sid, "pubkey_pem": k.save_to_string(true),
 		"t_host": 0, "hn": "H".repeat(43)}, k, sid)

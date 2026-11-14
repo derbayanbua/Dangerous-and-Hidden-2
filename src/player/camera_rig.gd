@@ -38,6 +38,9 @@ const CAM_MODES := {
 }
 
 var mode: int = Mode.THIRD
+## 0.11.4: Panzer/Bordwaffen standardmäßig in Innen-/Visiersicht wie im Original (gamecam.set Modus 3) [D].
+## 0.11.4: tanks / vehicle guns default to the gunner view as in the original.
+var vehicle_fpv := true
 var target: Soldier
 var camera: Camera3D
 var _arm: SpringArm3D
@@ -92,6 +95,7 @@ func set_target(s: Soldier) -> void:
 			target.model.visible = true
 			target.model.head.visible = true
 			target.model.set_weapon_visible(true)
+			target.model.set_fpv_body(SoldierModel.FPV_BODY_OFF)
 		target.fpv_muzzle = null
 		if target.weapon_changed.is_connected(_on_weapon_changed):
 			target.weapon_changed.disconnect(_on_weapon_changed)
@@ -115,12 +119,38 @@ func set_target(s: Soldier) -> void:
 ## Uniform-/Figurwechsel: Kamera-Anker (camera3RD/cameraFPV) kommen ab jetzt vom neuen Modell; Sichtbarkeit neu.
 func _on_model_changed(_m: Node3D) -> void:
 	_model_last = null
+	if is_instance_valid(target) and target.model:
+		target.model.set_fpv_body(SoldierModel.FPV_BODY_OFF)   # Beinkopien der alten Figur verwerfen
 	_apply_head_visibility()
 	if is_instance_valid(target):
 		_on_weapon_changed(target.current_weapon())    # Ego-Hände der neuen Uniform
 
 
+var _hid_for_vehicle := false
+
+
+func _restore_vehicle_hide() -> void:
+	if _hid_for_vehicle:
+		_hid_for_vehicle = false
+		_apply_head_visibility()
+
+
+## Visiersicht nur für Sitze mit Bordwaffe (Panzer, Halbkette …) und wenn gewählt; Fahrer bleibt Verfolgerkamera.
+## Gunner view only for seats with a vehicle gun and when selected; drivers keep the chase camera.
+func _vehicle_gun_view() -> bool:
+	if not vehicle_fpv or _script_camera():
+		return false
+	var v = target.vehicle
+	return v != null and v.get("turrets") != null and (v.turrets as Dictionary).has(target.seat_index)
+
+
 func toggle_mode() -> void:
+	# 0.11.4: im Panzer/an Bordwaffen schaltet V zwischen Innen-/Visiersicht und Verfolgerkamera.
+	# 0.11.4: in tanks / vehicle guns V toggles between gunner view and chase camera.
+	if is_instance_valid(target) and target.vehicle != null:
+		vehicle_fpv = not vehicle_fpv
+		_apply_head_visibility()
+		return
 	mode = Mode.FIRST if mode == Mode.THIRD else Mode.THIRD
 	_apply_head_visibility()
 
@@ -201,6 +231,7 @@ var _binoc_last := false
 var _model_last: Node3D
 var _zoom_last := false
 var _vm_aim_last := false
+var _fpv_body_last := true
 
 
 func _apply_head_visibility() -> void:
@@ -208,11 +239,24 @@ func _apply_head_visibility() -> void:
 	var binoc := valid and target.using_binoculars
 	fpv_active = valid and _want_fpv(zoomed())
 	if is_instance_valid(target) and target.model:
-		# 1. Person: eigene Figur aus (die FPV-Hände ersetzen sie)
-		target.model.visible = not fpv_active
+		# 1. Person: FPV-Hände ersetzen Arme/Waffe. 0.11.5: Körper wirft weiter Schatten, Beine sichtbar (Option
+		# KÖRPER IN 1. PERSON); mit Zielfernrohr/Fernglas nur Schatten. Aus: Figur ausgeblendet wie bisher.
+		var mode := fpv_body_mode()
+		target.model.visible = not fpv_active or mode != SoldierModel.FPV_BODY_OFF
 		target.model.head.visible = not fpv_active
 		target.model.set_weapon_visible(not fpv_active)
+		target.model.set_fpv_body(mode)
 	_viewmodel.visible = fpv_active and not binoc and not scope_hides_vm
+
+
+## Darstellung des eigenen Körpers in der 1. Person (SoldierModel.FPV_BODY_*).
+func fpv_body_mode() -> int:
+	if not fpv_active or not Settings.fpv_body or not is_instance_valid(target):
+		return SoldierModel.FPV_BODY_OFF
+	var z := zoomed()
+	if target.using_binoculars or (z and int(_zoom_info().get("scope", 5)) <= 3) or (z and not OrigWeapons.available()):
+		return SoldierModel.FPV_BODY_SHADOW
+	return SoldierModel.FPV_BODY_LEGS
 
 
 ## Ego-Ansicht gewünscht: 1.-Person-Modus, Fernglas, Zoom – und bei gehaltenem Zielen mit einer Zoomwaffe auch
@@ -772,7 +816,9 @@ func _process(delta: float) -> void:
 		return
 	var z := zoomed()
 	var binoc := target.using_binoculars
-	if binoc != _binoc_last or target.model != _model_last or z != _zoom_last or fpv_active != (target.alive and _want_fpv(z)):
+	if binoc != _binoc_last or target.model != _model_last or z != _zoom_last or fpv_active != (target.alive and _want_fpv(z)) \
+			or Settings.fpv_body != _fpv_body_last:
+		_fpv_body_last = Settings.fpv_body
 		_binoc_last = binoc
 		_model_last = target.model   # Modell kann sich ändern (Uniformwechsel)
 		_zoom_last = z
@@ -823,6 +869,7 @@ func _process(delta: float) -> void:
 	var lyaw := atan2(-look.x, -look.z)
 
 	if fpv_active:
+		_restore_vehicle_hide()
 		var eye: Vector3 = target.model.camera_point(true) if target.model and target.model.orig_figure else target.eye_position()
 		var right := Vector3(cos(yaw), 0, -sin(yaw))
 		_pivot.global_position = _safe_pivot(eye + right * target.lean * 0.35, PIVOT_MARGIN_FPV)
@@ -831,7 +878,19 @@ func _process(delta: float) -> void:
 		_arm.position = Vector3.ZERO
 		_dist = 0.0
 		_update_viewmodel(delta)
+	elif target.vehicle != null and _vehicle_gun_view():
+		# Visiersicht am Sitz/Turm (Frame CAMERAFPV*, sonst Augenhöhe des Sitzes) / gunner view at the seat
+		var c: Node3D = target.vehicle.seat_camera(target.seat_index) if target.vehicle.has_method("seat_camera") else null
+		_pivot.global_position = c.global_position if c else target.eye_position()
+		_pivot.global_rotation = Vector3(lpitch, lyaw, 0.0)
+		_arm.position = Vector3.ZERO
+		_dist = 0.0
+		_arm.spring_length = 0.0
+		if target.model:
+			target.model.visible = false
+		_hid_for_vehicle = true
 	elif target.vehicle != null:
+		_restore_vehicle_hide()
 		_arm.add_excluded_object(target.vehicle.get_rid())
 		# Verfolgerkamera: Fahrer über der Fahrzeugmitte (Abstand nach Fahrzeuggröße, leicht nachgeführt gegen
 		# Federungszittern), Mitfahrer/Schützen über dem eigenen Sitz
@@ -848,6 +907,7 @@ func _process(delta: float) -> void:
 		_dist = move_toward(_dist, vd, CAM3_SPEED * delta)   # Verfolgerkamera hinter dem Fahrzeug
 		_arm.spring_length = _dist
 	else:
+		_restore_vehicle_hide()
 		# 3. Person: Drehpunkt = Dummy camera3RD, Kamera auf der Blickachse dahinter (gamecam.set Satz 1/3/4/5/6)
 		_select_cam_mode()
 		var cm: Array = CAM_MODES[cam_mode]

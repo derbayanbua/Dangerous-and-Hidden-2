@@ -54,6 +54,11 @@ var _autorestart: CheckBox
 var _flood: CheckBox               ## floodprotect (Konsole/Config, jetzt auch im Formular)
 var _spawn_start: CheckBox         ## spawnonstart (T20214 RESPAWN BEIM NEUSTART)
 var _precise: CheckBox             ## preciseaim (Ergänzung 0.10.1)
+var _day_start: SpinBox            ## daystart: Startstunde (Karten mit Tageszyklus)
+var _day_cycle: SpinBox            ## daycycle: Minuten je 24 h, 0 = feste Zeit
+var _dn_on: CheckBox               ## 0.11.5 daynight: Tag-/Nachtwechsel auf allen Karten (nur MP)
+var _dn_start: SpinBox             ## daynightstart: Startstunde, −1 = Kartenstimmung
+var _dn_cycle: SpinBox             ## daynightcycle: Minuten je 24 h
 ## 0.11.1: Formular = Datenmodell; sichtbar ist der Original-Bildschirm CreateServerScreen (create server.4ds)
 var create_screen: CreateServerScreen
 var _form: Control
@@ -150,8 +155,13 @@ func _fill_map_choice() -> void:
 
 
 func _load_maplists() -> Dictionary:
-	var d = LsRuntime._read_json(ProjectSettings.globalize_path(MAPLIST_PATH))
+	var d = LsRuntime._read_json(ProjectSettings.globalize_path(maplist_path()))
 	return d if typeof(d) == TYPE_DICTIONARY else {}
+
+
+## 0.11.5: Tests (--autoplay) → Testordner (Game.user_file)
+static func maplist_path() -> String:
+	return Game.user_path(MAPLIST_PATH.trim_prefix("user://"))
 
 
 func _save_map_choice() -> void:
@@ -159,7 +169,7 @@ func _save_map_choice() -> void:
 		return
 	var d := _load_maplists()
 	d[str(_maplist_mode.selected)] = map_rotation()
-	var f := FileAccess.open(MAPLIST_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(maplist_path(), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(d))
 
@@ -322,6 +332,18 @@ func open() -> void:
 	_spawn_start = _check(g, SAS.text(20214, "RESPAWN BEIM NEUSTART"), false)
 	_flood = _check(g, "FLOOD-SCHUTZ", true)
 	_precise = _check(g, "PRÄZISES ZIELEN", Settings.precise_aim)
+	# Tageszeit (nur Karten mit Tageszyklus): Startstunde, Minuten je 24 h (0 = feste Zeit); unter den übrigen Feldern
+	_day_start = _spin(g, "TAGESZEIT START [h]", 0, 23, int(Net.DAYTIME_DEFAULTS["day_start_h"]))
+	_day_start.tooltip_text = "Uhrzeit bei Rundenbeginn (daystart)"
+	_day_cycle = _spin(g, "TAGESZYKLUS [min]", 0, 240, int(Net.DAYTIME_DEFAULTS["day_cycle_min"]))
+	_day_cycle.tooltip_text = "Echtzeit-Minuten für 24 Stunden, 0 = feste Zeit (daycycle)"
+	# 0.11.5: Tag-/Nachtwechsel auf allen Karten (daynight/daynightstart/daynightcycle), Standard aus
+	_dn_on = _check(g, "TAG/NACHT", bool(Net.DAYNIGHT_DEFAULTS["day_night"]))
+	_dn_on.tooltip_text = "Dynamischer Tag-/Nachtwechsel auf allen Karten (daynight)"
+	_dn_start = _spin(g, "T/N START [h]", -1, 23, int(Net.DAYNIGHT_DEFAULTS["dn_start_h"]))
+	_dn_start.tooltip_text = "Uhrzeit bei Rundenbeginn, -1 = Originalstimmung der Karte (daynightstart)"
+	_dn_cycle = _spin(g, "T/N ZYKLUS [min]", 1, 240, int(Net.DAYNIGHT_DEFAULTS["dn_cycle_min"]))
+	_dn_cycle.tooltip_text = "Echtzeit-Minuten für 24 Stunden (daynightcycle)"
 	# 0.10.3: Konfigurationsmenü des dedizierten Servers (ServerLauncher-Nachbau) – letzte Formularzeile, damit die
 	# Original-Felder und die Höhe der Bildlaufliste unverändert bleiben (test_lan_e2e)
 	_label(g, tr("DEDIZIERTER SERVER"))
@@ -355,85 +377,34 @@ func open() -> void:
 	_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_list.item_activated.connect(func(i): _join_listed(i))
 	right.add_child(_list)
-	var row0 := HFlowContainer.new()
-	right.add_child(row0)
-	UIKit.button(SAS.text(2311, "SERVER ERSTELLEN"), open_create, row0).name = "CreateServerButton"
-	UIKit.button(SAS.text(2551, "SPIELER-SETUP"), open_player_setup, row0).name = "LanPlayerSetupButton"
-	var row := HFlowContainer.new()
-	right.add_child(row)
-	UIKit.button("Beitreten", func():
-		var sel := _list.get_selected_items()
-		if not sel.is_empty():
-			_join_listed(sel[0]), row)
-	UIKit.button(SAS.text(20102, "ZU FAVORITEN HINZUFÜGEN"), func():
-		var sel := _list.get_selected_items()
-		var addr := _ip.text.strip_edges()
-		if not sel.is_empty() and not internet:
-			var s: Dictionary = _list.get_item_metadata(sel[0])
-			addr = "%s:%d" % [s.get("ip", ""), int(s.get("port", Net.PORT))]
-		Net.add_favorite(addr)
-		_refresh(), row).name = "AddFavorite"
-	if internet:
-		UIKit.button(SAS.text(20103, "AUS FAVORITEN LÖSCHEN"), func():
-			for i in _list.get_selected_items():
-				Net.remove_favorite(String(_list.get_item_metadata(i).get("key", "")))
-			_refresh(), row).name = "RemoveFavorite"
-	# Original-Knöpfe SERVER-FILTER (T2309, server filters.4ds) und SPIEL-INFO (T2312, gameinfo.4ds)
-	var row2 := HFlowContainer.new()
-	right.add_child(row2)
-	UIKit.button(SAS.text(2309, "SERVER-FILTER"), open_filter, row2).name = "FilterButton"
-	UIKit.button(SAS.text(2312, "SPIEL-INFO"), open_game_info, row2).name = "GameInfoButton"
-	# Original-Knöpfe LISTE NEU EINLESEN (T2325) / LISTE AKTUALISIEREN (T2327), während des Laufs HALT (2326/2328)
-	_reread_btn = UIKit.button(SAS.text(2325, "LISTE NEU EINLESEN"), _on_reread, row2)
-	_reread_btn.name = "RereadButton"
-	_update_btn = UIKit.button(SAS.text(2327, "LISTE AKTUALISIEREN"), _on_update, row2)
-	_update_btn.name = "UpdateButton"
-	Net.scan_changed.connect(_scan_buttons)
+	# Bedienung (Knöpfe, Beitritt, Favoriten, Filter, Spiel-Info, LISTE NEU EINLESEN) im Original-Bildschirm
+	# ServerBrowserScreen (multiplayer menu.4ds); hier nur noch Datenfelder (Liste, Filterzähler, IP, Passwort, Status)
+	# Controls live in the original screen ServerBrowserScreen; this column only keeps data fields
 	_filter_label = Label.new()
 	_filter_label.name = "FilterInfo"
-	_filter_label.add_theme_font_size_override("font_size", 12)
-	row2.add_child(_filter_label)
+	right.add_child(_filter_label)
 	var g2 := GridContainer.new()
 	g2.columns = 2
 	right.add_child(g2)
 	_ip = _line(g2, SAS.text(2308, "SERVER-IP EINGEBEN") + " (IP/Name[:Port])", "127.0.0.1")
 	_ip.name = "IpEdit"
 	_join_pw = _line(g2, "Passwort", "")
-	g2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UIKit.button("Per IP beitreten", func(): _do_join(_ip.text.strip_edges(), Net.PORT), right)
-	# Knöpfe der rechten Spalte schmaler (UIKit 320 px) – Zeilen brechen bei Bedarf um
-	for r in [row0, row, row2]:
-		for b in r.get_children():
-			if b is Button:
-				b.custom_minimum_size.x = 250
-				b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				b.clip_text = true
-	if internet:
-		var hint := Label.new()
-		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		hint.text = "Ohne GameSpy: Internet-Server geben Port %d/%d (UDP) per UPnP frei und melden ihre öffentliche IP; " % [Net.PORT, Net.PORT + 1] \
-			+ "Beitritt per IP oder Hostname, Favoriten werden abgefragt (Ping)."
-		hint.add_theme_font_size_override("font_size", 12)
-		right.add_child(hint)
+	Net.scan_changed.connect(_scan_buttons)
 	_status = Label.new()
 	_status.name = "Status"
-	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_status.custom_minimum_size.x = 200
-	_status.add_theme_color_override("font_color", UIKit.ACCENT)
 	v.add_child(_status)
-	UIKit.button("Zurück", func():
-		Net.stop_browse()
-		Net.browsing_favorites = false
-		back_requested.emit(), v)
 	Net.servers_updated.connect(_refresh)
 	Net.status_changed.connect(func(t): if is_instance_valid(_status): _status.text = t)
 	Net.browsing_favorites = false
-	if internet:
-		_open_browser()
-	elif not Net.start_browse():
-		_status.text = Net.last_error
-	elif Net.last_error != "":
-		_status.text = Net.last_error
+	if not internet:
+		if not Net.start_browse():
+			_status.text = Net.last_error
+		elif Net.last_error != "":
+			_status.text = Net.last_error
+	# LAN und Internet: Original-Serverbrowser über dem (unsichtbaren) Datenformular
+	# LAN and internet: original server browser above the (hidden) data form
+	margin.visible = false
+	_open_browser()
 	_refresh()
 
 
@@ -441,18 +412,20 @@ var player_setup: PlayerSetupScreen
 var browser: ServerBrowserScreen
 
 
-## 0.11.1: Internet = Original-Serverbrowser (multiplayer menu.4ds) über dem Formular; SERVER ERSTELLEN blendet
+## 0.11.1: Internet und (0.11.2) LAN = Original-Serverbrowser (multiplayer menu.4ds, LAN-Titel T2320) über dem Formular;
+## internet and LAN = original server browser above the form; SERVER ERSTELLEN blendet
 ## ihn aus (Formular = Server erstellen), ZURÜCK im Formular kehrt zum Browser zurück
 func _open_browser() -> void:
 	browser = ServerBrowserScreen.new()
 	browser.name = "ServerBrowser"
 	add_child(browser)
 	browser.create_requested.connect(open_create)
+	browser.leaderboard_requested.connect(open_leaderboard)
 	browser.back_requested.connect(func():
 		Net.stop_browse()
 		Net.browsing_favorites = false
 		back_requested.emit())
-	browser.open(self)
+	browser.open(self, not internet)
 
 
 ## SERVER ERSTELLEN (create server.4ds) über dem Menü; ZURÜCK kehrt zum Browser bzw. zur LAN-Liste zurück
@@ -472,6 +445,31 @@ func close_create() -> void:
 	if is_instance_valid(create_screen):
 		create_screen.queue_free()
 	create_screen = null
+	if is_instance_valid(browser):
+		browser.visible = true
+		browser.build()
+
+
+var leaderboard: LeaderboardScreen
+
+
+## 0.11.5: RANGLISTE über dem Browser; ZURÜCK kehrt zum Serverbrowser zurück / leaderboard above the browser
+func open_leaderboard() -> void:
+	if is_instance_valid(leaderboard):
+		leaderboard.queue_free()
+	leaderboard = LeaderboardScreen.new()
+	leaderboard.name = "Leaderboard"
+	add_child(leaderboard)
+	if is_instance_valid(browser):
+		browser.visible = false
+	leaderboard.back_requested.connect(close_leaderboard)
+	leaderboard.open()
+
+
+func close_leaderboard() -> void:
+	if is_instance_valid(leaderboard):
+		leaderboard.queue_free()
+	leaderboard = null
 	if is_instance_valid(browser):
 		browser.visible = true
 		browser.build()
@@ -538,6 +536,9 @@ func open_player_setup() -> void:
 		var m := String(_list.get_item_metadata(i).get("map", ""))
 		if Game.MISSIONS.has(m):
 			map = m
+	# markierter Server im Original-Browser / server selected in the original browser
+	if is_instance_valid(browser) and Game.MISSIONS.has(String(browser.selected_entry().get("map", ""))):
+		map = String(browser.selected_entry()["map"])
 	player_setup = PlayerSetupScreen.new()
 	player_setup.name = "PlayerSetup"
 	add_child(player_setup)
@@ -695,6 +696,10 @@ func _close_filter(_accepted: bool) -> void:
 
 ## SPIEL-INFO zum markierten Server (gameinfo.4ds); SPIEL BEITRETEN tritt bei
 func open_game_info() -> void:
+	# Auswahl im Original-Browser / selection in the original browser
+	if is_instance_valid(browser) and not browser.selected_entry().is_empty():
+		open_game_info_for(browser.selected_entry())
+		return
 	var sel := _list.get_selected_items()
 	if sel.is_empty():
 		_status.text = "%s: zuerst einen Server markieren." % SAS.text(2312, "SPIEL-INFO")
@@ -715,6 +720,9 @@ func _close_info() -> void:
 
 func _info_join(s: Dictionary) -> void:
 	_close_info()
+	if is_instance_valid(browser):
+		browser.request_join(s)      # Passwortabfrage wie in der Liste / password prompt as in the list
+		return
 	_do_join(String(s.get("ip", "")), int(s.get("port", Net.PORT)))
 
 
@@ -736,7 +744,9 @@ func server_settings() -> Dictionary:
 		"team_lives": _team_lives.button_pressed, "allow_crosshair": _crosshair.button_pressed,
 		"flood_protect": _flood.button_pressed, "spawn_on_start": _spawn_start.button_pressed,
 		# 0.10.1: Regel „precise_aim“ (Kugelfall-Ausgleich, für alle gleich); Vorgabe = Option „Präzises Zielen“ des Hosts
-		"precise_aim": _precise.button_pressed}
+		"precise_aim": _precise.button_pressed,
+		"day_start_h": int(_day_start.value), "day_cycle_min": int(_day_cycle.value),
+		"day_night": _dn_on.button_pressed, "dn_start_h": int(_dn_start.value), "dn_cycle_min": int(_dn_cycle.value)}
 
 
 ## Konfigurationsdatei im Original-ServerLauncher-Stil (Konsolenzeilen) für den dedizierten Server
@@ -779,8 +789,9 @@ func _host() -> void:
 
 ## DEDIZIERTER SERVER (T2382): eigener, kopfloser Prozess mit Konfigurationsdatei; danach Beitritt als Spieler
 func _start_dedicated(cfg: Dictionary) -> void:
-	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://dedicated"))
-	var path := ProjectSettings.globalize_path("user://dedicated/%s.cfg" % String(cfg["name"]).validate_filename())
+	var ddir := Game.user_file("dedicated")     # 0.11.5: Tests → Testordner
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(ddir))
+	var path := ProjectSettings.globalize_path("%s/%s.cfg" % [ddir, String(cfg["name"]).validate_filename()])
 	var f := FileAccess.open(path, FileAccess.WRITE)
 	if f == null:
 		_status.text = "Konfiguration nicht schreibbar: " + path

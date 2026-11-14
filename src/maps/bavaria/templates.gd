@@ -78,6 +78,8 @@ func prop(model: String, pos: Vector3, yaw := 0.0, scale_value := 1.0, collide :
 		_models[key] = OrigLevel.parse_glb(path)
 		if _models[key] == null:
 			missing.append(path)
+		elif key in ["l_tree", "l_tree2", "l_tree4", "e_treb1"]:
+			_upgrade_tree_textures(_models[key])
 	var template: Node3D = _models[key]
 	if template == null:
 		return null
@@ -106,6 +108,112 @@ func prop(model: String, pos: Vector3, yaw := 0.0, scale_value := 1.0, collide :
 		n.set_meta("species",key)
 	reused_models += 1
 	return n
+
+## Baumtexturen (Rinde/Laub) map-lokal in der höchsten vorhandenen KI-Fassung (orig_cache/textures_4k, sonst _hd;
+## _reject.txt beachtet), unabhängig von der allgemeinen Texturstufe. Mipmaps + anisotrope Filterung, Laub mit
+## Alpha-Schere und Alpha-to-Coverage (saubere Kanten). Ohne HD-Dateien bleibt das Original.
+static var tree_tex_stats := {}       ## Dateiname → [alte Größe, neue Größe, Stufe]
+static var _tree_tex := {}
+func _upgrade_tree_textures(root: Node3D) -> void:
+	for mi in root.find_children("*","MeshInstance3D",true,false):
+		var mesh: Mesh = (mi as MeshInstance3D).mesh
+		if mesh == null:
+			continue
+		for s in mesh.get_surface_count():
+			var mat := mesh.surface_get_material(s) as BaseMaterial3D
+			if mat == null or mat.has_meta("bavaria_hd"):
+				continue
+			mat.set_meta("bavaria_hd",true)
+			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+			var tex := mat.albedo_texture
+			# Materialname = Original-Bitmap (z. B. „2E_LEAF1.BMP“) → Cache-Datei 2e_leaf1.png bzw. 2e_leaf1__ck.png (Farbschlüssel)
+			var base := String(mat.resource_name).to_lower().get_basename()
+			var file := ""
+			for cand in [base + "__ck.png", base + ".png"]:
+				if base != "" and FileAccess.file_exists("%s/textures/%s" % [OrigLevel.cache_root(), cand]):
+					file = cand
+					break
+			if mat.transparency != BaseMaterial3D.TRANSPARENCY_DISABLED or file.ends_with("__ck.png"):
+				mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+				mat.alpha_scissor_threshold = 0.5
+				mat.alpha_antialiasing_mode = BaseMaterial3D.ALPHA_ANTIALIASING_ALPHA_TO_COVERAGE
+				mat.alpha_antialiasing_edge = 0.3
+			mat.set_meta("bavaria_tree_file", file)
+			mat.set_meta("bavaria_tree_orig", tex)
+			var hq := _tree_hq_texture(file, tex)
+			if hq:
+				mat.albedo_texture = hq
+
+## Ferne Randbäume (dichter Hintergrundwald, hintere Reihen): Kopie des Baummaterials mit der HD-Stufe (textures_hd,
+## halbe Kantenlänge der 4K-Fassung) statt 4K. Ohne HD-Datei bleibt das 4K-Material (null = unverändert).
+static var _tree_far_mat := {}
+func tree_far_material(mat: Material) -> Material:
+	if mat == null or not mat.has_meta("bavaria_tree_file"):
+		return null
+	if _tree_far_mat.has(mat):
+		return _tree_far_mat[mat]
+	var file := String(mat.get_meta("bavaria_tree_file"))
+	var result: Material = null
+	var p := "%s/textures_hd/%s" % [OrigLevel.cache_root(), file]
+	if file != "" and FileAccess.file_exists(p) and not OrigLevel._hq_rejected("_hd", file):
+		var img := Image.load_from_file(p)
+		var orig: Texture2D = mat.get_meta("bavaria_tree_orig", null)
+		var orig_img := orig.get_image() if orig else null
+		if img and (orig_img == null or OrigLevel._hq_fits(orig_img, img)):
+			img.generate_mipmaps()
+			if PerfTuning.b039("tex_compress"):
+				PerfTuning.compress_image(img)
+			var copy := mat.duplicate() as BaseMaterial3D
+			copy.albedo_texture = ImageTexture.create_from_image(img)
+			tree_tex_stats[file + " (fern)"] = [Vector2.ZERO, Vector2(img.get_width(), img.get_height()), "_hd"]
+			result = copy
+	_tree_far_mat[mat] = result
+	return result
+
+## Mesh mit HD-Materialien (nur Oberflächenmaterialien getauscht, Geometrie geteilt über Kopie der Oberflächen).
+static var _tree_far_mesh := {}
+func tree_far_mesh(mesh: Mesh) -> Mesh:
+	if mesh == null:
+		return mesh
+	if _tree_far_mesh.has(mesh):
+		return _tree_far_mesh[mesh]
+	var out: Mesh = mesh
+	var any := false
+	var mats: Array = []
+	for s in mesh.get_surface_count():
+		var fm := tree_far_material(mesh.surface_get_material(s))
+		mats.append(fm)
+		any = any or fm != null
+	if any:
+		out = mesh.duplicate()
+		for s in mats.size():
+			if mats[s] != null:
+				out.surface_set_material(s, mats[s])
+	_tree_far_mesh[mesh] = out
+	return out
+
+func _tree_hq_texture(file: String, orig: Texture2D) -> Texture2D:
+	if file == "" or orig == null:
+		return null
+	if _tree_tex.has(file):
+		return _tree_tex[file]
+	var result: Texture2D = null
+	var orig_img := orig.get_image()
+	for s in ["_4k", "_hd"]:
+		var p := "%s/textures%s/%s" % [OrigLevel.cache_root(), s, file]
+		if not FileAccess.file_exists(p) or OrigLevel._hq_rejected(s, file):
+			continue
+		var img := Image.load_from_file(p)
+		if img == null or (orig_img and not OrigLevel._hq_fits(orig_img, img)):
+			continue
+		img.generate_mipmaps()
+		if PerfTuning.b039("tex_compress"):
+			PerfTuning.compress_image(img)
+		result = ImageTexture.create_from_image(img)
+		tree_tex_stats[file] = [orig.get_size(), Vector2(img.get_width(), img.get_height()), s]
+		break
+	_tree_tex[file] = result
+	return result
 
 func ground_vegetation(mission: Mission) -> void:
 	# Vor jeder Instanzierung ausführen: auch Randbäume, Weggrün und Einzelbaum erfassen.
@@ -333,6 +441,8 @@ func house(id: String, pos: Vector3, w: float, d: float, h: float, yaw: float, k
 	_interior(n, w, d, h, kind)
 	if id == "haus_16":
 		House16Plan.build(lb, self, n, w, d)
+	if String(n.name) in OG_OPEN_HOUSES:
+		open_og_windows(n, w, d, h)
 	if n.get_meta("interior_partitioned", false):
 		# Vier überprüfbare Fensterplätze in den äußeren Zimmern (vorne/hinten, links/rechts).
 		var shooting_windows: Array[Vector3] = []
@@ -361,7 +471,7 @@ func _facade_details(n: Node3D, w: float, d: float, h: float, kind: String, terr
 			var count := 3 if String(n.name) == "haus_16" else maxi(int(w / 5.2), 2)
 			for i in count:
 				var x := -w * 0.5 + (i + 0.5) * w / count
-				og_window(n, Vector3(x, OG_SILL, side * (d * 0.5 + 0.15)), side, false)
+				og_window(n, Vector3(x, OG_SILL, side * (d * 0.5 + 0.15)), side, false, 0.0, String(n.name) in OG_OPEN_HOUSES)
 		# Traufbalken lassen beide Dachhälften sauber an der Fassade anschließen.
 		lb.box(Vector3(0, h - 0.08, side * (d * 0.5 + 0.14)), Vector3(w if terrace else w + 0.6, 0.18, 0.22), "darkwood", 0, false, n)
 	if kind in ["barn", "shed"]:
@@ -381,7 +491,16 @@ func _facade_details(n: Node3D, w: float, d: float, h: float, kind: String, terr
 const OG_SILL := 4.0
 var _og_glass: StandardMaterial3D
 
-func og_window(n: Node3D, face: Vector3, outward: float, gable: bool, push := 0.0) -> void:
+## Begehbare Obergeschosse (Treppenhäuser): Traufseiten-Fenster sind echte Wandöffnungen mit Klarglas.
+const OG_OPEN_HOUSES := ["haus_16", "haus_18_shed"]
+const OG_GLASS_W := 1.1
+const OG_GLASS_H := 1.4
+var _og_clear: StandardMaterial3D
+
+func og_window(n: Node3D, face: Vector3, outward: float, gable: bool, push := 0.0, open := false) -> void:
+	if open:
+		_og_open_window(n, face, outward)
+		return
 	if _og_glass == null:
 		_og_glass = StandardMaterial3D.new()
 		_og_glass.albedo_color = Color(0.07, 0.10, 0.11)
@@ -413,6 +532,103 @@ func og_window(n: Node3D, face: Vector3, outward: float, gable: bool, push := 0.
 	var list: Array = n.get_meta("og_windows", [])
 	list.append(face)
 	n.set_meta("og_windows", list)
+
+## Echtes OG-Fenster (Traufseite, Wandfläche bei z = face.z): Klarglas mittig in der Laibung, Rahmen/Sprossen außen,
+## Fensterbank innen und außen. Kollision: nur Bewegungssperre (Ebene 5) in der Öffnung – man fällt nicht hinaus,
+## Blicke und Schüsse gehen hindurch (wie die EG-Fensterplätze). Die Wand selbst schneidet open_og_windows auf.
+func _og_open_window(n: Node3D, face: Vector3, s: float) -> void:
+	if _og_clear == null:
+		_og_clear = StandardMaterial3D.new()
+		_og_clear.albedo_color = Color(0.62, 0.72, 0.76, 0.16)
+		_og_clear.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_og_clear.roughness = 0.04
+		_og_clear.metallic_specular = 0.9
+		_og_clear.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_og_clear.set_meta("bavaria_og_clear_glass", true)
+		lb._mats["og_window_clear"] = _og_clear
+	var holder := Node3D.new()
+	holder.name = "OG_Fenster_offen"
+	n.add_child(holder)
+	holder.position = face
+	# Glas in der Wandmitte (Wand 0,30 m: Außenfläche bei face, Mitte 0,15 m innen)
+	lb.box(Vector3(0, 0, -s * 0.15), Vector3(OG_GLASS_W, OG_GLASS_H, 0.012), "og_window_clear", 0, false, holder)
+	for sx in [-1.0, 1.0]:
+		lb.box(Vector3(sx * 0.62, -0.08, s * 0.08), Vector3(0.14, 1.56, 0.12), "darkwood", 0, false, holder)
+		lb.box(Vector3(sx * 1.0, 0, s * 0.07), Vector3(0.5, 1.4, 0.06), "wood", 0, false, holder)
+		# Laibung innen (dunkles Holz statt offener Wandschnittkanten)
+		lb.box(Vector3(sx * (OG_GLASS_W * 0.5 + 0.02), 0, -s * 0.15), Vector3(0.04, OG_GLASS_H, 0.30), "darkwood", 0, false, holder)
+	for dy in [0.0, 0.68, 1.4]:
+		lb.box(Vector3(0, dy - 0.045, -s * 0.15), Vector3(OG_GLASS_W, 0.05, 0.04), "darkwood", 0, false, holder)
+	lb.box(Vector3(0, 0, -s * 0.15), Vector3(0.04, OG_GLASS_H, 0.04), "darkwood", 0, false, holder)
+	lb.box(Vector3(0, -0.14, s * 0.10), Vector3(1.4, 0.07, 0.2), "stone", 0, false, holder)       # Fensterbank außen
+	lb.box(Vector3(0, -0.05, -s * 0.36), Vector3(1.3, 0.05, 0.16), "darkwood", 0, false, holder)  # Fensterbrett innen
+	var stop := StaticBody3D.new()
+	stop.name = "OG_Fenster_Sperre"
+	stop.collision_layer = LevelBuilder.FENCE_LAYER
+	stop.collision_mask = 0
+	var cs := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = Vector3(OG_GLASS_W, OG_GLASS_H, 0.10)
+	cs.shape = shape
+	cs.position = Vector3(0, OG_GLASS_H * 0.5, -s * 0.15)
+	stop.add_child(cs)
+	holder.add_child(stop)
+	stop.add_to_group("bavaria_og_window_stops")
+	var list: Array = n.get_meta("og_windows", [])
+	list.append(face)
+	n.set_meta("og_windows", list)
+	var open_list: Array = n.get_meta("og_open_windows", [])
+	open_list.append(face)
+	n.set_meta("og_open_windows", open_list)
+
+## Schneidet die Außenwand (Traufseiten) an jedem echten OG-Fenster auf und legt Fensterplätze im OG an
+## (Meta „og_shooting_windows“: x, OG-Boden, Wandebene; wie „shooting_windows“ im EG).
+func open_og_windows(n: Node3D, w: float, d: float, h: float) -> void:
+	var places: Array[Vector3] = []
+	var top := minf(OG_SILL + OG_GLASS_H, h - 0.12)
+	for face in n.get_meta("og_open_windows", []):
+		var side := signf(face.z)
+		for wall in n.get_children():
+			if not (wall is Node3D) or wall is StaticBody3D or wall is MeshInstance3D or absf(wall.position.z - side * d * 0.5) > 0.01 \
+					or absf(wall.rotation.y) > 0.01 or wall.get_child_count() == 0:
+				continue
+			_cut_wall(wall, face.x, OG_SILL, top, OG_GLASS_W * 0.5)
+		places.append(Vector3(face.x, House16Plan.OG_FLOOR, side * d * 0.5))
+	n.set_meta("og_shooting_windows", places)
+
+func _cut_wall(wall: Node3D, cx: float, y0: float, y1: float, half: float) -> void:
+	for piece in wall.get_children():
+		var mi: MeshInstance3D = null
+		for c in piece.get_children():
+			if c is MeshInstance3D:
+				mi = c
+		if mi == null or not (mi.mesh is BoxMesh):
+			continue
+		var sz: Vector3 = (mi.mesh as BoxMesh).size
+		var x0: float = piece.position.x - sz.x * 0.5
+		var x1: float = piece.position.x + sz.x * 0.5
+		var yb: float = piece.position.y
+		var yt: float = yb + sz.y
+		if x1 <= cx - half + 0.001 or x0 >= cx + half - 0.001 or yt <= y0 + 0.001 or yb >= y1 - 0.001:
+			continue
+		var material := mi.material_override
+		var parts: Array = []
+		if cx - half > x0 + 0.01:
+			parts.append([x0, cx - half, yb, yt])
+		if cx + half < x1 - 0.01:
+			parts.append([cx + half, x1, yb, yt])
+		var mx0 := maxf(x0, cx - half)
+		var mx1 := minf(x1, cx + half)
+		if y0 > yb + 0.01:
+			parts.append([mx0, mx1, yb, y0])
+		if y1 < yt - 0.01:
+			parts.append([mx0, mx1, y1, yt])
+		for p in parts:
+			var body := lb.box(Vector3((p[0] + p[1]) * 0.5, p[2], piece.position.z), Vector3(p[1] - p[0], p[3] - p[2], sz.z), "plaster", 0, true, wall)
+			for c in body.get_children():
+				if c is MeshInstance3D:
+					c.material_override = material
+		piece.free()
 
 ## Nach dem Aufbau aller Gebäude: freie Giebelseiten intakter Wohnhäuser bekommen ein OG-Fenster (Anbauten,
 ## Nachbarhäuser und Reihenhaus-Trennwände ausgenommen); danach Gebäudehülle neu zusammenfassen.
@@ -563,6 +779,8 @@ func release() -> void:
 		if is_instance_valid(n):
 			n.free()
 	_models.clear()
+	_tree_far_mesh.clear()   # Schlüssel = Vorlagenmeshes dieses Ladevorgangs (die Instanzen halten ihre Kopien selbst)
+	_tree_far_mat.clear()
 
 
 func _stair_floor(n: Node3D, w: float, d: float) -> void:

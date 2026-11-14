@@ -80,6 +80,7 @@ var _hit_t := -1000.0
 var _seen_t := -1000.0
 var _flanks := 0
 var _blacklist := {}             ## Zielschlüssel -> gesperrt bis (Spielzeit)
+var _flank_via := Vector3.INF    ## Zwischenpunkt der Flanke / flank via-point
 var _travel_t := -1000.0
 var _plan_t := -1000.0
 
@@ -202,6 +203,16 @@ func _physics_process(delta: float) -> void:
 				agent.target_position = _move_target
 			if is_leader() and state != State.COMBAT and goal.is_finite():
 				nav.plan(soldier, goal, Vector3.INF, false)
+			# Festgehangen: zurücksetzen und neue Route suchen (Gefecht: neue Deckung/Flanke, Mitglied: neuer Platz)
+			# Stuck: reset and look for a new route (combat: new cover/flank, member: new slot)
+			_flank_via = Vector3.INF
+			if state == State.COMBAT:
+				_cover_pos = Vector3.INF
+				_flanked = false
+				stop_moving()
+			elif not is_leader():
+				_slot_pos = Vector3.INF
+				_slot_t = 0.0
 		4:
 			_give_up()
 		5:
@@ -230,6 +241,9 @@ func update_movement(delta: float, face_move := true) -> void:
 	dir.y = 0.0
 	dir = dir.normalized()
 	var mv := dir + BotSquad.separation(self) * 0.7
+	# Ecken nicht schneiden (Fühler, gedrosselt) / don't cut corners (throttled whiskers)
+	if nav.side_t <= 0.0:
+		mv += nav.wall_push(soldier, dir, delta) * 0.8
 	mv.y = 0.0
 	soldier.move_input = mv.normalized() if mv.length() > 0.1 else dir
 	_open_doors_ahead(delta, dir)
@@ -360,11 +374,41 @@ func _travel(delta: float) -> void:
 		return
 	if _bounding_hold(delta, threat):
 		return
+	if _scan_pause(delta, threat):
+		return
 	soldier.stance_request = Soldier.Stance.STAND
 	var mode: int = Soldier.MoveMode.JOG
 	if threat.is_finite() and soldier.stamina > 40.0:
 		mode = Soldier.MoveMode.RUN          # unter Bedrohung: Sprung von Deckung zu Deckung
 	move_to(tgt, mode)
+
+
+## Kurze Pause mit Umsehen auf dem Marsch (ohne Bedrohung): alle 18–35 s für 0,8–1,8 s anhalten, teils ducken,
+## Blick schwenken. true = Pause läuft.
+## Short pause to look around while travelling (no threat): every 18–35 s stop for 0.8–1.8 s, sometimes crouch,
+## sweep the view. true = pausing.
+var _pause_until := -1.0
+var _next_pause := -1.0
+var _pause_yaw := 0.0
+
+func _scan_pause(delta: float, threat: Vector3) -> bool:
+	var t := now()
+	if threat.is_finite():
+		_pause_until = -1.0
+		return false
+	if _next_pause < 0.0:
+		_next_pause = t + randf_range(18.0, 35.0)
+	if t >= _next_pause and _pause_until < t:
+		_pause_until = t + randf_range(0.8, 1.8)
+		_next_pause = _pause_until + randf_range(18.0, 35.0)
+		_pause_yaw = soldier.look_yaw
+		if randf() < 0.4:
+			soldier.stance_request = Soldier.Stance.CROUCH
+	if t >= _pause_until:
+		return false
+	stop_moving()
+	soldier.look_yaw = rotate_toward(soldier.look_yaw, _pause_yaw + sin((_pause_until - t) * 3.0) * 0.9, delta * 2.5)
+	return true
 
 
 ## Unter Feindbedrohung in Sprüngen vorrücken: ein Element (gerade/ungerade Plätze) sichert, das andere läuft
@@ -813,7 +857,7 @@ func _search(delta: float) -> void:
 func _combat(delta: float) -> void:
 	_choose_weapon()
 	perception.forget_dead()
-	var visible := perception.best_target()
+	var visible := _sticky_target()
 	if visible:
 		target = visible
 		_no_los_time = 0.0
@@ -844,6 +888,69 @@ func _combat(delta: float) -> void:
 			_combat_camper(delta, visible, tpos)
 		_:
 			super._combat(delta)
+
+
+## Zielwahl mit Hysterese: sichtbares aktuelles Ziel bleibt mind. 3 s, danach nur Wechsel, wenn das neue
+## deutlich näher ist (< 85 %; in den ersten 3 s < 50 %) – kein Hin- und Herpendeln.
+## Target choice with hysteresis: a visible current target is kept for at least 3 s, afterwards only switched if
+## the new one is clearly closer (< 85 %; within the first 3 s < 50 %) – no flip-flopping.
+var _tgt_t := -100.0
+var _rt_need := 0.6              ## Reaktionszeit für das aktuelle Ziel / reaction time for the current target
+var _aim_off := Vector3.ZERO     ## Anfangszielfehler / initial aim error
+
+func _sticky_target() -> Soldier:
+	var best := perception.best_target()
+	if best == null:
+		return null
+	var cur := target
+	if cur != null and is_instance_valid(cur) and cur != best and cur.alive \
+			and bool(perception.visible_now.get(cur, false)) and float(perception.awareness.get(cur, 0.0)) >= 1.0:
+		var dc := distance_to(cur.global_position)
+		var db := distance_to(best.global_position)
+		var limit := 0.5 if now() - _tgt_t < 3.0 else 0.85
+		if db > dc * limit:
+			return cur
+	if best != cur:
+		_tgt_t = now()
+	return best
+
+
+## Schwere Zweibeinwaffe (Soldier.FIRE_STANCE_MAX = 0: nur liegend feuerbar)
+## Heavy bipod weapon (Soldier.FIRE_STANCE_MAX = 0: can only fire prone)
+func _bipod() -> bool:
+	var w := soldier.current_weapon()
+	return w != null and Soldier.fire_stance_max(w.data) == 0
+
+
+## Wie AIBrain.engage, aber menschlicher: Reaktionszeit nach Distanz/Haltung des Ziels, Anfangszielfehler (nur
+## Brust abwärts), der über ~2,5 s abgebaut wird; Zweibeinwaffen erst liegend und nicht in der Bewegung.
+## Like AIBrain.engage but more human: reaction time by target distance/stance, initial aim error (chest and below
+## only) that decays over ~2.5 s; bipod weapons only when prone and not while moving.
+func engage(t: Soldier, delta: float) -> bool:
+	if t == null or not t.alive:
+		return super.engage(t, delta)
+	if t != _aim_target:
+		var dist0 := distance_to(t.global_position)
+		_rt_need = BotTraits.reaction(reaction_time, dist0, t.stance, t.is_moving())
+		_aim_off = BotTraits.aim_offset(dist0, t.stance, accuracy_skill)
+	var bipod := _bipod()
+	if bipod and has_move_target():
+		cease_fire()
+		look_at_point(t.global_position + Vector3.UP * 1.0, delta, 4.0)
+		return true
+	var base_rt := reaction_time
+	reaction_time = _rt_need
+	var ok := super.engage(t, delta)
+	reaction_time = base_rt
+	if not ok:
+		return ok
+	var k := clampf(1.0 - _track_time / 2.5, 0.15, 1.0)
+	soldier.aim_point += _aim_off * k
+	if bipod:
+		soldier.stance_request = Soldier.Stance.PRONE
+		if soldier.stance != Soldier.Stance.PRONE:
+			soldier.trigger = false          # erst hinlegen / lie down first
+	return ok
 
 
 ## In Deckung gehen (falls noch keine); true = in Deckung angekommen
@@ -885,15 +992,18 @@ func _peek_fire(delta: float, visible: Soldier, tpos: Vector3) -> void:
 	if _peek_timer <= 0.0:
 		_peeking = not _peeking
 		_peek_timer = randf_range(1.8, 3.5) if _peeking else randf_range(1.0, 2.2)
+	# Zweibeinwaffe bleibt liegen statt Ducken/Aufstehen / bipod weapon stays prone instead of crouch/stand
+	var bipod := _bipod()
 	if _peeking or not visible:
-		soldier.stance_request = Soldier.Stance.CROUCH if _crouch_has_los(threat_eye) else Soldier.Stance.STAND
+		soldier.stance_request = Soldier.Stance.PRONE if bipod else \
+				(Soldier.Stance.CROUCH if _crouch_has_los(threat_eye) else Soldier.Stance.STAND)
 		if visible:
 			engage(visible, delta)
 		else:
 			cease_fire()
 			look_at_point(threat_eye, delta, 4.0)
 	else:
-		soldier.stance_request = Soldier.Stance.CROUCH
+		soldier.stance_request = Soldier.Stance.PRONE if bipod else Soldier.Stance.CROUCH
 		cease_fire()
 		var w := soldier.current_weapon()
 		if w and w.in_mag < w.data.magazine_size * 0.4:
@@ -959,13 +1069,19 @@ func _suppress(delta: float, tpos: Vector3) -> bool:
 			soldier.reload()
 		return true
 	var aim := tpos + Vector3.UP * 1.0
-	soldier.stance_request = Soldier.Stance.CROUCH if _crouch_has_los(aim + Vector3.UP * 0.5) else Soldier.Stance.STAND
+	var bipod := _bipod()
+	if bipod and has_move_target():
+		return false
+	if bipod:
+		soldier.stance_request = Soldier.Stance.PRONE   # Zweibein: liegend / bipod: prone
+	else:
+		soldier.stance_request = Soldier.Stance.CROUCH if _crouch_has_los(aim + Vector3.UP * 0.5) else Soldier.Stance.STAND
 	look_at_point(aim, delta, 3.0)
 	soldier.aim_point = aim
 	soldier.has_aim_point = true
 	soldier.aiming = true
 	soldier.extra_spread = 2.5 + d / 40.0
-	_handle_bursts(w, facing_error(aim) < 0.15, delta, d)
+	_handle_bursts(w, facing_error(aim) < 0.15 and (not bipod or soldier.stance == Soldier.Stance.PRONE), delta, d)
 	return true
 
 
@@ -1018,6 +1134,13 @@ func _combat_flanker(delta: float, visible: Soldier, tpos: Vector3) -> void:
 			stop_moving()
 			return
 	if _flanked:
+		# Zwischenpunkt erreicht (oder Weg dorthin beendet) → weiter zur Flankendeckung
+		# via-point reached (or path to it ended) → continue to the flank cover
+		if _flank_via.is_finite() and (BotNav.flat(soldier.global_position, _flank_via) < BotNav.WP_REACH \
+				or not has_move_target()):
+			_flank_via = Vector3.INF
+			if _cover_pos.is_finite():
+				move_to(_cover_pos, Soldier.MoveMode.RUN)
 		if has_move_target() and _cover_pos.is_finite() and distance_to(_cover_pos) > 1.5:
 			_move_in_combat(delta, visible, 20.0)
 			return
@@ -1041,7 +1164,9 @@ func _combat_flanker(delta: float, visible: Soldier, tpos: Vector3) -> void:
 			flank_target = f
 			_cover_pos = f
 			_pos_t = 0.0
-			move_to(f, Soldier.MoveMode.RUN)
+			# Bogen über einen verdeckten Netz-Zwischenpunkt statt gerader Linie / arc via a hidden nav point
+			_flank_via = BotNav.flank_via(soldier, soldier.global_position, f, tpos)
+			move_to(_flank_via if _flank_via.is_finite() else f, Soldier.MoveMode.RUN)
 			return
 		_engaged_time = 0.0
 

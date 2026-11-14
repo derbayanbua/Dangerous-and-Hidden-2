@@ -2,6 +2,91 @@
 
 
 
+## 0.11.5 (14.11.2026)
+
+**DE**
+- **Stabilität dedizierter Server:** Endlosschleife der Bot-Navigation (Deckungssuche) behoben, doppeltes Trennen
+  bereits getrennter Spieler und freigegebene Rückruf-Funktionen abgesichert; Langlauf mit 24 Bots ohne Hänger und ohne
+  Speicherzuwachs.
+- **Masterserver nicht erreichbar:** Das Spiel zeigt einen Hinweis (auch bei Serverfehlern/Überlastung), dass der
+  Beitritt per IP trotzdem funktioniert (alle Sprachen).
+- **Rangliste (online):** Die Profil-Anmeldung am Masterserver fand nie statt – behoben, dadurch werden Spiele wieder
+  gewertet. Neuer Bildschirm **RANGLISTE** im Internet-Menü (signierte Abfrage, Blättern, eigenes Konto hervorgehoben).
+  Online gilt nur noch der Master-Dienstgrad; Rundenrang-Meldungen nur im LAN.
+- **Waffen:**
+  - Zweibeinwaffen (u. a. Bren, DP, ZB 26, Typ 97) feuern in SP und MP **nur liegend**, mit Hinweis im HUD; die
+    **BAR** bleibt stehend und hockend feuerbar. KI legt sich zum Feuern hin, der Server prüft die Regel.
+  - **Zielfernrohr-Rückstoß** korrigiert (Faktor nach Original statt 1,0): Scharfschützengewehre schlugen bis zu 3°
+    hoch und trafen dadurch schlecht.
+  - Rückstoß je Waffenart nach Original; im Mehrspieler gelten wie im Original immer die vollen Werte.
+- **Panzer:** Visiersicht (Fahrer/Schütze) ist Standard, V schaltet auf Verfolgerkamera; MG-Fadenkreuz zeigt auf den
+  echten Treffpunkt.
+- **Grafik:**
+  - Gleiche Lichtstimmung auf allen Grafikstufen: **SSAO und Glow immer an** (nur die Qualität sinkt), fehlendes
+    indirektes Licht und Volumennebel werden über Umgebungslicht und Nebel ausgeglichen.
+  - Neuer Schneefall (weiche Flocken unterschiedlicher Größe, Wind, Taumeln, folgt der Kamera).
+  - Arctic 1 (MP) dunkler und stimmiger; Mehrspielerkarten werden nachts nicht mehr aufgehellt.
+  - Normandy 3 (MP): Wasser repariert.
+- **Tag-Nacht-Wechsel im Mehrspieler für alle Karten** (LAN und Internet gleich), Serverregeln `daynight` (an/aus,
+  Standard aus), `daynightstart` (Startstunde, −1 = Kartenstimmung) und `daynightcycle` (Minuten je 24 h); einstellbar
+  im Server-Menü, Launcher/Config und Konsole, sichtbar in SPIEL-INFO. Einzelspieler bleibt bei der Originalstimmung.
+- **Testkarte Bavaria:** Tag-/Nachtzyklus mit Sonne, Mond, Himmel und Nebel, Raumlicht, Laternen an Wegen und
+  Haustüren, begehbare Obergeschoss-Fenster, größere Fernsicht mit Außenwald und Panorama.
+- **KI-Wegsuche (B-010b):** Pfadsuche mit bis zu 65536 Polygonen statt 4096 – lange Wege auf großen Karten werden
+  vollständig gefunden; zusätzliche Treppen-/Rampenverbindungen; Ausweichcode für Figuren außerhalb des Netzes entfernt.
+- **Erfüllbarkeitsprüfung (B-032c):** Begleitfiguren im Löser geschützt, Zweigprüfung durch gezieltes Ausschalten
+  einzelner Gegner.
+- **Lippensynchronität (B-052)** für alle sprechenden Figuren nach den Original-Lippendaten.
+- **Vögel und Fische (B-053)** aus den Originaldaten der Missionen.
+- **Einstellungen:** Tastenmenü vollständig umbelegbar (Doppelbelegung wird getauscht, Rechtsklick löscht, Zurückblättern),
+  ZURÜCK-Feld in den Grafikeinstellungen (Esc wirkt ebenso).
+- **LAN-Menü** im Original-Aufbau wie der Internet-Serverbrowser.
+- **Linux-Build (neu):** offizielles Paket für Linux x86_64 (`.tar.gz` mit Startskripten für Spiel und dedizierten
+  Server); unter Linux bisher wenig erprobt. Filme werden unabhängig von Groß-/Kleinschreibung gefunden.
+- **Eigener Körper in der 1. Person:** die Figur wirft weiter Schatten, beim Blick nach unten sind die Beine sichtbar;
+  mit Zielfernrohr/Fernglas nur Schatten. Option SPIEL „KÖRPER IN 1. PERSON“ (Standard an).
+- **Tests schreiben nicht mehr in echte Nutzerdateien** (bekannte Server, Favoriten, Filter, Kartenlisten, Schlüssel).
+
+**EN**
+- **Dedicated server stability:** fixed an endless loop in bot navigation (cover search), guarded against disconnecting
+  already disconnected players and freed callbacks; long run with 24 bots without hangs or memory growth.
+- **Master server unreachable:** the game shows a notice (also on server errors/overload) that joining by IP still
+  works (all languages).
+- **Leaderboard (online):** the profile login at the master server never happened – fixed, so matches are rated again.
+  New **LEADERBOARD** screen in the internet menu (signed query, paging, own account highlighted). Online only the
+  master rank counts; round rank messages are LAN only.
+- **Weapons:**
+  - Bipod weapons (e.g. Bren, DP, ZB 26, Type 97) fire **prone only** in SP and MP, with a HUD notice; the **BAR**
+    can still be fired standing and crouching. AI goes prone to fire, the server checks the rule.
+  - **Scope recoil** fixed (original factor instead of 1.0): sniper rifles kicked up to 3° and therefore hit poorly.
+  - Recoil per weapon type as in the original; multiplayer always uses the full values, as in the original.
+- **Tanks:** sight view (driver/gunner) is the default, V switches to the chase camera; MG crosshair points at the real
+  impact point.
+- **Graphics:**
+  - Same lighting mood on all quality levels: **SSAO and glow always on** (only quality drops); missing indirect light
+    and volumetric fog are compensated via ambient light and fog.
+  - New snowfall (soft flakes of varying size, wind, tumbling, follows the camera).
+  - Arctic 1 (MP) darker and moodier; multiplayer maps are no longer brightened at night.
+  - Normandy 3 (MP): water fixed.
+- **Day/night cycle in multiplayer for all maps** (LAN and internet alike), server rules `daynight` (on/off, default
+  off), `daynightstart` (start hour, −1 = map mood) and `daynightcycle` (minutes per 24 h); set in the server menu,
+  launcher/config and console, shown in GAME INFO. Single player keeps the original mood.
+- **Test map Bavaria:** day/night cycle with sun, moon, sky and fog, room lighting, lanterns along paths and at front
+  doors, usable upper-floor windows, longer view distance with outer forest and panorama.
+- **AI pathfinding (B-010b):** path search up to 65536 polygons instead of 4096 – long routes on large maps are found
+  completely; additional stair/ramp links; fallback code for figures off the navmesh removed.
+- **Completability check (B-032c):** escort figures protected in the solver, branch checks by removing specific enemies.
+- **Lip sync (B-052)** for all speaking characters from the original lip data.
+- **Birds and fish (B-053)** from the original mission data.
+- **Settings:** key menu fully rebindable (duplicates are swapped, right-click clears, page back), BACK field in the
+  graphics settings (Esc works too).
+- **LAN menu** in the original layout like the internet server browser.
+- **Linux build (new):** official package for Linux x86_64 (`.tar.gz` with start scripts for the game and the dedicated
+  server); little tested on Linux so far. Movies are found regardless of upper/lower case.
+- **Own body in first person:** the figure keeps casting its shadow and the legs are visible when looking down; with a
+  scope/binoculars only the shadow. Option GAME "KÖRPER IN 1. PERSON" (default on).
+- **Tests no longer write to real user files** (known servers, favourites, filters, map lists, keys).
+
 ## 0.11.3 (11.11.2026) – Hotfix
 
 **DE**

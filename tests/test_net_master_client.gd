@@ -48,7 +48,7 @@ func _run() -> void:
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(DIR + "/client_acc/account.json"))
 	_kh_bak = Net.auth.load_known_hosts()   # nach dem Test wiederherstellen: der signierte Eintrag für 127.0.0.1:PORT
 	# würde sonst spätere LAN-Tests (unsignierter Host, gleiche Adresse) mit HOST_KEY_MISMATCH abweisen
-	DirAccess.remove_absolute(ProjectSettings.globalize_path(Net.auth.KNOWN_HOSTS))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(Net.auth.known_hosts_path()))
 	var ok: bool = await M.login({"name": "Gast", "dir": DIR + "/client_acc"})
 	check(ok and not M.join_account().is_empty(), "Anmeldung beim Master (Mock), Konto für JOIN_HELLO")
 	Net.local_name = "Gast"

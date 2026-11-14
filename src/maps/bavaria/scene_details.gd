@@ -8,6 +8,16 @@ var roof_stand := Vector3.ZERO
 var tree_stand := Vector3.ZERO
 var tower_base := Vector3.ZERO
 var south := Vector3(0.817,0,0.576).normalized()
+## Fernkulisse-Streifen (Fernbereich der gelieferten Panoramen, Himmel transparent; erzeugt aus panorama/source).
+## params = (Kartenhorizont als Bildzeile v, v je Radiant, u je Radiant, u der Sektorrichtung); 2172 px Bildbreite ≈ 110°.
+## Alle Streifen im natürlichen Maßstab (West nicht mehr um 14 % gestreckt). Bildbreiten: Nord 93°, Ost 110°, West 90°,
+## Alpenband Süd deckt sichtbar nur ≈ ±45°. Bildmitten (w) so verteilt, dass Ost/West weit nach Süden reichen (≈ 52°, Naht zu
+## den Alpen ≈ 7°) und Nord/Ost bzw. Nord/West ≈ 4° überlappen: West 53° Süd/37° Nord, Nord 57° West/36° Ost, Ost 58° Nord/52° Süd. Streifen 2× aus den Quellbildern (Lanczos), VRAM-komprimiert mit Mipmaps.
+const FAR_PANORAMAS := {
+	"north": {"path": "res://assets/maps/bavaria/panorama/panorama_north.png", "params": Vector4(0.72, 5.954, 0.6141, 0.6109)},
+	"east": {"path": "res://assets/maps/bavaria/panorama/panorama_east.png", "params": Vector4(0.70, 6.115, 0.5208, 0.5272)},
+	"west": {"path": "res://assets/maps/bavaria/panorama/panorama_west.png", "params": Vector4(0.70, 5.801, 0.6391, 0.5867)},
+}
 var border_offsets: Array[float] = []
 var border_leaf_mesh: Mesh
 var border_leaf_material: Material
@@ -473,6 +483,150 @@ func _boundary_screen() -> void:
 				body.collision_mask = 0
 			_measure_border(house,a,outward)
 			t.merge_building_visuals(house,"bavaria_border_house_visuals")
+	_outer_forest_ring(center)
+
+## Zweiter, äußerer Waldgürtel hinter dem Randsaum und den Randhäusern (rein optisch, ohne Kollision/Schatten).
+var outer_ring_offsets: Array[float] = []
+func _outer_forest_ring(center: Vector2) -> void:
+	var root := Node3D.new()
+	root.name = "AeussererWaldguertel"
+	m.dynamic_root.add_child(root)
+	root.add_to_group("bavaria_outer_forest_ring")
+	var species := ["l_tree","l_tree2","l_tree"]
+	for edge in m.boundary.size():
+		var a: Vector2 = m.boundary[edge]
+		var b: Vector2 = m.boundary[(edge+1)%m.boundary.size()]
+		var dir := (b-a).normalized()
+		var outward := Vector2(-dir.y,dir.x)
+		if outward.dot((a+b)*0.5-center)<0:
+			outward = -outward
+		var count := int(ceil(a.distance_to(b)/4.2))
+		for i in count+4:
+			# Über die Ecken hinaus verlängert, damit der Gürtel geschlossen wirkt.
+			var f := (float(i)-1.5+0.3*sin(i*2.3+edge))/count
+			var depth := 17.0+2.5*sin(i*1.7+edge*0.9)+(3.0 if i%2==1 else 0.0)
+			var pos := a.lerp(b,f)+outward*depth
+			var key: String = species[(i+edge)%species.size()]
+			var tree := t.prop(key,Vector3(pos.x,-0.25,pos.y),0,0.8) as Node3D
+			if tree == null:
+				continue
+			var bounds: AABB = t.mesh_bounds(tree,Transform3D.IDENTITY)
+			var h := 10.0+2.0*absf(sin(i*0.77+edge))
+			tree.scale *= Vector3(6.5/maxf(bounds.size.x,0.1),h/maxf(bounds.size.y,0.1),6.5/maxf(bounds.size.z,0.1))
+			tree.rotation.y = i*1.31+edge
+			tree.reparent(root,true)
+			tree.add_to_group("bavaria_exterior_foliage")
+			tree.set_meta("outer_ring_depth",depth)
+			for mesh in tree.find_children("*","MeshInstance3D",true,false):
+				(mesh as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				_outer_visibility(mesh)
+			for body in tree.find_children("*","CollisionObject3D",true,false):
+				body.collision_layer = 0
+				body.collision_mask = 0
+			outer_ring_offsets.append(depth)
+	_outer_forest_dense(center)
+
+## Dichter Hintergrundwald: dritte/vierte Reihe hinter dem Gürtel als MultiMesh der unveränderten Originalmeshes
+## (kein SurfaceTool-Zusammenführen). Rein optisch: ohne Kollision/Schatten/Navmesh, nur außerhalb der Grenze.
+var outer_dense_count := 0
+var outer_dense_far_count := 0
+const DENSE_BLOCK_LEN := 60.0    ## ≈ 2 Blöcke je Kante: Culling wirkt, Draw Calls bleiben klein
+const FAR_TIER_DEPTH := 27.5     ## m außerhalb der Grenze: Reihen 2/3 des dichten Waldes (≈ 29,5/35,5 m) → HD-Texturen
+const OUTER_VIS_END := 260.0
+const OUTER_VIS_MARGIN := 40.0
+func _outer_forest_dense(center: Vector2) -> void:
+	var poly := PackedVector2Array(m.boundary)
+	var species := ["l_tree","l_tree2","l_tree4"]
+	var parts := {}        # Art → [[Mesh, rel. Transform], …]
+	var sizes := {}
+	for key in species:
+		var sample := t.prop(key,Vector3.ZERO,0,1.0) as Node3D
+		if sample == null:
+			continue
+		sizes[key] = (t.mesh_bounds(sample,Transform3D.IDENTITY) as AABB).size
+		var list := []
+		for mesh in sample.find_children("*","MeshInstance3D",true,false):
+			list.append([(mesh as MeshInstance3D).mesh,sample.global_transform.affine_inverse()*mesh.global_transform])
+		parts[key] = list
+		sample.remove_from_group("bavaria_all_tree_roots")
+		sample.get_parent().remove_child(sample)
+		sample.free()
+	# Blöcke je Art × Kante × ~40-m-Abschnitt × Stufe: Sichtkegel-/Entfernungs-Culling greift je Block (ein einziger
+	# Ring-MultiMesh hätte die Kartenmitte als Mittelpunkt und würde nie ausgeblendet). Stufe 1 = hintere Reihen
+	# (≥ FAR_TIER_DEPTH außerhalb der Grenze) mit HD- statt 4K-Texturen.
+	var xforms := {}       # "Art|Kante|Abschnitt|Stufe" → Array[Transform3D]
+	for edge in m.boundary.size():
+		var a: Vector2 = m.boundary[edge]
+		var b: Vector2 = m.boundary[(edge+1)%m.boundary.size()]
+		var dir := (b-a).normalized()
+		var outward := Vector2(-dir.y,dir.x)
+		if outward.dot((a+b)*0.5-center)<0:
+			outward = -outward
+		for row in 3:
+			var spacing := 3.4+0.4*row
+			var count := int(ceil(a.distance_to(b)/spacing))
+			for i in range(-3,count+4):
+				var f := (float(i)+0.5*(row%2)+0.35*sin(i*2.9+edge+row))/count
+				var depth := 23.5+6.0*row+2.0*sin(i*1.3+edge*0.7+row)
+				var pos := a.lerp(b,f)+outward*depth
+				if Geometry2D.is_point_in_polygon(pos,poly) or _boundary_dist(pos)<21.0:
+					continue
+				var key: String = species[(i*7+edge+row*3)%species.size()]
+				if not parts.has(key):
+					continue
+				var seg := clampi(int(floor(f*a.distance_to(b)/DENSE_BLOCK_LEN)),-1,int(a.distance_to(b)/DENSE_BLOCK_LEN))
+				var tier := 1 if depth>=FAR_TIER_DEPTH else 0
+				var ck := "%s|%d|%d|%d" % [key,edge,seg,tier]
+				if not xforms.has(ck):
+					xforms[ck] = []
+				var sz: Vector3 = sizes[key]
+				var h := 10.5+2.5*absf(sin(i*0.61+edge+row*1.7))+1.0*row
+				var w := 6.2+0.8*absf(cos(i*0.9+row))
+				var basis := Basis(Vector3.UP,i*1.13+edge*0.7+row)*Basis.from_scale(Vector3(w/maxf(sz.x,0.1),h/maxf(sz.y,0.1),w/maxf(sz.z,0.1)))
+				xforms[ck].append(Transform3D(basis,Vector3(pos.x,-0.25,pos.y)))
+	var root := Node3D.new()
+	root.name = "AeussererWaldDicht"
+	m.dynamic_root.add_child(root)
+	root.add_to_group("bavaria_outer_forest_dense")
+	for ck in xforms:
+		var list: Array = xforms[ck]
+		if list.is_empty():
+			continue
+		var key: String = String(ck).get_slice("|",0)
+		var far_tier := String(ck).get_slice("|",3)=="1"
+		outer_dense_count += list.size()
+		if far_tier:
+			outer_dense_far_count += list.size()
+		for part in parts[key]:
+			var batch := MultiMesh.new()
+			batch.transform_format = MultiMesh.TRANSFORM_3D
+			batch.mesh = t.tree_far_mesh(part[0]) if far_tier else part[0]
+			batch.instance_count = list.size()
+			for k in list.size():
+				batch.set_instance_transform(k,(list[k] as Transform3D)*(part[1] as Transform3D))
+			var visual := MultiMeshInstance3D.new()
+			visual.name = "Wald_"+String(ck).replace("|","_")
+			visual.multimesh = batch
+			visual.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_outer_visibility(visual)
+			visual.set_meta("far_tier",far_tier)
+			root.add_child(visual)
+	print("BAVARIA_WALD dicht=%d (hinten HD %d, Bloecke %d) texturen=%s" % [outer_dense_count, outer_dense_far_count,
+		root.get_child_count(), str(t.tree_tex_stats)])
+
+## Weiches Ausblenden der Außenbäume nach Entfernung (Blockmitte). Von der Spielfläche aus (≤ ≈ 200 m) bleibt alles
+## sichtbar; greift für erhöhte/entfernte Kameras (Zuschauer, Übersicht) und spart dort Geometrie.
+func _outer_visibility(gi: GeometryInstance3D) -> void:
+	gi.visibility_range_end = OUTER_VIS_END
+	gi.visibility_range_end_margin = OUTER_VIS_MARGIN
+	gi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_SELF
+
+func _boundary_dist(pt: Vector2) -> float:
+	var d := INF
+	for e in m.boundary.size():
+		var c := Geometry2D.get_closest_point_to_segment(pt,m.boundary[e],m.boundary[(e+1)%m.boundary.size()])
+		d = minf(d,c.distance_to(pt))
+	return d
 
 func _measure_border(node: Node3D, a: Vector2, outward: Vector2) -> void:
 	var closest := INF
@@ -566,6 +720,16 @@ func configure_sky(e: Environment) -> void:
 	mat.set_shader_parameter("panorama",load(PANORAMA))
 	mat.set_shader_parameter("south_direction",south)
 	mat.set_shader_parameter("panorama_repeats",3.0)
+	# Fernkulisse Nord/Ost/West (Kartennord = Bildoben des Lageplans = −south); Süd bleiben die Alpen.
+	var far := true
+	for k in FAR_PANORAMAS:
+		far = far and ResourceLoader.exists(FAR_PANORAMAS[k].path)
+	mat.set_shader_parameter("far_enabled",far)
+	if far:
+		for k in FAR_PANORAMAS:
+			var p: Dictionary = FAR_PANORAMAS[k]
+			mat.set_shader_parameter("far_"+k,load(p.path))
+			mat.set_shader_parameter("far_"+k+"_p",p.params)
 	e.sky = Sky.new()
 	e.sky.sky_material = mat
 	e.fog_light_color = Color(0.30,0.34,0.47)

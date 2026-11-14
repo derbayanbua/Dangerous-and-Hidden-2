@@ -120,7 +120,7 @@ func _protect_routes(house: Node3D) -> void:
 	protected.append(Rect2(-corridor_half-0.34,-house_size.y*0.5,(corridor_half+0.34)*2,house_size.y))
 	for z in ([0.0] if house_size.y<6.4 else [-house_size.y/3.0,0.0,house_size.y/3.0]):
 		protected.append(Rect2(-corridor_half-0.54,z-0.43,(corridor_half+0.54)*2,0.86))
-	for window in house.get_meta("shooting_windows",[]):
+	for window in house.get_meta("shooting_windows",[])+house.get_meta("og_shooting_windows",[]):
 		var side := signf(window.z)
 		var z: float = window.z-side*1.4
 		protected.append(Rect2(window.x-0.36,minf(z,window.z)-0.36,0.72,absf(window.z-z)+0.72))

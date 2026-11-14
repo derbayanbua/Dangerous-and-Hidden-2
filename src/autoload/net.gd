@@ -59,6 +59,11 @@ const RULE_KEYS := {
 	"spawn_on_start": "spawnonstart", "team_lives": "teamlives",
 	# 0.10.1 (Ergänzung): Präzises Zielen (Kugelfall-Ausgleich) für alle gleich, Standard aus
 	"precise_aim": "preciseaim",
+	# 0.11.x (Ergänzung): Tageszeit für Karten mit Tageszyklus – Startstunde, Minuten je 24 h (0 = feste Zeit)
+	"day_start_h": "daystart", "day_cycle_min": "daycycle",
+	# 0.11.5 (Ergänzung): Tag-/Nachtwechsel auf ALLEN Karten (nur MP, src/world/mp_day_night.gd): an/aus,
+	# Startstunde (−1 = Originalstimmung der Karte), Minuten je 24 h
+	"day_night": "daynight", "dn_start_h": "daynightstart", "dn_cycle_min": "daynightcycle",
 }
 ## Wertebereiche: Menü (0x629EE0) bzw. Konsole; bots = Ergänzung (KI-Soldaten je Team); 0 = „No limit“ (T2010)
 const RULE_RANGE := {
@@ -66,7 +71,12 @@ const RULE_RANGE := {
 	"warmup_s": [0, 99], "respawn_s": [3, 99], "spawn_protect_s": [0, 15], "inverse_damage": [0, 999],
 	"bots_per_team": [0, 16], "max_ping": [0, 9999], "max_freq": [0, 100], "max_inactivity": [0, 3600],
 	"support_strike": [0, 3], "support_interval_min": [1, 60], "coop_difficulty": [1, 4], "coop_lives": [-1, 99],
+	"day_start_h": [0, 23], "day_cycle_min": [0, 240], "dn_start_h": [-1, 23], "dn_cycle_min": [1, 240],
 }
+## 0.11.5: Tag-/Nachtwechsel standardmäßig aus; an: Start = Kartenstimmung, 60 min je Tag
+const DAYNIGHT_DEFAULTS := {"day_night": false, "dn_start_h": -1, "dn_cycle_min": 60}
+## Tageszeit-Ergänzung: Start 19 Uhr (Dämmerung), 60 min je Tag; Karten ohne Tageszyklus ignorieren beides
+const DAYTIME_DEFAULTS := {"day_start_h": 19, "day_cycle_min": 60}
 ## B-011: Unterstützung standardmäßig aus (nur wenn in den Servereinstellungen erlaubt)
 const SUPPORT_DEFAULTS := {"support_strike": 0, "support_interval_min": 5, "support_bots": false}
 var support: SupportStrike          ## Artillerie/Luftangriff der laufenden Karte (src/combat/support_strike.gd)
@@ -129,6 +139,8 @@ static func style_defaults(m: int) -> Dictionary:
 	d.merge(LIMIT_DEFAULTS)
 	d.merge(FEEDBACK_DEFAULTS)
 	d.merge(SUPPORT_DEFAULTS)
+	d.merge(DAYTIME_DEFAULTS)
+	d.merge(DAYNIGHT_DEFAULTS)
 	d["kill_cam"] = m == Mode.DEATHMATCH          # Kill-Cam (Ergänzung): Standard nur im Deathmatch an
 	return d
 
@@ -326,6 +338,8 @@ func join(ip: String, port: int = PORT, password := "") -> bool:
 
 ## Verbindung beenden. to_menu: zurück ins Hauptmenü
 func leave(to_menu := true) -> void:
+	if _peer:
+		print("NET: leave (to_menu=%s) server=%s Stack %s" % [to_menu, multiplayer.is_server(), str(get_stack().slice(1, 4))])
 	if _peer and is_online and multiplayer.is_server():
 		_master_stop()
 	if _peer:
@@ -601,7 +615,6 @@ func _auth_fail_deferred(code: String, info: String) -> void:
 	status_changed.emit(last_error)
 
 
-## Online-Modus mit Masterserver: Internet-Server eines offiziellen Builds (LAN/Editor ohne Schlüssel: nie).
 ## 0.11.2: Spawn-Schutz (Regel spawnprotection): unverwundbar und Feuern gesperrt bis zum Ablauf (Spieler und KI).
 func spawn_protected(s: Node) -> bool:
 	return spawn_protect_left(s) > 0.0
@@ -614,6 +627,7 @@ func spawn_protect_left(s: Node) -> float:
 	return maxf(float(int(s.get_meta("protect_until")) - Time.get_ticks_msec()) / 1000.0, 0.0)
 
 
+## Online-Modus mit Masterserver: Internet-Server eines offiziellen Builds (LAN/Editor ohne Schlüssel: nie).
 func master_mode() -> bool:
 	var ms := get_node_or_null("/root/Master")
 	return is_online and bool(settings.get("internet", false)) and ms != null and ms.is_official_build()
@@ -638,7 +652,7 @@ func _server_key_path() -> String:
 			return a.get_slice("=", 1)
 		if a.begins_with("--dedicated="):
 			cfg = a.get_slice("=", 1)
-	return cfg.get_basename() + ".key" if cfg != "" else "user://server.key"
+	return cfg.get_basename() + ".key" if cfg != "" else Game.user_file("server.key")   # 0.11.5: Tests → Testordner
 
 
 ## Serverstart (gehostet und dediziert): beim Master registrieren (+ Heartbeat), nur Internet + offizieller Build.
@@ -1446,6 +1460,7 @@ func kick(id: int, msg_victim: String, msg_all: String) -> void:
 	if not players.has(id) or id <= 1 or bool(players[id].get("kicked", false)):
 		return
 	players[id]["kicked"] = true
+	print("NET: kick ", id, " Grund '", msg_victim, "'")
 	var nm := String(players[id]["name"])
 	_announce(fmt_s(msg_all, [nm]))
 	if multiplayer.get_peers().has(id):
@@ -1543,7 +1558,10 @@ func _update_ranks() -> void:
 		var old := int(p.get("rank", 0))
 		if r != old:
 			p["rank"] = r
-			if not master_mode():          # 0.11.1: online gilt der Master-Dienstgrad (Protokoll 15.y), keine Original-Meldung
+			# 0.11.4 [D]: online zählt nur der Master-Dienstgrad (Meldung über _announce_promotions);
+			# die Rundenrang-Meldung des Originals nur im LAN. / Online only the master rank counts;
+			# the original round-rank message is LAN only.
+			if not master_mode():
 				_rank_msg.rpc(int(id), r, r > old)
 
 
@@ -2131,10 +2149,7 @@ func _do_act(s: Soldier, kind: String, a: Vector3, b: Vector3, wid: String) -> v
 		return              # B-022 F-006: unbekannte Waffen-ID (wd.noise_radius/Grenade.data wären null)
 	match kind:
 		"shot":
-			# B-012: Zweibein-/Dreibein-MG nur aus erlaubter Haltung (Server prüft; Haltung oder angeforderte Haltung)
-			if multiplayer.is_server() and wd and not is_instance_valid(s.mounted) and s.vehicle == null \
-					and 2 - maxi(int(s.stance), int(s.stance_request)) > Soldier.fire_stance_max(wd):
-				return
+			# B-012: Haltungsprüfung jetzt in _act_error / stance check moved to _act_error (no ammo cost, logged in rejects)
 			Ballistics.fire(s, a, b, wd, s.exclude_rids(), s.team)
 			var mz := a + b * 0.9
 			if s.model and s.model.weapon_socket:
@@ -2722,6 +2737,10 @@ func _act_error(s: Soldier, kind: String, a: Vector3, b: Vector3, wid: String) -
 				w = _owned_weapon(s, wid)
 				if w == null:
 					return "Waffe %s nicht im Besitz" % wid
+			# B-012: Zweibein-MG nur aus erlaubter aktueller Haltung (Stellung/Fahrzeug ausgenommen)
+			# B-012: bipod MG only from the allowed current stance (emplacement/vehicle exempt)
+			if kind == "shot" and not mounted and 2 - int(s.stance) > Soldier.fire_stance_max(wd):
+				return "Haltung %d für %s nicht erlaubt" % [int(s.stance), wid]
 			if kind == "shot" and not mounted:
 				var look := s.aim_direction()
 				var ang := rad_to_deg(look.angle_to(b.normalized()))
@@ -3502,7 +3521,9 @@ func server_info() -> Dictionary:
 			"support_interval_min": int(rule("support_interval_min")), "support_bots": bool(rule("support_bots")),
 			# B-029 Coop-Regeln (Fadenkreuz wie im Original nur Anzeige, 0x730810)
 			"coop_difficulty": int(rule("coop_difficulty")), "coop_lives": int(rule("coop_lives")),
-			"team_lives": bool(rule("team_lives")), "allow_crosshair": bool(rule("allow_crosshair"))},
+			"team_lives": bool(rule("team_lives")), "allow_crosshair": bool(rule("allow_crosshair")),
+			# 0.11.5: Tag-/Nachtwechsel
+			"day_night": bool(rule("day_night")), "dn_start_h": int(rule("dn_start_h")), "dn_cycle_min": int(rule("dn_cycle_min"))},
 		# Spiel-Info (gameinfo.4ds): Version (Filter „Selbe Version“ T2579), Team-/Spieler-Status, Runde
 		"ver": String(ProjectSettings.get_setting("application/config/version")), "ts": [int(team_score[0]), int(team_score[1])],
 		"w": team_wins, "rn": round_no, "st": game_state, "plist": _info_players()}
@@ -3609,12 +3630,17 @@ const FAV_PATH := "user://mp_favorites.json"
 
 
 func load_favorites() -> void:
-	var d = LsRuntime._read_json(ProjectSettings.globalize_path(FAV_PATH))
+	var d = LsRuntime._read_json(ProjectSettings.globalize_path(fav_path()))
 	favorites = d.get("favorites", []) if typeof(d) == TYPE_DICTIONARY else []
 
 
+## 0.11.5: Tests (--autoplay) schreiben in den Testordner (Game.user_file), nie in die echten Favoriten.
+func fav_path() -> String:
+	return Game.user_file(FAV_PATH.trim_prefix("user://"))
+
+
 func save_favorites() -> void:
-	var f := FileAccess.open(FAV_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(fav_path(), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify({"favorites": favorites}, "\t"))
 
@@ -3764,7 +3790,7 @@ func load_filter() -> void:
 	server_filter = FILTER_DEFAULTS.duplicate()
 	if "--autoplay" in " ".join(OS.get_cmdline_user_args()):
 		return                  # Tests: immer ungefiltert, gespeicherter Filter bleibt unberührt
-	var d = LsRuntime._read_json(ProjectSettings.globalize_path(FILTER_PATH))
+	var d = LsRuntime._read_json(ProjectSettings.globalize_path(Game.user_file(FILTER_PATH.trim_prefix("user://"))))
 	if typeof(d) == TYPE_DICTIONARY:
 		for k in FILTER_DEFAULTS:
 			if d.has(k):
@@ -3774,7 +3800,7 @@ func load_filter() -> void:
 func save_filter() -> void:
 	if "--autoplay" in " ".join(OS.get_cmdline_user_args()):
 		return
-	var f := FileAccess.open(FILTER_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(Game.user_file(FILTER_PATH.trim_prefix("user://")), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(server_filter))
 

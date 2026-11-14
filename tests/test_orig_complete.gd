@@ -58,7 +58,9 @@ func _physics_process(_d: float) -> void:
 			continue
 		if s.team != Soldier.TEAM_AXIS and god:
 			# B-036 a2 Lauf 11: sas_17 fiel trotz god (Static_2) – max_health war zwischendurch wieder klein geworden
-			if human != null and s.max_health < 100000.0:
+			# B-032c Begleitschutz: auch verbündete/neutrale NPCs (cz3 Freiberg fiel im Hinterhalt detector_zlesa_1 durch
+			# einen Treffer > Gesundheit) bekommen die hohe Gesundheit, nicht nur der Trupp
+			if s.max_health < 100000.0:
 				s.max_health = 100000.0
 			s.health = s.max_health
 		elif s.team == Soldier.TEAM_AXIS and stealth and human == null:
@@ -121,6 +123,19 @@ func _run() -> void:
 	# B-032b: Gegenprobe Fehlschlagpfad (--fail_probe=<skript>:signal:<n> | <skript>:death) statt Lösen
 	if Game.cli.has("fail_probe"):
 		await _fail_probe(String(Game.cli["fail_probe"]))
+		_report()
+		return
+	# B-032c: Zweig-Prüfung – benannte Soldaten vor dem Lösen ausschalten (--kill_first=Name[,Name…]),
+	# z. B. af3 Funker AF3a_19, bevor er bei Spielernähe < 10 m sendet (Kettenwert 20 bleibt 0)
+	for kn in String(Game.cli.get("kill_first", "")).split(",", false):
+		var hit := false
+		for e in m.enemies:
+			if is_instance_valid(e) and e.alive and String(e.name).to_lower() == kn.strip_edges().to_lower():
+				e.die(_lead())
+				hit = true
+		print("LOESER kill_first %s: %s" % [kn, "ausgeschaltet" if hit else "nicht gefunden"])
+		notes.append("kill_first %s %s" % [kn, "ok" if hit else "fehlt"])
+	if Game.cli.has("kill_first") and await _wait(2.0):
 		_report()
 		return
 	var finished := false

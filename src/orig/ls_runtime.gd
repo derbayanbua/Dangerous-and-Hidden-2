@@ -2034,6 +2034,8 @@ func speak(who: Node3D, id) -> float:
 		false, &"Voice")
 	if p:
 		dur = p.stream.get_length()
+		if is_instance_valid(who):
+			LipSync.start(who, key + ".wav", p)   # B-052 Gesichtsanimation
 	if t != "" and Settings.subtitles:
 		subtitle.emit(t, dur + 0.5)
 		Events.say(t, dur + 0.5)
@@ -2536,26 +2538,58 @@ func _apply_rain() -> void:
 
 func _apply_snow_mode() -> void:
 	if _snow == null:
+		# 0.11.4 [D]: schönerer Schnee – weiche runde Flocken mit Größenvarianz, Taumeln (Turbulenz), Ein-/Ausblenden,
+		# Weltkoordinaten (Emitter folgt der Kamera). Windrichtung/-stärke wie bisher (Blizzard).
+		# 0.11.4: nicer snow – soft round flakes, size variance, tumbling, fade in/out, world-space particles.
 		_snow = GPUParticles3D.new()
-		_snow.amount = 3000
-		_snow.lifetime = 4.0
+		_snow.amount = 6000
+		_snow.lifetime = 5.0
+		_snow.preprocess = 5.0
+		_snow.local_coords = false
 		_snow.visibility_aabb = AABB(Vector3(-40, -30, -40), Vector3(80, 60, 80))
 		var pm := ParticleProcessMaterial.new()
 		pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
-		pm.emission_box_extents = Vector3(30, 2, 30)
+		pm.emission_box_extents = Vector3(30, 6, 30)
 		pm.direction = Vector3(0.4, -1, 0.2)
-		pm.spread = 15.0
-		pm.initial_velocity_min = 3.0
-		pm.initial_velocity_max = 6.0
-		pm.gravity = Vector3(1.5, -2.0, 0.5)   # starker Wind
+		pm.spread = 18.0
+		pm.initial_velocity_min = 2.5
+		pm.initial_velocity_max = 5.0
+		pm.gravity = Vector3(1.5, -2.0, 0.5)   # starker Wind / strong wind
+		pm.turbulence_enabled = true
+		pm.turbulence_noise_strength = 1.4
+		pm.turbulence_noise_scale = 4.0
+		pm.turbulence_influence_min = 0.04
+		pm.turbulence_influence_max = 0.14
+		pm.scale_min = 0.5
+		pm.scale_max = 1.7
+		var sc := Curve.new()
+		sc.add_point(Vector2(0.0, 0.0))
+		sc.add_point(Vector2(0.1, 1.0))
+		sc.add_point(Vector2(0.85, 1.0))
+		sc.add_point(Vector2(1.0, 0.0))
+		var sct := CurveTexture.new()
+		sct.curve = sc
+		pm.scale_curve = sct
 		_snow.process_material = pm
 		var q := QuadMesh.new()
-		q.size = Vector2(0.06, 0.06)
+		q.size = Vector2(0.07, 0.07)
 		var m := StandardMaterial3D.new()
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		m.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
-		m.albedo_color = Color(0.95, 0.97, 1.0, 0.8)
+		m.billboard_mode = BaseMaterial3D.BILLBOARD_PARTICLES
 		m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		var g := GradientTexture2D.new()
+		g.width = 32
+		g.height = 32
+		g.fill = GradientTexture2D.FILL_RADIAL
+		g.fill_from = Vector2(0.5, 0.5)
+		g.fill_to = Vector2(0.5, 0.0)
+		var gr := Gradient.new()
+		gr.colors = PackedColorArray([Color(1, 1, 1, 0.95), Color(1, 1, 1, 0.0)])
+		g.gradient = gr
+		m.albedo_texture = g
+		m.albedo_color = Color(0.95, 0.97, 1.0, 0.9)
+		m.proximity_fade_enabled = true
+		m.proximity_fade_distance = 0.4
 		q.material = m
 		_snow.draw_pass_1 = q
 		add_child(_snow)

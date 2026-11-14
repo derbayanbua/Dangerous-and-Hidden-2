@@ -25,13 +25,9 @@ var _move_target := Vector3.INF
 var _repath := 0.0
 var _stuck_time := 0.0
 var _last_pos := Vector3.ZERO
-## Steht der Soldat abseits des Navigationsnetzes (z. B. ARCTIC1-Landeplatz: Netz 18 m tiefer), zeigt der Pfad
-## senkrecht nach unten und der Soldat tritt auf der Stelle → direkt aufs Ziel laufen (nur Trupp-KI, SquadBrain).
-var direct_when_off_mesh := false
-const OFF_MESH_DIST := 2.0
+## B-010c: Ersatz `direct_when_off_mesh` (Trupp-KI lief abseits des Netzes direkt aufs Ziel) entfernt – test_a1 und Löser a1
+## ohne ihn erfüllbar (docs/status/b010c_b032c.md).
 const STUCK_SPEED := 0.25        ## m/s: darunter gilt der Soldat als festgefahren [E]
-var _off_mesh := false
-var _off_check := 0.0
 var _detour := 0.0
 var _detour_sign := 1.0
 ## B-033 HUMAN_SetIgnoreCircumventionFlag (hd2.exe Gehirn +0x11C [B]). 0x562E30 überspringt bei gesetztem Byte die Umgehung:
@@ -60,6 +56,30 @@ var _prog_repaths := 0
 var progress_aborts := 0          ## Zähler (Test/Messung)
 
 
+## B-010c [E]: Godot sucht standardmäßig höchstens 4096 Polygone je Pfad (`path_search_max_polygons`) und liefert sonst einen
+## Teilpfad zum nächsten erreichten Punkt. Auf feinen Netzen (Zelle 0,2 m) endet ein Weg so nach ~250 m. Eine Projekteinstellung
+## gibt es in 4.7.1 nicht → Agent-Eigenschaft bzw. Abfrageparameter. 65536 deckt die größten Karten (gemessen, siehe
+## docs/status/b010c_b032c.md) und begrenzt die Suche bei unerreichbaren Zielen. `--nav_max_polys=<n>` (0 = unbegrenzt,
+## 4096 = alter Stand) für Messungen.
+const PATH_MAX_POLYS := 65536
+
+
+static func path_max_polys() -> int:
+	return int(Game.cli.get("nav_max_polys", str(PATH_MAX_POLYS)))
+
+
+## Ersatz für NavigationServer3D.map_get_path (optimiert) mit angehobener Suchgrenze.
+static func nav_path(map: RID, a: Vector3, b: Vector3) -> PackedVector3Array:
+	var q := NavigationPathQueryParameters3D.new()
+	q.map = map
+	q.start_position = a
+	q.target_position = b
+	q.path_search_max_polygons = path_max_polys()
+	var r := NavigationPathQueryResult3D.new()
+	NavigationServer3D.query_path(q, r)
+	return r.path
+
+
 func setup(s: Soldier) -> void:
 	soldier = s
 	perception = s.get_node_or_null("Perception")
@@ -69,6 +89,7 @@ func setup(s: Soldier) -> void:
 	agent.radius = 0.35
 	agent.height = 1.8
 	agent.path_max_distance = 3.0
+	agent.path_search_max_polygons = path_max_polys()
 	s.add_child(agent)
 	agent.link_reached.connect(_on_link_reached)
 
@@ -158,13 +179,6 @@ func update_movement(delta: float, face_move := true) -> void:
 			return
 	var dir := next - soldier.global_position
 	dir.y = 0
-	if direct_when_off_mesh:
-		_off_check -= delta
-		if _off_check <= 0.0 and NavigationServer3D.map_get_iteration_id(agent.get_navigation_map()) > 0:
-			_off_check = 0.5
-			var cp := NavigationServer3D.map_get_closest_point(agent.get_navigation_map(), soldier.global_position)
-			_off_mesh = cp.distance_to(soldier.global_position) > OFF_MESH_DIST
-	var direct := direct_when_off_mesh and _off_mesh
 	if _climb_retry > 0.0:
 		# Kletterstelle: an die Wand herantreten und erneut hinaufklettern (try_climb braucht ≤ 1 m Abstand)
 		_climb_retry -= delta
@@ -174,7 +188,7 @@ func update_movement(delta: float, face_move := true) -> void:
 		if not soldier.is_climbing() and soldier.try_climb():
 			_climb_retry = 0.0
 		return
-	if dir.length() < 0.05 or direct:
+	if dir.length() < 0.05:
 		# kein Pfad (z. B. Navigationsnetz noch nicht fertig): direkt laufen
 		dir = _move_target - soldier.global_position
 		dir.y = 0
@@ -197,13 +211,6 @@ func update_movement(delta: float, face_move := true) -> void:
 	_last_pos = soldier.global_position
 	if ignore_circumvention:
 		_detour = 0.0
-	elif direct and _stuck_time > 1.5:
-		# Hindernis ohne Netz: hinübersteigen versuchen, sonst abwechselnd links/rechts ausweichen
-		_stuck_time = 0.0
-		soldier.jump_or_climb()
-		_detour_sign = -_detour_sign
-		_detour = 1.5
-		return
 	if _stuck_time > 1.0 and not ignore_circumvention:
 		var blocker := _blocked_by_human()
 		if blocker:

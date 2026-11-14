@@ -1046,13 +1046,28 @@ func _keys_next_page() -> void:
 		_keys_category = (_keys_category + 1) % KEY_CATEGORIES.size()
 
 
+## Vorige Unterseite (bzw. letzte Seite der vorigen Kategorie). / Previous sub-page (or last page of previous category).
+func _keys_prev_page() -> void:
+	_keys_part -= 1
+	if _keys_part < 0:
+		_keys_category = (_keys_category - 1 + KEY_CATEGORIES.size()) % KEY_CATEGORIES.size()
+		_keys_part = _keys_parts(_keys_category) - 1
+
+
 func _page_keys() -> void:
 	_label(Rect2(67, 179, 383, 18), text(2451), 14, TEXT_COLOR)
 	var cat: Array = KEY_CATEGORIES[_keys_category]
 	var parts := _keys_parts(_keys_category)
 	_keys_part = clampi(_keys_part, 0, parts - 1)
 	var title: String = text(cat[0]) + (" %d/%d" % [_keys_part + 1, parts] if parts > 1 else "")
-	_cycle(Rect2(105, 201, 336, 33), title, _keys_next_page)
+	var pg := _cycle(Rect2(105, 201, 336, 33), title, _keys_next_page, true, "bkeys_page")
+	# Rechtsklick auf den Seitentitel blättert zurück. / Right-click on the page title pages backwards.
+	pg.gui_input.connect(func(e: InputEvent):
+		if _waiting_action == "" and e is InputEventMouseButton and e.pressed \
+				and (e as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
+			_click.play()
+			_keys_prev_page()
+			show_menu.call_deferred("options"))
 	var y := 244.0
 	for action: String in (cat[1] as Array).slice(_keys_part * KEYS_PER_PAGE, (_keys_part + 1) * KEYS_PER_PAGE):
 		var b := Button.new()
@@ -1072,8 +1087,17 @@ func _page_keys() -> void:
 		b.pressed.connect(func():
 			_waiting_action = action
 			show_menu("options"))
+		# Rechtsklick (ohne laufende Belegung) löscht die Taste → „unbelegt“.
+		# Right-click (when not capturing) clears the key → "unbound".
+		b.gui_input.connect(func(e: InputEvent):
+			if _waiting_action == "" and e is InputEventMouseButton and e.pressed \
+					and (e as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
+				_click.play()
+				InputSetup.unbind(action)
+				show_menu.call_deferred("options"))
 		stage.add_child(b)
 		y += 30.0
+	_label(Rect2(67, 605, 412, 18), tr("Linksklick: neue Taste · Rechtsklick: löschen · Esc: abbrechen"), 11, TEXT_COLOR)
 	var d1 := _cycle(Rect2(67, 626, 204, 33), text(2457), func(): InputSetup.apply_preset(1))
 	d1.name = "bdefault1"
 	d1.add_theme_font_size_override("font_size", 12)
@@ -1093,8 +1117,11 @@ func _input(event: InputEvent) -> void:
 		if event is InputEventKey and (event as InputEventKey).physical_keycode == KEY_ESCAPE:
 			_waiting_action = ""
 		else:
-			InputSetup.rebind(_waiting_action, event)
-			InputSetup.save_bindings()
+			# Doppelbelegung wird getauscht und gemeldet. / Duplicate binding is swapped and reported.
+			var swapped: Array = InputSetup.rebind(_waiting_action, event)
+			for other: String in swapped:
+				Events.say(tr("Doppelbelegung: %s ↔ %s getauscht") % [InputSetup.display_name(_waiting_action),
+					InputSetup.display_name(other)], 3.0)
 			_waiting_action = ""
 		get_viewport().set_input_as_handled()
 		show_menu.call_deferred("options")
@@ -1107,22 +1134,24 @@ func _page_game() -> void:
 	_yesno(289, text(20212) if texts.has("20212") else "FADENKREUZ ZULASSEN", Settings.crosshair,
 		func(v: bool): Settings.crosshair = v)
 	# BEWUSSTE ABWEICHUNG ([D]): Zielmarker/Randpfeile für aktive Missionsziele (Standard an)
-	_yesno(245, "ZIELMARKIERUNGEN", Settings.objective_markers, func(v: bool): Settings.objective_markers = v)
+	_yesno(243, "ZIELMARKIERUNGEN", Settings.objective_markers, func(v: bool): Settings.objective_markers = v)
 	# B-016 BEWUSSTE ABWEICHUNG: Ragdoll-Physik für Gefallene (Standard an), nein = Original-Todesanimationen
-	_yesno(333, "RAGDOLL-PHYSIK", Settings.ragdoll, func(v: bool): Settings.ragdoll = v)
+	_yesno(327, "RAGDOLL-PHYSIK", Settings.ragdoll, func(v: bool): Settings.ragdoll = v)
 	# Ergänzungen (kein Original-Punkt): FPS-Anzeige (SP+MP), Namen/Trefferanzeige im Mehrspieler
-	_yesno(377, "FPS ANZEIGEN", Settings.show_fps, func(v: bool): Settings.show_fps = v)
-	_yesno(421, "NAMEN ÜBER SPIELERN (MP)", Settings.show_names, func(v: bool): Settings.show_names = v)
-	_yesno(465, "TREFFERANZEIGE SCHÜTZE (MP)", Settings.hit_feedback, func(v: bool): Settings.hit_feedback = v)
-	_yesno(509, "TREFFER-RICHTUNG GETROFFENER (MP)", Settings.hurt_feedback, func(v: bool): Settings.hurt_feedback = v)
-	_yesno(553, "KILL-CAM (MP)", Settings.kill_cam, func(v: bool): Settings.kill_cam = v)
+	_yesno(369, "FPS ANZEIGEN", Settings.show_fps, func(v: bool): Settings.show_fps = v)
+	_yesno(411, "NAMEN ÜBER SPIELERN (MP)", Settings.show_names, func(v: bool): Settings.show_names = v)
+	_yesno(453, "TREFFERANZEIGE SCHÜTZE (MP)", Settings.hit_feedback, func(v: bool): Settings.hit_feedback = v)
+	_yesno(495, "TREFFER-RICHTUNG GETROFFENER (MP)", Settings.hurt_feedback, func(v: bool): Settings.hurt_feedback = v)
+	_yesno(537, "KILL-CAM (MP)", Settings.kill_cam, func(v: bool): Settings.kill_cam = v)
 	# B-007 (Ergänzung): Sprachfassung – Originaltexte aus texts_<sprache>.json, eigene Texte über locale/ui_texts.csv
 	var langs := Settings.available_languages()
 	# 0.10.1 Ergänzung: Kugelfall-Ausgleich (Standard nein = Original)
-	_yesno(597, "PRÄZISES ZIELEN", Settings.precise_aim, func(v: bool): Settings.precise_aim = v)
-	_cycle(Rect2(67, 641, 412, 32), tr("SPRACHE:") + " " + Settings.language_name(), func():
+	_yesno(579, "PRÄZISES ZIELEN", Settings.precise_aim, func(v: bool): Settings.precise_aim = v)
+	# 0.11.5 Ergänzung: eigener Körper (Beine + Schatten) in der 1. Person (Standard ja)
+	_yesno(621, "KÖRPER IN 1. PERSON", Settings.fpv_body, func(v: bool): Settings.fpv_body = v)
+	_cycle(Rect2(67, 663, 412, 32), tr("SPRACHE:") + " " + Settings.language_name(), func():
 		Settings.set_language(langs[(maxi(langs.find(Settings.language), 0) + 1) % langs.size()]), langs.size() > 1, "blanguage")
-	_label(Rect2(67, 677, 412, 18), "Sprachausgabe nur in den Sprachen der Installation.", 11, TEXT_COLOR)
+	_label(Rect2(67, 697, 412, 18), "Sprachausgabe nur in den Sprachen der Installation.", 11, TEXT_COLOR)
 
 
 # --- Profile (Original change_profile.4ds) ---------------------------------------
@@ -1427,6 +1456,13 @@ static func rebuild_credits() -> Array:
 		{"style": "SM", "text": "FREMDQUELLEN"}, es,
 		{"style": "SM", "text": "Wassershader angelehnt an „Water shader 3D (Godot 4.3)“ von Lesus (godotshaders.com), CC0 1.0"},
 		{"style": "SM", "text": "Lizenzhinweise: THIRD_PARTY_LICENSES.txt"},
+		el,
+		{"style": "SM", "text": "DANK"}, es,
+		{"style": "SM", "text": "Dank an RellHaiser für das Projekt HD2_SabreSquadron (github.com/RellHaiser/HD2_SabreSquadron),"},
+		{"style": "SM", "text": "einen C++-Nachbau des Spiel-Clients von Hidden & Dangerous 2: Sabre Squadron."},
+		{"style": "SM", "text": "Seine Dokumentation und Adressangaben haben uns geholfen, Abläufe im Original zu finden;"},
+		{"style": "SM", "text": "die übernommenen Erkenntnisse wurden, soweit möglich, gegen das Original geprüft und eigenständig umgesetzt."},
+		{"style": "SM", "text": "Es wurde kein Code übernommen."},
 		el, el, el,
 		{"style": "SM", "text": "ORIGINALSPIEL"}, es,
 		{"style": "TI", "text": "HIDDEN & DANGEROUS 2"}, el, el, el,

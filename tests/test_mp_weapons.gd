@@ -340,21 +340,30 @@ func _mg_stance_server(bots: Array) -> void:
 		return
 	var req0 := s.stance_request
 	var mgd := WeaponDB.get_weapon(&"o_33")
-	var org := s.eye_position() + Vector3.UP * 50.0
-	s.stance_request = Soldier.Stance.STAND
-	var n0 := Ballistics.shots_fired
-	Net._do_act(s, "shot", org, Vector3.UP, String(mgd.id))
-	var standing_blocked := Ballistics.shots_fired == n0
-	var n1 := Ballistics.shots_fired
-	Net._do_act(s, "shot", org, Vector3.UP, "bren")
-	var bren_ok := Ballistics.shots_fired == n1 + 1
-	s.stance_request = Soldier.Stance.PRONE
-	var n2 := Ballistics.shots_fired
-	Net._do_act(s, "shot", org, Vector3.UP, String(mgd.id))
-	var prone_ok := Ballistics.shots_fired == n2 + 1
+	# 0.11.2: Spawn-Schutz sperrt jedes Feuer, vor der Haltungsprüfung -> abwarten (max. 10 s)
+	var t_end := Time.get_ticks_msec() + 10000
+	while Net.spawn_protected(s) and Time.get_ticks_msec() < t_end:
+		await get_tree().process_frame
+	var org := s.eye_position()   # _act_error prüft den Ursprung (≤ 3,5 m) vor der Haltung
+	# 0.11.4: Haltungsprüfung liegt in Net._act_error (abgelehnter Schuss kostet keine Munition) und nutzt s.stance
+	var st0 := s.stance
+	s.stance = Soldier.Stance.STAND
+	# Waffe nicht im Besitz des Host-Soldaten -> Besitzfehler kommt vor der Haltung; dann gilt die Regel direkt
+	var blocked := func(id: String) -> bool:
+		var e: String = Net._act_error(s, "shot", org, Vector3.UP, id)
+		if e.contains("Besitz"):
+			return 2 - int(s.stance) > Soldier.fire_stance_max(WeaponDB.get_weapon(StringName(id)))
+		return e.begins_with("Haltung")
+	var standing_blocked: bool = blocked.call(String(mgd.id))
+	var bren_ok: bool = blocked.call("bren")   # [D]: Bren nur liegend
+	s.stance = Soldier.Stance.PRONE
+	var prone_ok: bool = not blocked.call(String(mgd.id))
+	s.stance = st0
 	s.stance_request = req0
 	check(standing_blocked and prone_ok and bren_ok,
-		"Server: MG 42 nur liegend (stehender Client-Schuss verworfen), Bren stehend erlaubt")
+		"Server: MG 42 und Bren nur liegend (stehender Client-Schuss verworfen)",
+		"stehend %s, bren %s, liegend %s, Fehler '%s'" % [standing_blocked, bren_ok, prone_ok,
+		Net._act_error(s, "shot", org, Vector3.UP, String(mgd.id))])
 	await seconds(1.0)
 
 
@@ -692,6 +701,7 @@ func _hits(m: Node, bots: Array) -> void:
 		s.stance_request = Soldier.Stance.STAND
 		s.set_meta("protect_until", 0)
 	tgt.look_yaw = PI
+	shooter.orig_recoil_off = true      # 0.11.2: Zonenmessung ohne Rückstoß (geprüft in test_aim_ballistics)
 	shooter.global_position = Vector3(0, 600.1, -10)
 	await frames(30)
 	# Original-Figur: Zonen folgen der Haltung → erst messen, wenn das Ziel wirklich steht (Bot kann gelegen haben)

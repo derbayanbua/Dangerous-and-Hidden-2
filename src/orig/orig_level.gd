@@ -101,6 +101,8 @@ const WALK_PATCHES := {
 	# die Stockwerke waren im Netz nur senkrecht verbunden (Scherentreppe, Läufe überdecken sich) → Link je Rampe 01–08.
 	"arctic2": [
 		{"kind": "ramp_links", "match": "xT1_schod_", "a": Vector3.ZERO, "b": Vector3.ZERO},
+		# B-010c: Startinsel Commando1 (24,5; 0; −64,6) bleibt offen – zwei Links (Insel→T17-Rampe, Rampenabsatz→Außengelände
+		# 2,4) brachten test_mp_nav keine Verbindung (Stand docs/status/b010c_b032c.md); Art "link" steht dafür bereit.
 	],
 }
 
@@ -173,6 +175,19 @@ func _apply_walk_patches() -> void:
 		if p["kind"] == "ramp_links":
 			if not Game.cli.has("nav_stair_links_off"):
 				_ramp_links(body, String(p["match"]).to_lower())
+			continue
+		if p["kind"] == "link":
+			# B-010c: einzelner Navigations-Link mit genauen Endpunkten (Netzpunkte), läuft wie Weg
+			if Game.cli.has("nav_stair_links_off"):
+				continue
+			var lk := NavigationLink3D.new()
+			lk.name = "PatchLink%d" % body.get_child_count()
+			lk.bidirectional = true
+			lk.set_meta("stair", true)
+			body.add_child(lk)
+			lk.start_position = a
+			lk.end_position = b
+			stats["stair_links"] = int(stats.get("stair_links", 0)) + 1
 			continue
 		if p["kind"] == "stair":
 			if Game.cli.has("nav_stair_links_off"):
@@ -849,6 +864,9 @@ var water_meshes: Array = []
 ## klz_faces: in tree.klz als begehbare Fläche verlinkt – dann zählt nur ein Wassermaterial (VODA*/MORE*), nicht der
 ## Name: ARCTIC1 „m_ark01_hrdr_.QuadPatch01“ (Haupteingang, links) ist Klz-Fläche mit Material 36 „Schnee – kugelfest“
 ## (surface.bin) und Textur G_A1_1B, galt aber wegen „QuadPatch“ als Wasser -> keine Kollision, Schwimmen (B-017).
+static var _WATER_FRAME_RE := RegEx.create_from_string("^voda\\d*$")
+
+
 static func _is_water(mi: MeshInstance3D, klz_faces := false) -> bool:
 	var box := mi.get_aabb()
 	if box.size.y > 0.8 or box.size.x * box.size.z < 16.0:
@@ -856,6 +874,12 @@ static func _is_water(mi: MeshInstance3D, klz_faces := false) -> bool:
 	var nm := String(mi.name).to_lower() + "|" + String(mi.get_parent().name).to_lower()
 	# „more“ = Meer (ARCTIC1 more2 = U-Boot-Becken mit Filmtextur, ohne Klz-Link; war einseitig nach unten
 	# orientiert und kollidierte erst mit beidseitigen Trimeshes -> sperrte das Navmesh der Bunkertreppe)
+	# NORMANDY3_MP(_ZONE): Wasserfläche „voda“ (+ voda01–05) mit Material „mat“ (Filmtextur Normandy3.bik) und
+	# Klz-Volumenlink -> per Frame-Name; „voda\d*“ gibt es nur in normandy3_mp/scene.glb (alle Caches geprüft).
+	# NORMANDY3_MP(_ZONE): water plane "voda" (+ voda01–05), generic material "mat" (movie texture), Klz volume
+	# link -> matched by frame name; "voda\d*" exists only in normandy3_mp/scene.glb (all caches checked).
+	if _WATER_FRAME_RE.search(String(mi.name).to_lower()) != null:
+		return true
 	if not klz_faces and (nm.contains("quadpatch") or nm.begins_with("more") or nm.contains("|more")):
 		return true
 	for i in mi.mesh.get_surface_count():

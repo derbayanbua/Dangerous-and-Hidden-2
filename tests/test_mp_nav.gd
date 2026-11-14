@@ -10,6 +10,10 @@ const REACH := 1.5       ## Pfadende so nah am Ziel = erreichbar
 
 var rows: Array[String] = []
 var report_path := ""
+var timing: Array[String] = []
+var _q_n := 0
+var _q_us := 0
+var _q_max := 0
 
 
 func _ready() -> void:
@@ -45,10 +49,19 @@ func _run() -> void:
 	rows.append("| Karte | Polygone | Punkte | auf dem Netz | erreichbar | Hinweise |")
 	rows.append("|---|---|---|---|---|---|")
 	for id in maps:
+		_q_n = 0
+		_q_us = 0
+		_q_max = 0
+		var mem0 := OS.get_static_memory_usage()
 		await _test_map(String(id))
+		# B-010c: Suchzeit je Pfadabfrage (Grenze `--nav_max_polys`, 0 = unbegrenzt)
+		timing.append("PFADZEIT %s Grenze=%s Abfragen=%d Mittel=%.2f ms Max=%.2f ms Speicher statisch=%.0f MB (Start %.0f MB)" % [
+			id, Game.cli.get("nav_max_polys", "0"), _q_n, (_q_us / maxf(1.0, _q_n)) / 1000.0, _q_max / 1000.0,
+			OS.get_static_memory_usage() / 1048576.0, mem0 / 1048576.0])
+		print(timing[-1])
 		var f := FileAccess.open(report_path, FileAccess.WRITE)
 		if f:
-			f.store_string("\n".join(rows) + "\n")
+			f.store_string("\n".join(rows) + "\n\n" + "\n".join(timing) + "\n")
 	_finish()
 
 
@@ -277,7 +290,12 @@ func _path(nav_map: RID, a: Vector3, b: Vector3) -> PackedVector3Array:
 	q.target_position = b
 	q.path_search_max_polygons = int(Game.cli.get("nav_max_polys", "0"))
 	var r := NavigationPathQueryResult3D.new()
+	var t := Time.get_ticks_usec()
 	NavigationServer3D.query_path(q, r)
+	t = Time.get_ticks_usec() - t
+	_q_n += 1
+	_q_us += t
+	_q_max = maxi(_q_max, t)
 	return r.path
 
 

@@ -34,7 +34,9 @@ func _run() -> void:
 		_phase_path()
 	if ph in ["all", "streu"]:
 		_phase_scatter()
-	if ph == "streu":
+	if ph in ["all", "streu", "rueck"]:
+		_phase_recoil()
+	if ph in ["streu", "rueck"]:
 		_finish()
 		return
 	await _setup_range()
@@ -118,6 +120,76 @@ func _phase_scatter() -> void:
 	s.aiming = keep[2]
 
 
+# --- R: Rückstoß (0.11.2, hd2.exe 0x5454D0) und Zielgenauigkeit 0x5A8100 ---------------------------------------------
+
+func _phase_recoil() -> void:
+	var s: Soldier = mission().squad.leader()
+	var keep := [s.skill_shooting, s.stamina, s.aiming, s.is_player_controlled, s.stance]
+	s.is_player_controlled = true
+	s.skill_shooting = 100.0
+	s.stamina = 100.0
+	s.aiming = false
+	s.equip(["mp40", "colt", "no36", "", "knife"])
+	s.select_slot(WeaponData.Slot.PRIMARY)
+	var diff := Net.difficulty_level()
+	var dk := 0.3 if diff == 1 else (0.8 if diff == 2 else 1.0)
+	if s.current_speed() > 0.3 or s.stance != 0:
+		check(false, "R Soldat steht still", "v %.2f stance %d" % [s.current_speed(), s.stance])
+	# Grundwert (0x542B10): bereit 0,1, Anschlag 0,25; Schießen 100 → +0
+	check(absf(s.orig_aim_base() - 0.1) < 1e-4, "R Grundwert Waffe bereit = 0,1", "%.3f" % s.orig_aim_base())
+	s.aiming = true
+	check(absf(s.orig_aim_base() - 0.25) < 1e-4, "R Grundwert Anschlag = 0,25", "%.3f" % s.orig_aim_base())
+	s.skill_shooting = 60.0
+	check(absf(s.orig_aim_base() - 0.65) < 1e-4, "R Grundwert + (100 − Schießen)·0,01", "%.3f" % s.orig_aim_base())
+	s.skill_shooting = 100.0
+	s.aiming = false
+	# Faktoren je Waffenart: MP 0,3 / Pistole 0,8 / Gewehr 0,4 / ZF-Gewehr 1,0 / Sturmgewehr 0,5
+	var rows := [[&"mp40", 0.3], [&"colt", 0.8], [&"kar98k", 0.4], [&"o_13", 0.4], [&"stg44", 0.5], [&"bren", 0.4]]
+	for row in rows:
+		var wd := WeaponDB.get_weapon(row[0])
+		check(absf(WeaponDB.recoil_kind_factor(wd) - float(row[1])) < 1e-4, "R Faktor %s = %.1f" % [row[0], row[1]],
+			"%.2f (Art %d)" % [WeaponDB.recoil_kind_factor(wd), WeaponDB.recoil_kind(wd)])
+	var w := s.current_weapon()
+	var r0 := s.orig_recoil_strength(w)
+	check(absf(r0 - 0.1 * 0.3 * dk) < 1e-4, "R Stärke MP 40 bereit, ausgeruht", "%.4f (Stufe %d)" % [r0, diff])
+	s.aiming = true
+	var ra := s.orig_recoil_strength(w)
+	check(absf(ra - 0.25 * 0.3 * 0.5 * dk) < 1e-4, "R Zielen ×0,5 (Anschlag 0,25)", "%.4f" % ra)
+	s.stamina = 40.0
+	var rs := s.orig_recoil_strength(w)
+	check(absf(rs - ra * 1.6) < 1e-4, "R Ausdauer 40 % → ×(2 − 0,4)", "%.4f" % rs)
+	s.stamina = 100.0
+	# messbare Ablenkung: y nur nach oben, x/z symmetrisch, Höchstwert R·0,2
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 112
+	var dir := Vector3(0, 0, -1)
+	var up_min := 1.0
+	var up_max := -1.0
+	var sx := 0.0
+	for i in 2000:
+		var d := s.apply_orig_recoil(dir, w, rng)
+		up_min = minf(up_min, d.y)
+		up_max = maxf(up_max, d.y)
+		sx += d.x
+	rep.append("R MP40 zielend: R %.4f, y %.5f…%.5f, Mittel x %.5f" % [ra, up_min, up_max, sx / 2000.0])
+	check(up_min >= -1e-6 and up_max > ra * 0.2 * 0.9 and up_max <= ra * 0.2 * 1.01, "R Rückstoß hebt nur (y ≤ R·0,2)",
+		"%.5f…%.5f" % [up_min, up_max])
+	check(absf(sx / 2000.0) < ra * 0.2 * 0.05, "R seitlich symmetrisch", "%.5f" % (sx / 2000.0))
+	# KI-Controller: Grundwert 0 → kein Rückstoß
+	s.is_player_controlled = false
+	check(s.orig_recoil_strength(w) == 0.0 and s.apply_orig_recoil(dir, w, rng) == dir, "R KI ohne Rückstoß (Grundwert 0)")
+	s.is_player_controlled = true
+	# Zielgenauigkeit 0x5A8100 = Grundwert + dw15·0,01
+	var acc := s.orig_accuracy()
+	check(absf(acc - (0.25 + tan(deg_to_rad(w.data.spread_aim)))) < 1e-4, "R Zielgenauigkeit = Grundwert + dw15·0,01",
+		"%.4f" % acc)
+	rep.append("R Fadenkreuz MP40 zielend: %.4f → Abstand %.4f" % [acc, acc * 0.025 + 0.01])
+	s.skill_shooting = keep[0]
+	s.stamina = keep[1]
+	s.aiming = keep[2]
+	s.is_player_controlled = keep[3]
+
+
 # --- A: Flugbahn/Ausgleich je Waffe ----------------------------------------------------------------------------------
 
 const DISTS := [10.0, 25.0, 50.0, 100.0, 200.0, 300.0, 400.0]
@@ -180,6 +252,7 @@ func _neutral(w: Weapon) -> void:
 	d.recoil_yaw = 0.0
 	w.data = d
 	w.bloom = 0.0
+	player.orig_recoil_off = true       # 0.11.2: Bahnmessung ohne Rückstoß (eigene Phase R)
 
 
 func _phase_aim_hits() -> void:
@@ -192,7 +265,7 @@ func _phase_aim_hits() -> void:
 	Ballistics.projectile_impact.connect(cb)
 	var classes := [["Pistole", "colt", WeaponData.Slot.SIDEARM], ["MP", "sten", WeaponData.Slot.PRIMARY],
 		["Gewehr", "enfield", WeaponData.Slot.PRIMARY], ["Zielfernrohr", "o_17", WeaponData.Slot.PRIMARY],
-		["MG", "bren", WeaponData.Slot.PRIMARY]]
+		["MG", "o_28", WeaponData.Slot.PRIMARY]]   # 0.11.4: Bren nur liegend -> stehend mit BAR messen
 	for mode in [0, 1]:
 		Ballistics.force_compensation = mode
 		rep.append("B Treffer (%s) – Abweichung Einschlag vom Visierpunkt (cm), Zoom, Optik"

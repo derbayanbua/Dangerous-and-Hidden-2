@@ -585,7 +585,7 @@ static func has_path(b: AIBrain, to: Vector3) -> bool:
 	var map := b.agent.get_navigation_map()
 	if not map.is_valid() or NavigationServer3D.map_get_iteration_id(map) == 0:
 		return true    # Netz noch nicht fertig: wie bisher direkt laufen
-	var path := NavigationServer3D.map_get_path(map, b.soldier.global_position, to, true)
+	var path := AIBrain.nav_path(map, b.soldier.global_position, to)   # B-010c
 	return path.size() > 0 and path[path.size() - 1].distance_to(to) < 3.0
 
 

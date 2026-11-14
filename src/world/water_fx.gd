@@ -67,6 +67,17 @@ static func enabled() -> bool:
 
 
 ## Parameter für eine Karte (Stil + Kartenabweichung + Grafikstufe).
+## true, wenn mi unter einem angehängten Modell (Frame „m_*“) unterhalb von root liegt.
+## True if mi sits below an attached model frame ("m_*") under root.
+static func _under_model(mi: Node, root: Node) -> bool:
+	var n := mi
+	while n != null and n != root:
+		if String(n.name).to_lower().begins_with("m_"):
+			return true
+		n = n.get_parent()
+	return false
+
+
 static func params_for(folder: String, quality: int) -> Dictionary:
 	var p: Dictionary = (STYLES["default"] as Dictionary).duplicate()
 	p.merge(STYLES[zone_of(folder)], true)
@@ -100,9 +111,14 @@ static func apply(mission: Node, orig) -> int:
 					break
 		if node == null:
 			continue
-		var meshes: Array = node.find_children("*", "MeshInstance3D", true, false)
+		# 0.11.4: nur die Wasserfläche selbst, keine angehängten Kinder (Normandy 3: Felsen m_N3_oppisk_39 unter
+		# „voda“ bekam sonst den Wassershader). / Only the water surface itself, not attached children.
+		var meshes: Array = []
 		if node is MeshInstance3D:
 			meshes.append(node)
+		for mi2 in node.find_children("*", "MeshInstance3D", true, false):
+			if not _under_model(mi2, node):
+				meshes.append(mi2)
 		for mi in meshes:
 			if not targets.has(mi):
 				targets.append(mi)

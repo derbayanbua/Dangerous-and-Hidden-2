@@ -351,6 +351,22 @@ func _apply_barrel_params(t: Dictionary, barrels: Dictionary) -> void:
 
 
 ## Weltrichtung des Rohrs eines Waffensitzes
+## 0.11.4: Sichtpunkt der Visiersicht – Frame CAMERAFPV* unter Sitz/Turm, sonst null.
+## 0.11.4: gunner view point – CAMERAFPV* frame below seat/turret, otherwise null.
+func seat_camera(idx: int) -> Node3D:
+	var t: Dictionary = turrets.get(idx, {})
+	var roots: Array = []
+	if idx >= 0 and idx < seats.size():
+		roots.append(seats[idx])
+	roots.append_array([t.get("vert"), t.get("hort")])
+	for r in roots:
+		if r is Node:
+			var c := (r as Node).find_child("CAMERAFPV*", true, false)
+			if c is Node3D:
+				return c
+	return null
+
+
 func turret_dir(idx: int) -> Vector3:
 	var t: Dictionary = turrets.get(idx, {})
 	if t.is_empty():

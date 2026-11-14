@@ -93,6 +93,7 @@ Name der Konfiguration,Name der Konfiguration,Configuration name,Configuration n
 PASSWORT,PASSWORT,PASSWORD,PASSWORD,PASSWORD,PASSWORD,PASSWORD
 PORT,PORT,PORT,PORT,PORT,PORT,PORT
 PRÄZISES ZIELEN,PRÄZISES ZIELEN,PRECISE AIM,PRECISE AIM,PRECISE AIM,PRECISE AIM,PRECISE AIM
+KÖRPER IN 1. PERSON,KÖRPER IN 1. PERSON,BODY IN FIRST PERSON,CORPS EN VUE SUBJECTIVE,CORPO IN PRIMA PERSONA,CUERPO EN PRIMERA PERSONA,TĚLO V POHLEDU 1. OSOBY
 PUNKTELIMIT (0 = aus),PUNKTELIMIT (0 = aus),POINT LIMIT (0 = off),POINT LIMIT (0 = off),POINT LIMIT (0 = off),POINT LIMIT (0 = off),POINT LIMIT (0 = off)
 RESPAWN ERLAUBEN,RESPAWN ERLAUBEN,ALLOW RESPAWN,ALLOW RESPAWN,ALLOW RESPAWN,ALLOW RESPAWN,ALLOW RESPAWN
 RESPAWN-ZEIT [s],RESPAWN-ZEIT [s],RESPAWN TIME [s],RESPAWN TIME [s],RESPAWN TIME [s],RESPAWN TIME [s],RESPAWN TIME [s]
@@ -180,7 +181,7 @@ Ziele erfüllt,Ziele erfüllt,Objectives completed,Objectifs remplis,Obiettivi c
 Dienststerne,Dienststerne,Service stars,Étoiles de service,Stelle di servizio,Estrellas de servicio,Služební hvězdy
 Lokales Profil (zählt nicht online),Lokales Profil (zählt nicht online),Local profile (does not count online),Profil local (ne compte pas en ligne),Profilo locale (non conta online),Perfil local (no cuenta en línea),Místní profil (nepočítá se online)
 Kein offizieller Build – Masterserver nicht verfügbar.,Kein offizieller Build – Masterserver nicht verfügbar.,Not an official build – master server unavailable.,Version non officielle – serveur maître indisponible.,Build non ufficiale – master server non disponibile.,Compilación no oficial – servidor maestro no disponible.,Neoficiální sestavení – hlavní server nedostupný.
-Masterserver nicht erreichbar – LAN und Favoriten weiter nutzbar.,Masterserver nicht erreichbar – LAN und Favoriten weiter nutzbar.,Master server unreachable – LAN and favourites still available.,Serveur maître injoignable – LAN et favoris toujours disponibles.,Master server non raggiungibile – LAN e preferiti ancora disponibili.,Servidor maestro inaccesible – LAN y favoritos siguen disponibles.,Hlavní server nedostupný – LAN a oblíbené stále fungují.
+Masterserver nicht erreichbar – LAN, Favoriten und Beitritt per IP weiter nutzbar.,Masterserver nicht erreichbar – LAN, Favoriten und Beitritt per IP weiter nutzbar.,Master server unreachable – LAN, favourites and joining by IP still work.,Serveur maître injoignable – LAN, favoris et connexion par IP toujours disponibles.,Master server non raggiungibile – LAN, preferiti e accesso via IP ancora disponibili.,Servidor maestro inaccesible – LAN, favoritos y conexión por IP siguen disponibles.,Hlavní server nedostupný – LAN, oblíbené a připojení přes IP stále fungují.
 Serverliste ungültig.,Serverliste ungültig.,Server list invalid.,Liste des serveurs invalide.,Elenco server non valido.,Lista de servidores no válida.,Neplatný seznam serverů.
 Bitte Spiel aktualisieren.,Bitte Spiel aktualisieren.,Please update the game.,Veuillez mettre le jeu à jour.,Aggiorna il gioco.,Actualiza el juego.,Aktualizujte prosím hru.
 HINZUFÜGEN,HINZUFÜGEN,ADD,AJOUTER,AGGIUNGI,AÑADIR,PŘIDAT
@@ -210,3 +211,24 @@ Server ist voll.,Server ist voll.,Server is full.,Le serveur est plein.,Il serve
 Zu viele Verbindungsversuche – bitte kurz warten.,Zu viele Verbindungsversuche – bitte kurz warten.,Too many connection attempts – please wait a moment.,Trop de tentatives de connexion – veuillez patienter.,Troppi tentativi di connessione – attendi un momento.,Demasiados intentos de conexión: espera un momento.,Příliš mnoho pokusů o připojení – chvíli počkej.
 Zeitüberschreitung bei der Anmeldung.,Zeitüberschreitung bei der Anmeldung.,Login to the server timed out.,Délai de connexion au serveur dépassé.,Tempo scaduto per l'accesso al server.,Se agotó el tiempo de conexión al servidor.,Vypršel čas přihlášení k serveru.
 Anmeldung am Server fehlgeschlagen.,Anmeldung am Server fehlgeschlagen.,Joining the server failed.,Échec de la connexion au serveur.,Accesso al server non riuscito.,No se pudo entrar en el servidor.,Připojení k serveru selhalo.
+"%s: nur im Liegen feuerbar","%s: nur im Liegen feuerbar","%s: can only fire while prone","%s : tir uniquement couché","%s: sparo solo da sdraiati","%s: solo se puede disparar tumbado","%s: střelba jen vleže"
+"%s: nur hockend oder liegend feuerbar","%s: nur hockend oder liegend feuerbar","%s: can only fire crouched or prone","%s : tir uniquement accroupi ou couché","%s: sparo solo accovacciati o sdraiati","%s: solo se puede disparar agachado o tumbado","%s: střelba jen v podřepu nebo vleže"
+"Linksklick: neue Taste · Rechtsklick: löschen · Esc: abbrechen","Linksklick: neue Taste · Rechtsklick: löschen · Esc: abbrechen","Left click: new key · Right click: clear · Esc: cancel","Clic gauche : nouvelle touche · Clic droit : effacer · Échap : annuler","Clic sinistro: nuovo tasto · Clic destro: cancella · Esc: annulla","Clic izquierdo: nueva tecla · Clic derecho: borrar · Esc: cancelar","Levé tlačítko: nová klávesa · Pravé tlačítko: smazat · Esc: zrušit"
+"Doppelbelegung: %s ↔ %s getauscht","Doppelbelegung: %s ↔ %s getauscht","Duplicate binding: %s ↔ %s swapped","Double affectation : %s ↔ %s échangées","Doppia assegnazione: %s ↔ %s scambiati","Asignación doble: %s ↔ %s intercambiadas","Dvojí přiřazení: %s ↔ %s prohozeno"
+RANGLISTE,RANGLISTE,LEADERBOARD,CLASSEMENT,CLASSIFICA,CLASIFICACIÓN,ŽEBŘÍČEK
+POS.,POS.,POS.,POS.,POS.,POS.,POŘ.
+NAME,NAME,NAME,NOM,NOME,NOMBRE,JMÉNO
+RANG,RANG,RANK,GRADE,GRADO,RANGO,HODNOST
+XP,XP,XP,XP,XP,XP,XP
+KILLS,KILLS,KILLS,FRAGS,UCCISIONI,BAJAS,ZABITÍ
+TODE,TODE,DEATHS,MORTS,MORTI,MUERTES,SMRTI
+SIEGE,SIEGE,WINS,VICTOIRES,VITTORIE,VICTORIAS,VÝHRY
+SPIELE,SPIELE,MATCHES,PARTIES,PARTITE,PARTIDAS,ZÁPASY
+VORHERIGE SEITE,VORHERIGE SEITE,PREVIOUS PAGE,PAGE PRÉCÉDENTE,PAGINA PRECEDENTE,PÁGINA ANTERIOR,PŘEDCHOZÍ STRANA
+NÄCHSTE SEITE,NÄCHSTE SEITE,NEXT PAGE,PAGE SUIVANTE,PAGINA SUCCESSIVA,PÁGINA SIGUIENTE,DALŠÍ STRANA
+AKTUALISIEREN,AKTUALISIEREN,REFRESH,ACTUALISER,AGGIORNA,ACTUALIZAR,OBNOVIT
+Lade Rangliste …,Lade Rangliste …,Loading leaderboard …,Chargement du classement …,Caricamento classifica …,Cargando clasificación …,Načítání žebříčku …
+Rangliste nicht verfügbar,Rangliste nicht verfügbar,Leaderboard unavailable,Classement indisponible,Classifica non disponibile,Clasificación no disponible,Žebříček není k dispozici
+Noch keine gewerteten Spiele,Noch keine gewerteten Spiele,No ranked matches yet,Aucune partie classée pour l'instant,Ancora nessuna partita classificata,Aún no hay partidas clasificadas,Zatím žádné hodnocené zápasy
+Seite %d von %d,Seite %d von %d,Page %d of %d,Page %d sur %d,Pagina %d di %d,Página %d de %d,Strana %d z %d
+Einträge,Einträge,entries,entrées,voci,entradas,záznamů

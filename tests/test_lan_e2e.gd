@@ -34,7 +34,10 @@ func _run() -> void:
 		return
 	check(Net.local_name == "Host", "Spielername aus dem Profil", Net.local_name)
 	# --- Zurück und wieder hinein ---
-	check(await click(visible_button("Zurück")), "„Zurück“ angeklickt")
+	# 0.11.2: LAN-Menü = Original-Serverbrowser (multiplayer menu.4ds, T2320) / LAN menu = original server browser
+	check(is_instance_valid(lm.browser) and lm.browser.lan_mode and lm.browser.has_layout() and lm.browser.visible,
+		"LAN-Menü im Original-Look (Serverbrowser T2320)")
+	check(await click(visible_button("BackButton")), "„%s“ angeklickt" % SAS.text(2313, "ZURÜCK"))
 	await frames(5)
 	check(menu.lan_menu == null and menu.stage.visible, "Zurück im Hauptmenü")
 	await click(visible_button("bmultiplayerlan"))
@@ -63,7 +66,7 @@ func _run() -> void:
 	check(not lm._mode.is_item_disabled(1) and lm._mode.is_item_disabled(2), "Arena-Karte: Deathmatch/Team-Deathmatch wählbar")
 	lm._mode.select(1)
 	# --- SERVER ERSTELLEN (Original-Bildschirm create server.4ds), Name/Passwort per Tastatur ---
-	check(await click(visible_button("CreateServerButton")), "„%s“ angeklickt" % SAS.text(2311, "SERVER ERSTELLEN"))
+	check(await click(visible_button("CreateButton")), "„%s“ angeklickt" % SAS.text(2311, "SERVER ERSTELLEN"))
 	await frames(3)
 	var cs: CreateServerScreen = lm.create_screen
 	check(cs != null and cs.is_visible_in_tree(), "Bildschirm SERVER ERSTELLEN offen")

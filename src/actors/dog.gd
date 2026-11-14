@@ -112,6 +112,7 @@ func _ready() -> void:
 	_agent = NavigationAgent3D.new()
 	_agent.path_desired_distance = 0.8
 	_agent.target_desired_distance = 1.0
+	_agent.path_search_max_polygons = AIBrain.path_max_polys()   # B-010c
 	add_child(_agent)
 	Events.noise_emitted.connect(_on_noise)
 	Events.alarm_raised.connect(_on_global_alarm)

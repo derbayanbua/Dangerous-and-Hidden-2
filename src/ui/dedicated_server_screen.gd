@@ -29,6 +29,8 @@ const RULE_LABELS := {
 	"support_bots": "KI NUTZT FUNK", "coop_difficulty": "SCHWIERIGKEIT (1–4)", "coop_lives": "LEBEN (-1 = ∞)",
 	"allow_crosshair": "FADENKREUZ ZULASSEN", "spawn_on_start": "SPAWN BEIM START", "team_lives": "TEAM-LEBEN",
 	"precise_aim": "PRÄZISES ZIELEN",
+	"day_start_h": "TAGESZEIT START [h]", "day_cycle_min": "TAGESZYKLUS [min] (0 = fest)",
+	"day_night": "TAG/NACHT (ALLE KARTEN)", "dn_start_h": "T/N START [h] (-1 = Karte)", "dn_cycle_min": "T/N ZYKLUS [min]",
 }
 ## Reiter wie die Original-Dialoge; nicht genannte Regeln landen unter ERGÄNZUNGEN
 const TAB_RULES := {
@@ -82,8 +84,8 @@ func _ready() -> void:
 func config_dir() -> String:
 	if configs_dir != "":
 		return configs_dir
-	if OS.has_feature("editor"):
-		return ProjectSettings.globalize_path("user://" + CONFIG_DIR)
+	if OS.has_feature("editor") or Game.cli.has("autoplay"):
+		return ProjectSettings.globalize_path(Game.user_file(CONFIG_DIR))   # 0.11.5: Tests → Testordner
 	return OS.get_executable_path().get_base_dir().path_join(CONFIG_DIR)
 
 

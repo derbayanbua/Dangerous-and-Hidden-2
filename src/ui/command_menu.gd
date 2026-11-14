@@ -842,6 +842,7 @@ func speak(s: Soldier, event: int, fallback_text: String) -> float:
 				s.add_child(p)
 				p.finished.connect(p.queue_free)
 				p.play()
+				LipSync.start(s, path, p)   # B-052 Gesichtsanimation
 	if line != "":
 		Events.say("%s: \"%s\"" % [s.soldier_name, line.trim_suffix(" (s)")], 2.5)
 	return dur

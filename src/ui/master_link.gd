@@ -14,7 +14,26 @@ const UNREACHABLE := "Masterserver nicht erreichbar – Favoriten und Direktverb
 static var force_mock := false               ## Tests: Ersatz statt echtem Master
 static var mock_servers: Array = []
 static var mock_offline := true
+static var mock_leaderboard: Array = []      ## Tests: Ranglisten-Einträge (Feldnamen wie GET /v1/leaderboard)
+static var mock_gh := ""                     ## Tests: guid_hash des „angemeldeten“ Kontos
 var connected := false
+var account := {}
+
+signal leaderboard_received(page: Dictionary)
+
+
+## Ersatz für Master.fetch_leaderboard (gleiches Ergebnisformat) / stand-in with the same result format
+func fetch_leaderboard(offset := 0, limit := 20) -> Dictionary:
+	await get_tree().process_frame
+	var out := {"ok": not mock_offline, "code": "" if not mock_offline else "NET_OFFLINE", "text": "",
+		"generated_at": int(Time.get_unix_time_from_system()), "total": mock_leaderboard.size(), "offset": offset,
+		"limit": limit, "entries": mock_leaderboard.slice(offset, offset + limit) if not mock_offline else []}
+	leaderboard_received.emit(out)
+	return out
+
+
+func own_guid_hash() -> String:
+	return mock_gh
 
 
 static func source(tree: SceneTree) -> Node:

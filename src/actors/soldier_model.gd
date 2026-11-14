@@ -157,6 +157,132 @@ func set_weapon_visible(v: bool) -> void:
 		_prop.visible = v
 
 
+## --- 0.11.5 Eigener Körper in der 1. Person ([D], Option Settings.fpv_body) ---------------------------------
+## FPV_BODY_OFF: normale Darstellung. FPV_BODY_LEGS: alle Meshes der Figur nur Schatten (SHADOWS_ONLY), dazu je
+## geskinntem Figur-Mesh eine sichtbare Kopie nur mit dem Unterkörper (Dreiecke, deren Ecken in der Bindepose unter
+## FPV_LEG_CUT der Mesh-Höhe liegen – Kopf, Rumpf und Arme der T-Pose fallen weg, nichts ragt in die Kamera).
+## FPV_BODY_SHADOW: nur Schatten (Zielfernrohr/Fernglas/Option aus mit Schatten). Waffe/Requisit regelt
+## set_weapon_visible. / Own body in first person: shadow-only body plus a legs-only visible copy.
+enum { FPV_BODY_OFF, FPV_BODY_LEGS, FPV_BODY_SHADOW }
+const FPV_LEG_CUT := 0.5            ## Anteil der Bindepose-Höhe (Hüfte ≈ 0,52) [D]
+var fpv_body_mode := FPV_BODY_OFF
+var _fpv_shadow := {}               ## GeometryInstance3D -> ursprüngliche cast_shadow
+var _fpv_legs: Array[MeshInstance3D] = []
+static var _legs_cache := {}        ## Mesh-RID -> ArrayMesh (Unterkörper)
+
+
+func set_fpv_body(mode: int) -> void:
+	if mode == fpv_body_mode and (mode == FPV_BODY_OFF or _fpv_valid()):
+		return
+	_fpv_restore()
+	fpv_body_mode = mode
+	if mode == FPV_BODY_OFF:
+		return
+	for gi in find_children("*", "GeometryInstance3D", true, false):
+		var g := gi as GeometryInstance3D
+		if g.has_meta("fpv_legs"):
+			continue
+		_fpv_shadow[g] = g.cast_shadow
+		g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+	if mode != FPV_BODY_LEGS or not is_instance_valid(orig_figure):
+		return
+	for n in orig_figure.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi.skin == null or mi.mesh == null or not mi.visible or not _fpv_shadow.has(mi):
+			continue
+		var legs := _legs_mesh(mi)
+		if legs == null:
+			continue
+		var c := MeshInstance3D.new()
+		c.name = String(mi.name) + "_fpvlegs"
+		c.set_meta("fpv_legs", true)
+		c.mesh = legs
+		c.skin = mi.skin
+		c.layers = mi.layers
+		c.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		c.transform = mi.transform
+		mi.get_parent().add_child(c)
+		c.skeleton = c.get_path_to(mi.get_node(mi.skeleton)) if mi.has_node(mi.skeleton) else NodePath()
+		for i in legs.get_surface_count():
+			var src := int(legs.get_meta("src_surfaces", [])[i]) if legs.has_meta("src_surfaces") else i
+			var m := mi.get_active_material(src)
+			if m:
+				c.set_surface_override_material(i, m)
+		_fpv_legs.append(c)
+
+
+## Neue Teile (Helm, Rückenwaffe) während der 1. Person: Darstellung neu anwenden (sonst ragt der Helm ins Bild).
+func _fpv_touch() -> void:
+	if fpv_body_mode == FPV_BODY_OFF:
+		return
+	var m := fpv_body_mode
+	_fpv_restore()
+	fpv_body_mode = FPV_BODY_OFF
+	set_fpv_body(m)
+
+
+## Sichtbare Unterkörper-Kopien (Tests).
+func fpv_leg_meshes() -> Array[MeshInstance3D]:
+	return _fpv_legs.filter(func(m): return is_instance_valid(m))
+
+
+func _fpv_valid() -> bool:
+	for g in _fpv_shadow:
+		if not is_instance_valid(g):
+			return false
+	return true
+
+
+func _fpv_restore() -> void:
+	for g in _fpv_shadow:
+		if is_instance_valid(g):
+			(g as GeometryInstance3D).cast_shadow = _fpv_shadow[g]
+	_fpv_shadow.clear()
+	for c in _fpv_legs:
+		if is_instance_valid(c):
+			c.queue_free()
+	_fpv_legs.clear()
+
+
+static func _legs_mesh(mi: MeshInstance3D) -> ArrayMesh:
+	var src := mi.mesh
+	var key := src.get_rid()
+	if _legs_cache.has(key):
+		return _legs_cache[key]
+	var ab := src.get_aabb()
+	var cut := ab.position.y + ab.size.y * FPV_LEG_CUT
+	var out := ArrayMesh.new()
+	var map: Array = []
+	for s in src.get_surface_count():
+		if src.surface_get_primitive_type(s) != Mesh.PRIMITIVE_TRIANGLES:
+			continue
+		var arr := src.surface_get_arrays(s)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX] if arr[Mesh.ARRAY_INDEX] != null else PackedInt32Array()
+		if idx.is_empty():
+			idx.resize(verts.size())
+			for i in verts.size():
+				idx[i] = i
+		var keep := PackedInt32Array()
+		for t in range(0, idx.size() - 2, 3):
+			if verts[idx[t]].y < cut and verts[idx[t + 1]].y < cut and verts[idx[t + 2]].y < cut:
+				keep.append(idx[t])
+				keep.append(idx[t + 1])
+				keep.append(idx[t + 2])
+		if keep.is_empty():
+			continue
+		arr[Mesh.ARRAY_INDEX] = keep
+		var flags: int = src.surface_get_format(s) & Mesh.ARRAY_FLAG_USE_8_BONE_WEIGHTS
+		out.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr, [], {}, flags)
+		out.surface_set_material(out.get_surface_count() - 1, src.surface_get_material(s))
+		map.append(s)
+	var res: ArrayMesh = out if out.get_surface_count() > 0 else null
+	if res:
+		res.set_meta("src_surfaces", map)
+	_legs_cache[key] = res
+	return res
+
+
 ## Mündung der gehaltenen Waffe (Original: Dummy flash/blsdum), sonst Schätzung über den Sockel.
 func muzzle_point(dir: Vector3, length: float) -> Vector3:
 	if is_instance_valid(_muzzle) and _muzzle.is_inside_tree():
@@ -493,6 +619,7 @@ func refresh_helmet() -> void:
 	_helmet_mount.add_child(vis)
 	vis.transform = Helmet.mount_transform(vis)
 	_helmet_vis = vis
+	_fpv_touch()
 	var bb := Helmet.bounds(vis)
 	if bb.size.length() > 0.01:
 		# Original: Strahltest gegen das Helmmodell (Schale + Rand). Kiste = obere Teil der Hüllkiste ab
@@ -573,6 +700,7 @@ func refresh_back_weapon() -> void:
 		(mi as MeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	_back_mount.add_child(n)
 	_back_vis = n
+	_fpv_touch()
 
 
 ## RID der eigenen Helmfläche (Ausschluss im Strahltest des Schützen, B-018)

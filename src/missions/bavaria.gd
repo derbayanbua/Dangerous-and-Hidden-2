@@ -15,6 +15,8 @@ const PrankMines := preload("res://src/maps/bavaria/prank_mines.gd")
 const RoomLighting := preload("res://src/maps/bavaria/room_lighting.gd")
 const FieldTrenches := preload("res://src/maps/bavaria/field_trenches.gd")
 const SceneMatch := preload("res://src/maps/bavaria/scene_match.gd")
+const StreetLamps := preload("res://src/maps/bavaria/street_lamps.gd")
+const DayNight := preload("res://src/maps/bavaria/day_night.gd")
 const REF_ORIGIN := Vector2(650, 720)
 const X_AXIS := Vector2(0.576, 0.817)
 const Z_AXIS := Vector2(-0.817, 0.576)
@@ -36,6 +38,10 @@ var interior_decoration: RefCounted
 var frontline := false
 var prank_mines: Node3D
 var room_lighting: Node3D
+var street_lamps: RefCounted          ## Wegbeleuchtung (street_lamps.gd)
+# Tageszyklus: geerbtes Mission.day_night = src/maps/bavaria/day_night.gd (Knoten „Tageszeit“; der allgemeine
+# src/world/day_night.gd gilt nur für seine eigene Kartenliste und bleibt hier null)
+var og_glass_material: Material       ## warmer Schein der geschlossenen OG-Fenster (Tageszyklus)
 # Net._zones verwendet denselben find_frame-Vertrag wie bei Originalkarten.
 # Hier gibt es keine Original-Skript-VM; nur registrierte Flaggenknoten werden aufgelöst.
 class ZoneFrames:
@@ -110,6 +116,9 @@ func _build_world() -> void:
 	_build_details()
 	SceneMatch.clear_sightlines(self)
 	_build_border()
+	street_lamps = StreetLamps.new()
+	street_lamps.build(self)
+	og_glass_material = _templates._og_glass
 	room_lighting = RoomLighting.new()
 	room_lighting.name = "Hausbeleuchtung"
 	room_lighting.mission = self
@@ -118,6 +127,12 @@ func _build_world() -> void:
 	prank_mines.name = "Rauchminen"
 	prank_mines.mission = self
 	add_child(prank_mines)
+	day_night = DayNight.new()
+	day_night.name = "Tageszeit"     # feste Knotenlage: RPC-Abgleich der Zeit zwischen Server und Clients
+	day_night.mission = self
+	add_child(day_night)
+	if env:
+		day_night.bind(env, sun)
 	asset_report = {"textures": _templates.reused_textures, "models": _templates.reused_models,
 		"missing": _templates.missing.duplicate(), "trees":get_tree().get_nodes_in_group("bavaria_trees").size(),
 		"decorations":get_tree().get_nodes_in_group("bavaria_decorations").size()}
@@ -582,7 +597,8 @@ func _configure_environment(e: Environment, light: DirectionalLight3D) -> void:
 	e.volumetric_fog_density = 0.0003
 	e.volumetric_fog_albedo = Color(0.43, 0.46, 0.60)
 	e.fog_aerial_perspective = 0.1
-	# Feste Abenddämmerung: Sonne knapp unter dem westlichen Horizont.
+	# Grundstimmung Abenddämmerung (Sonne knapp unter dem westlichen Horizont); Sonne/Mond, Himmel, Umgebungslicht
+	# und Nebel führt danach der Tageszyklus (src/maps/bavaria/day_night.gd, Startzeit/Zyklus = Server-Regeln).
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	e.ambient_light_color = Color(0.48, 0.56, 0.76)
 	e.ambient_light_energy = 0.34
@@ -615,7 +631,23 @@ func bot_hints(center: Vector3, radius: float) -> Array:
 func bot_hint_stance(pos: Vector3) -> int:
 	return _bot_hint_data().stance_at(pos)
 
+## Sichtweite nur auf dieser Karte: Kamera-far ≤ VIEW_FAR (beide Sichtweiten-Modi, auch NEU = 6 km). Spielfläche ≈ 116 m,
+## Randwald ≤ 40 m dahinter; Fernkulisse/Himmel sind Sky-Shader und hängen nicht von far ab.
+const VIEW_FAR := 800.0
+
+func _clamp_view_far() -> void:
+	var cur: Dictionary = ViewDistanceScript.current
+	if float(cur.get("far", ViewDistanceScript.DEFAULT_FAR)) > VIEW_FAR:
+		cur["far"] = VIEW_FAR
+	view_stats["far"] = ViewDistanceScript.camera_far()
+	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+	if cam and not cam.has_meta("b041_keep_far") and cam.far > VIEW_FAR:
+		cam.far = VIEW_FAR
+
 func _spawn_actors() -> void:
+	_clamp_view_far()
+	if not Settings.changed.is_connected(_clamp_view_far):
+		Settings.changed.connect(_clamp_view_far)   # nach Mission._on_view_settings (früher verbunden) → setzt far erneut
 	if Net.is_online:
 		# Net erzeugt Bots sofort nach mission_ready. Auf dieser Karte erst nach dem
 		# ersten Navmesh-Abgleich bewegen lassen (verhindert verfrühte Kartenabfragen).

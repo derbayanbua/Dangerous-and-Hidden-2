@@ -29,6 +29,10 @@ func _ready() -> void:
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	v.add_child(row)
 	UIKit.button("Übernehmen und schließen", _close, row)
+	# Zurück-Feld mit Originaltext (Text 2567 wie game_info_screen); Esc wirkt ebenso.
+	# Back field with original text (text 2567 as in game_info_screen); Esc does the same.
+	var back := UIKit.button(SAS.text(2567, "ZURÜCK"), _close, row)
+	back.name = "OptionsBack"
 
 
 func _grid(tab_name: String) -> GridContainer:
@@ -103,6 +107,12 @@ func _keys_tab() -> Control:
 		b.custom_minimum_size = Vector2(200, 32)
 		b.text = InputSetup.binding_text(action)
 		b.pressed.connect(_start_rebind.bind(action, b))
+		# Rechtsklick löscht die Taste. / Right-click clears the key.
+		b.gui_input.connect(func(e: InputEvent):
+			if _rebind_action == "" and e is InputEventMouseButton and e.pressed \
+					and (e as InputEventMouseButton).button_index == MOUSE_BUTTON_RIGHT:
+				InputSetup.unbind(action)
+				b.text = InputSetup.binding_text(action))
 		g.add_child(b)
 		_key_buttons[action] = b
 	UIKit.button("Standardbelegung", func():
@@ -146,6 +156,10 @@ func _start_rebind(action: String, b: Button) -> void:
 
 func _input(event: InputEvent) -> void:
 	if _rebind_action == "":
+		# Esc ohne laufende Belegung = ZURÜCK. / Esc without capture = BACK.
+		if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+			_close()
 		return
 	var ok: bool = (event is InputEventKey and event.pressed) or (event is InputEventMouseButton and event.pressed)
 	if not ok:
@@ -154,9 +168,17 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.physical_keycode == KEY_ESCAPE and _rebind_action != "pause":
 		_rebind_button.text = InputSetup.binding_text(_rebind_action)
 	else:
-		InputSetup.rebind(_rebind_action, event)
-		_rebind_button.text = InputSetup.binding_text(_rebind_action)
+		# Doppelbelegung tauschen und alle Knöpfe auffrischen. / Swap duplicates and refresh all buttons.
+		for other: String in InputSetup.rebind(_rebind_action, event):
+			Events.say(tr("Doppelbelegung: %s ↔ %s getauscht") % [InputSetup.display_name(_rebind_action),
+				InputSetup.display_name(other)], 3.0)
 	_rebind_action = ""
+	_refresh_keys()
+
+
+func _refresh_keys() -> void:
+	for a: String in _key_buttons:
+		_key_buttons[a].text = InputSetup.binding_text(a)
 
 
 func _close() -> void:

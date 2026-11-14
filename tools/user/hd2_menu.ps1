@@ -2,10 +2,13 @@
 # Erzeugt aus der EIGENEN Installation von Hidden & Dangerous 2 die Spieldaten (orig_cache), konvertiert die Filme
 # und skaliert Texturen hoch. Die Original-Installation wird nur gelesen. Alles Benötigte landet im Ordner
 # 'werkzeuge\' neben dem Spiel; systemweite Installationen (winget) nur nach ausdrücklicher Rückfrage.
+# Tools for players: export game data from your OWN Hidden & Dangerous 2 installation (read-only), convert movies,
+# upscale textures. Language: -Sprache de|en (alias -Language), otherwise saved setting, otherwise Windows UI language.
 #
 # Interaktiv:        Doppelklick auf HD2-Werkzeuge.cmd
 # Nicht-interaktiv:  powershell -ExecutionPolicy Bypass -File tools\user\hd2_menu.ps1 -Aktion <Aktion> [Optionen]
 #   Aktionen: Suchen, Pruefen, Einrichten, Export, Filme, Hochskalieren, Installieren, Wiederherstellen, Status, Starten
+#   -Sprache de|en        Sprache der Ausgaben (wird gespeichert)
 #   -Orig <Ordner>        Original-Installation (sonst gespeicherte Einstellung bzw. automatische Suche)
 #   -Ziel <Ordner>        Ausgabe orig_cache (Standard: orig_cache neben dem Spiel)
 #   -Werkzeuge <Ordner>   Werkzeugordner (Standard: werkzeuge\ neben dem Spiel)
@@ -21,13 +24,15 @@
 #   -Threads <n>          Hochskalieren: CPU-Threads begrenzen
 #   -Ja                   alle Rückfragen mit Ja beantworten (Downloads/Installationen!)
 param(
+  [Alias("Action")]
   [ValidateSet("", "Menue", "Suchen", "Pruefen", "Einrichten", "Export", "Filme", "Hochskalieren", "Installieren",
                "Wiederherstellen", "Status", "Starten")]
   [string]$Aktion = "",
-  [string]$Orig = "", [string]$Ziel = "", [string]$Werkzeuge = "", [string]$Python = "",
-  [string[]]$Missionen = @(), [string[]]$Schritte = @(), [switch]$Neu,
-  [ValidateSet("hd", "4k")][string]$Stufe = "hd", [ValidateSet("cpu", "cuda")][string]$Geraet = "cpu",
-  [string]$Ordner = "", [int]$Threads = 0, [switch]$Ja, [switch]$Probelauf
+  [Alias("Source")][string]$Orig = "", [Alias("Target")][string]$Ziel = "", [Alias("Tools")][string]$Werkzeuge = "", [string]$Python = "",
+  [Alias("Missions")][string[]]$Missionen = @(), [Alias("Steps")][string[]]$Schritte = @(), [Alias("Redo")][switch]$Neu,
+  [Alias("Level")][ValidateSet("hd", "4k")][string]$Stufe = "hd", [Alias("Device")][ValidateSet("cpu", "cuda")][string]$Geraet = "cpu",
+  [Alias("Folder")][string]$Ordner = "", [int]$Threads = 0, [Alias("Yes")][switch]$Ja, [Alias("DryRun")][switch]$Probelauf,
+  [Alias("Language")][ValidateSet("", "de", "en")][string]$Sprache = ""
 )
 # "Continue": Meldungen externer Programme auf stderr (pip, torch, ffmpeg) sollen PS 5.1 nicht abbrechen;
 # Fehler werden über Exitcodes bzw. -ErrorAction Stop an den kritischen Stellen erkannt.
@@ -36,7 +41,11 @@ $ErrorActionPreference = "Continue"
 $Missionen = @($Missionen | ForEach-Object { $_ -split '[,; ]+' } | Where-Object { $_ })
 $Schritte = @($Schritte | ForEach-Object { $_ -split '[,; ]+' } | Where-Object { $_ })
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
-try { $Host.UI.RawUI.WindowTitle = "Dangerous and Hidden 2 – Werkzeuge" } catch { }
+
+# --- Sprache: Parameter > gespeicherte Einstellung > Windows-Oberflächensprache ------------------------------------
+$script:Lang = "en"
+try { if ((Get-UICulture).TwoLetterISOLanguageName -eq "de") { $script:Lang = "de" } } catch { }
+function L([string]$de, [string]$en) { if ($script:Lang -eq "de") { $de } else { $en } }
 
 # --- Pfade ---------------------------------------------------------------------------------------------------------
 $Root = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent          # Spiel- bzw. Projektordner
@@ -70,22 +79,23 @@ $PY_MODS = "numpy, PIL, pefile, capstone"   # capstone: fmt_fonts.py (B-024/O-00
 # --- Ausgabe-Helfer -----------------------------------------------------------------------------------------------
 function Say([string]$t, [string]$c = "Gray") { Write-Host $t -ForegroundColor $c }
 function Ok([string]$t) { Say "  [OK]     $t" Green }
-function Warn([string]$t) { Say "  [HINWEIS] $t" Yellow }
-function Err([string]$t) { Say "  [FEHLER] $t" Red }
+function Warn([string]$t) { Say (L "  [HINWEIS] $t" "  [NOTE]   $t") Yellow }
+function Err([string]$t) { Say (L "  [FEHLER] $t" "  [ERROR]  $t") Red }
 function Title([string]$t) { Say ""; Say "== $t ==" Cyan }
 function Log([string]$t) {
   New-Item -ItemType Directory -Force $LogDir | Out-Null
   "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')  $t" | Out-File -Append -Encoding utf8 (Join-Path $LogDir "werkzeuge.log")
 }
 function Ask([string]$frage, [bool]$standard = $false) {
-  if ($Ja) { Say "  $frage -> Ja (-Ja)"; return $true }
-  if (-not $Interaktiv) { Say "  $frage -> Nein (nicht-interaktiv, -Ja zum Bestätigen)"; return $false }
-  $s = if ($standard) { "[J/n]" } else { "[j/N]" }
+  if ($Ja) { Say (L "  $frage -> Ja (-Ja)" "  $frage -> Yes (-Ja)"); return $true }
+  if (-not $Interaktiv) { Say (L "  $frage -> Nein (nicht-interaktiv, -Ja zum Bestätigen)" "  $frage -> No (non-interactive, use -Ja to confirm)"); return $false }
+  $s = if ($standard) { L "[J/n]" "[Y/n]" } else { L "[j/N]" "[y/N]" }
   $a = Read-Host "  $frage $s"
   if (-not $a) { return $standard }
-  return $a.Trim().ToLower().StartsWith("j") -or $a.Trim().ToLower().StartsWith("y")
+  $a = $a.Trim().ToLower()
+  return $a.StartsWith("j") -or $a.StartsWith("y")
 }
-function Pause-Menu { if ($Interaktiv) { [void](Read-Host "`n  Weiter mit Eingabetaste") } }
+function Pause-Menu { if ($Interaktiv) { [void](Read-Host (L "`n  Weiter mit Eingabetaste" "`n  Press Enter to continue")) } }
 function Fmt-Size([double]$b) {
   if ($b -ge 1GB) { "{0:N1} GB" -f ($b / 1GB) } elseif ($b -ge 1MB) { "{0:N0} MB" -f ($b / 1MB) } else { "{0:N0} KB" -f ($b / 1KB) }
 }
@@ -97,26 +107,32 @@ function Dir-Stats([string]$p, [string]$filter = "*") {
 
 # --- Einstellungen ------------------------------------------------------------------------------------------------
 function Load-Config {
-  $c = @{ Orig = ""; Ziel = ""; Python = "" }
+  $c = @{ Orig = ""; Ziel = ""; Python = ""; Sprache = "" }
   if (Test-Path $ConfigFile) {
     try {
       $j = Get-Content $ConfigFile -Raw -Encoding UTF8 | ConvertFrom-Json
-      foreach ($k in @("Orig", "Ziel", "Python")) { if ($j.$k) { $c[$k] = [string]$j.$k } }
-    } catch { Warn "Einstellungen nicht lesbar ($ConfigFile) – werden neu angelegt." }
+      foreach ($k in @("Orig", "Ziel", "Python", "Sprache")) { if ($j.$k) { $c[$k] = [string]$j.$k } }
+    } catch { Warn (L "Einstellungen nicht lesbar ($ConfigFile) – werden neu angelegt." "Settings not readable ($ConfigFile) – will be recreated.") }
   }
   return $c
 }
 function Save-Config {
   New-Item -ItemType Directory -Force $Werkzeuge | Out-Null
   $o = @{ Orig = $Cfg.Orig; Python = $Cfg.Python }
+  if ($Cfg.Sprache) { $o.Sprache = $Cfg.Sprache }
   if ($Cfg.Ziel -ne (Join-Path $Root "orig_cache")) { $o.Ziel = $Cfg.Ziel }   # Standardziel nicht festschreiben (Ordner verschiebbar)
   ($o | ConvertTo-Json) | Set-Content -Encoding UTF8 $ConfigFile
 }
 $Cfg = Load-Config
+if ($Cfg.Sprache -in @("de", "en")) { $script:Lang = $Cfg.Sprache }
+if ($Sprache) { $script:Lang = $Sprache; if ($Cfg.Sprache -ne $Sprache) { $Cfg.Sprache = $Sprache; $script:SaveLang = $true } }
 if ($Orig) { $Cfg.Orig = $Orig }
 if ($Ziel) { $Cfg.Ziel = $Ziel }
 if ($Python) { $Cfg.Python = $Python }
 if (-not $Cfg.Ziel) { $Cfg.Ziel = Join-Path $Root "orig_cache" }
+# Explizit gewählte Sprache nur im Menü speichern (nicht-interaktive Aktionen wie Status verändern nichts)
+if ($script:SaveLang -and $Interaktiv) { try { Save-Config } catch { } }
+try { $Host.UI.RawUI.WindowTitle = (L "Dangerous and Hidden 2 – Werkzeuge" "Dangerous and Hidden 2 – Tools") } catch { }
 
 # ==================================================================================================================
 # 1) Original-Installation suchen / prüfen
@@ -156,14 +172,14 @@ function Find-Installations {
   foreach ($d in (Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Free -ne $null }).Root) {
     foreach ($sub in @("Program Files (x86)\Illusion Softworks\Hidden & Dangerous 2", "Program Files\Illusion Softworks\Hidden & Dangerous 2",
                        "Program Files (x86)\Take2\Hidden & Dangerous 2", "Spiele\Hidden & Dangerous 2", "Games\Hidden & Dangerous 2")) {
-      Add-Cand (Join-Path $d $sub) "Standardpfad"
+      Add-Cand (Join-Path $d $sub) (L "Standardpfad" "default path")
     }
     foreach ($gog in @("GOG Games", "Program Files (x86)\GOG Galaxy\Games")) {
       Get-ChildItem (Join-Path $d $gog) -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match "Hidden.*Dangerous.*2" } |
-        ForEach-Object { Add-Cand $_.FullName "GOG-Ordner" }
+        ForEach-Object { Add-Cand $_.FullName (L "GOG-Ordner" "GOG folder") }
     }
   }
-  Add-Cand (Join-Path (Split-Path $Root -Parent) "HD2_orig") "Arbeitsordner"
+  Add-Cand (Join-Path (Split-Path $Root -Parent) "HD2_orig") (L "Arbeitsordner" "work folder")
   return $found
 }
 
@@ -182,58 +198,62 @@ function Get-Edition([string]$p) {
 
 function Test-Installation([string]$p, [switch]$Quiet) {
   $res = [pscustomobject]@{ Ok = $false; Fehlt = @(); Warnungen = @(); Version = "" }
-  if (-not $p -or -not (Test-Path $p)) { $res.Fehlt = @("Ordner"); if (-not $Quiet) { Err "Ordner nicht gefunden: $p" }; return $res }
+  if (-not $p -or -not (Test-Path $p)) { $res.Fehlt = @((L "Ordner" "folder")); if (-not $Quiet) { Err (L "Ordner nicht gefunden: $p" "Folder not found: $p") }; return $res }
   foreach ($f in $REQUIRED) { if (-not (Test-Path (Join-Path $p $f))) { $res.Fehlt += $f } }
-  foreach ($f in $OPTIONAL) { if (-not (Test-Path (Join-Path $p $f))) { $res.Warnungen += "optional fehlt: $f" } }
+  foreach ($f in $OPTIONAL) { if (-not (Test-Path (Join-Path $p $f))) { $res.Warnungen += (L "optional fehlt: $f" "optional, missing: $f") } }
   $exe = Join-Path $p "hd2.exe"
   if (Test-Path $exe) {
     $len = (Get-Item $exe).Length
-    if ($len -eq $DEV_EXE_SIZE) { $res.Version = "Original-CD-Version mit Patch (wie Entwicklungsstand)" }
-    else { $res.Version = "abweichende hd2.exe ($len Byte)"; $res.Warnungen += "Andere hd2.exe als beim Entwickeln (z. B. Steam/GOG oder anderer Patch) – einzelne Daten können abweichen." }
+    if ($len -eq $DEV_EXE_SIZE) { $res.Version = L "Original-CD-Version mit Patch (wie Entwicklungsstand)" "original CD version with patch (as used for development)" }
+    else {
+      $res.Version = L "abweichende hd2.exe ($len Byte)" "different hd2.exe ($len bytes)"
+      $res.Warnungen += (L "Andere hd2.exe als beim Entwickeln (z. B. Steam/GOG oder anderer Patch) – einzelne Daten können abweichen." "Different hd2.exe than used for development (e.g. Steam/GOG or another patch) – some data may differ.")
+    }
   }
   # B-024/O-004: Courage Under Fire / Sabre Squadron am Inhalt erkennen (zusätzliche Missionsordner in den
   # Archiven, hd2_edition.py), nicht am Pfad – Steam/GOG-Installationen des Grundspiels bekommen keine Warnung.
   $ed = Get-Edition $p
   if ($ed -and $ed.edition -eq "cuf") {
-    $res.Warnungen += "Erweiterung erkannt ('Courage Under Fire' / 'Sabre Squadron', zusätzliche Missionen: $(@($ed.extra_missions) -join ', ')). Entwickelt wurde mit dem Grundspiel – der Export übernimmt dessen Missionen, Abweichungen sind möglich."
+    $x = @($ed.extra_missions) -join ', '
+    $res.Warnungen += (L "Erweiterung erkannt ('Courage Under Fire' / 'Sabre Squadron', zusätzliche Missionen: $x). Entwickelt wurde mit dem Grundspiel – der Export übernimmt dessen Missionen, Abweichungen sind möglich." "Expansion detected ('Courage Under Fire' / 'Sabre Squadron', additional missions: $x). Development used the base game – the export takes its missions, differences are possible.")
   }
-  if (-not (Test-Path (Join-Path $p "patch.dta"))) { $res.Warnungen += "patch.dta fehlt – ohne offiziellen Patch fehlen Mehrspielerkarten/neuere Daten." }
+  if (-not (Test-Path (Join-Path $p "patch.dta"))) { $res.Warnungen += (L "patch.dta fehlt – ohne offiziellen Patch fehlen Mehrspielerkarten/neuere Daten." "patch.dta missing – without the official patch multiplayer maps/newer data are missing.") }
   $res.Ok = $res.Fehlt.Count -eq 0
   if (-not $Quiet) {
-    Say "  Ordner:  $p"
+    Say (L "  Ordner:  $p" "  Folder:  $p")
     if ($res.Version) { Say "  Version: $($res.Version)" }
-    if ($res.Ok) { Ok "Alle benötigten Dateien vorhanden." } else { Err "Es fehlen: $($res.Fehlt -join ', ')" }
+    if ($res.Ok) { Ok (L "Alle benötigten Dateien vorhanden." "All required files present.") } else { Err (L "Es fehlen: $($res.Fehlt -join ', ')" "Missing: $($res.Fehlt -join ', ')") }
     foreach ($w in $res.Warnungen) { Warn $w }
   }
   return $res
 }
 
 function Action-Suchen {
-  Title "Original-Installation suchen"
-  Say "  Suche in Registry, GOG, Steam und üblichen Ordnern …"
+  Title (L "Original-Installation suchen" "Find original installation")
+  Say (L "  Suche in Registry, GOG, Steam und üblichen Ordnern …" "  Searching registry, GOG, Steam and common folders …")
   $list = @(Find-Installations)
   if ($Orig) { $list = @([pscustomobject]@{ Pfad = $Orig; Quelle = "Parameter" }) + $list }
   for ($i = 0; $i -lt $list.Count; $i++) { Say ("  {0}) {1}   ({2})" -f ($i + 1), $list[$i].Pfad, $list[$i].Quelle) }
-  if ($list.Count -eq 0) { Warn "Keine Installation automatisch gefunden." }
+  if ($list.Count -eq 0) { Warn (L "Keine Installation automatisch gefunden." "No installation found automatically.") }
   $wahl = $null
   if ($Interaktiv) {
-    $a = Read-Host "  Nummer wählen oder Pfad eingeben (Ordner mit hd2.exe), leer = abbrechen"
+    $a = Read-Host (L "  Nummer wählen oder Pfad eingeben (Ordner mit hd2.exe), leer = abbrechen" "  Choose a number or enter a path (folder containing hd2.exe), empty = cancel")
     if (-not $a) { return }
     if ($a -match '^\d+$' -and [int]$a -ge 1 -and [int]$a -le $list.Count) { $wahl = $list[[int]$a - 1].Pfad } else { $wahl = $a.Trim('"', ' ') }
   } elseif ($list.Count -gt 0) { $wahl = $list[0].Pfad }
-  if (-not $wahl) { Err "Keine Installation angegeben (-Orig <Ordner>)."; return }
+  if (-not $wahl) { Err (L "Keine Installation angegeben (-Orig <Ordner>)." "No installation given (-Orig <folder>)."); return }
   $r = Test-Installation $wahl
-  if ($r.Ok) { $Cfg.Orig = $wahl; Save-Config; Ok "Gespeichert als Original-Installation." }
+  if ($r.Ok) { $Cfg.Orig = $wahl; Save-Config; Ok (L "Gespeichert als Original-Installation." "Saved as original installation.") }
 }
 
 function Require-Orig {
   if (-not $Cfg.Orig) {
     $c = @(Find-Installations)
-    if ($c.Count -gt 0) { $Cfg.Orig = $c[0].Pfad; Say "  Original-Installation gefunden: $($Cfg.Orig)" }
+    if ($c.Count -gt 0) { $Cfg.Orig = $c[0].Pfad; Say (L "  Original-Installation gefunden: $($Cfg.Orig)" "  Original installation found: $($Cfg.Orig)") }
   }
-  if (-not $Cfg.Orig) { Err "Keine Original-Installation gewählt – Menüpunkt 1 (oder -Orig <Ordner>)."; return $false }
+  if (-not $Cfg.Orig) { Err (L "Keine Original-Installation gewählt – Menüpunkt 1 (oder -Orig <Ordner>)." "No original installation selected – menu item 1 (or -Orig <folder>)."); return $false }
   $r = Test-Installation $Cfg.Orig -Quiet
-  if (-not $r.Ok) { Err "Installation unvollständig ($($Cfg.Orig)): es fehlen $($r.Fehlt -join ', ')"; return $false }
+  if (-not $r.Ok) { Err (L "Installation unvollständig ($($Cfg.Orig)): es fehlen $($r.Fehlt -join ', ')" "Installation incomplete ($($Cfg.Orig)): missing $($r.Fehlt -join ', ')"); return $false }
   return $true
 }
 
@@ -270,35 +290,36 @@ function Find-SystemPython {
 function Download([string]$url, [string]$dst) {
   [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
   $tmp = "$dst.part"
-  Say "  Lade $url …"
+  Say (L "  Lade $url …" "  Downloading $url …")
   $ProgressPreference = "SilentlyContinue"
   Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing -ErrorAction Stop
   Move-Item -Force $tmp $dst
 }
 function Install-Requirements([string]$py, [string]$file, [string[]]$extra = @()) {
-  Say "  Installiere Pakete aus $(Split-Path $file -Leaf) (nur in $Werkzeuge) …"
+  $n = Split-Path $file -Leaf
+  Say (L "  Installiere Pakete aus $n (nur in $Werkzeuge) …" "  Installing packages from $n (only into $Werkzeuge) …")
   & $py -m pip install --disable-pip-version-check --no-warn-script-location -r $file @extra
-  if ($LASTEXITCODE -ne 0) { throw "pip-Installation fehlgeschlagen ($file). Internetverbindung prüfen und erneut versuchen." }
+  if ($LASTEXITCODE -ne 0) { throw (L "pip-Installation fehlgeschlagen ($file). Internetverbindung prüfen und erneut versuchen." "pip installation failed ($file). Check the internet connection and try again.") }
 }
 function Setup-Python {
   $py = Get-Py
-  if ($py -and (Test-PyModules $py $PY_MODS)) { Ok "Python-Umgebung bereit: $py"; return $py }
+  if ($py -and (Test-PyModules $py $PY_MODS)) { Ok (L "Python-Umgebung bereit: $py" "Python environment ready: $py"); return $py }
   if (-not $py) {
-    Say "  Für den Export wird Python 3.10–3.13 benötigt. Es wird eine eigene Umgebung in $Werkzeuge angelegt."
+    Say (L "  Für den Export wird Python 3.10–3.13 benötigt. Es wird eine eigene Umgebung in $Werkzeuge angelegt." "  The export needs Python 3.10–3.13. A separate environment will be created in $Werkzeuge.")
     $sys = Find-SystemPython
     if ($sys) {
-      Say "  Gefunden: Python $($sys.V) ($($sys.Exe))."
-      if (Ask "Damit eine isolierte Umgebung (venv) in werkzeuge\pyenv anlegen?" $true) {
+      Say (L "  Gefunden: Python $($sys.V) ($($sys.Exe))." "  Found: Python $($sys.V) ($($sys.Exe)).")
+      if (Ask (L "Damit eine isolierte Umgebung (venv) in werkzeuge\pyenv anlegen?" "Create an isolated environment (venv) in werkzeuge\pyenv with it?") $true) {
         & $sys.Exe @($sys.Pre) -m venv (Join-Path $Werkzeuge "pyenv")
-        if ($LASTEXITCODE -ne 0) { throw "venv konnte nicht angelegt werden." }
+        if ($LASTEXITCODE -ne 0) { throw (L "venv konnte nicht angelegt werden." "venv could not be created.") }
         $py = Join-Path $Werkzeuge "pyenv\Scripts\python.exe"
       }
     }
     if (-not $py) {
-      Say "  Möglichkeiten:"
-      Say "    a) Python $PY_EMBED_VER (Embeddable, ca. 11 MB) von python.org nur nach werkzeuge\python laden – keine Systemänderung"
-      Say "    b) Python 3.13 per winget für den aktuellen Benutzer installieren (Systemänderung)"
-      $w = if ($Ja) { "a" } elseif ($Interaktiv) { Read-Host "  Auswahl a/b (leer = abbrechen)" } else { "" }
+      Say (L "  Möglichkeiten:" "  Options:")
+      Say (L "    a) Python $PY_EMBED_VER (Embeddable, ca. 11 MB) von python.org nur nach werkzeuge\python laden – keine Systemänderung" "    a) download Python $PY_EMBED_VER (embeddable, approx. 11 MB) from python.org into werkzeuge\python only – no system change")
+      Say (L "    b) Python 3.13 per winget für den aktuellen Benutzer installieren (Systemänderung)" "    b) install Python 3.13 via winget for the current user (system change)")
+      $w = if ($Ja) { "a" } elseif ($Interaktiv) { Read-Host (L "  Auswahl a/b (leer = abbrechen)" "  Choice a/b (empty = cancel)") } else { "" }
       if ($w -eq "a") {
         $dir = Join-Path $Werkzeuge "python"
         New-Item -ItemType Directory -Force $dir | Out-Null
@@ -309,24 +330,24 @@ function Setup-Python {
         (Get-Content $pth.FullName) -replace '^#\s*import site', 'import site' | Set-Content -Encoding ASCII $pth.FullName
         Download "https://bootstrap.pypa.io/get-pip.py" (Join-Path $Werkzeuge "get-pip.py")
         & (Join-Path $dir "python.exe") (Join-Path $Werkzeuge "get-pip.py") --no-warn-script-location
-        if ($LASTEXITCODE -ne 0) { throw "pip konnte nicht eingerichtet werden." }
+        if ($LASTEXITCODE -ne 0) { throw (L "pip konnte nicht eingerichtet werden." "pip could not be set up.") }
         $py = Join-Path $dir "python.exe"
       } elseif ($w -eq "b") {
-        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw "winget ist nicht verfügbar – bitte Variante a wählen." }
-        if (-not (Ask "Python 3.13 jetzt per winget installieren (Benutzerinstallation, ca. 30 MB)?")) { return $null }
+        if (-not (Get-Command winget -ErrorAction SilentlyContinue)) { throw (L "winget ist nicht verfügbar – bitte Variante a wählen." "winget is not available – please choose option a.") }
+        if (-not (Ask (L "Python 3.13 jetzt per winget installieren (Benutzerinstallation, ca. 30 MB)?" "Install Python 3.13 via winget now (user installation, approx. 30 MB)?"))) { return $null }
         winget install --id Python.Python.3.13 --scope user --accept-package-agreements --accept-source-agreements
         $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
         $sys = Find-SystemPython
-        if (-not $sys) { throw "Python nach der Installation nicht gefunden – Fenster neu öffnen und erneut versuchen." }
+        if (-not $sys) { throw (L "Python nach der Installation nicht gefunden – Fenster neu öffnen und erneut versuchen." "Python not found after installation – reopen the window and try again.") }
         & $sys.Exe @($sys.Pre) -m venv (Join-Path $Werkzeuge "pyenv")
         $py = Join-Path $Werkzeuge "pyenv\Scripts\python.exe"
-      } else { Warn "Abgebrochen – ohne Python ist kein Export möglich."; return $null }
+      } else { Warn (L "Abgebrochen – ohne Python ist kein Export möglich." "Cancelled – no export possible without Python."); return $null }
     }
   }
   Install-Requirements $py (Join-Path $PSScriptRoot "requirements.txt")
-  if (-not (Test-PyModules $py $PY_MODS)) { throw "Pakete fehlen nach der Installation." }
+  if (-not (Test-PyModules $py $PY_MODS)) { throw (L "Pakete fehlen nach der Installation." "Packages missing after installation.") }
   $Cfg.Python = $py; Save-Config
-  Ok "Python-Umgebung bereit: $py"
+  Ok (L "Python-Umgebung bereit: $py" "Python environment ready: $py")
   return $py
 }
 
@@ -345,22 +366,22 @@ function Find-Ffmpeg {
 function Setup-Ffmpeg {
   $f = Find-Ffmpeg
   if ($f) { Ok "ffmpeg: $f"; return $f }
-  Say "  ffmpeg (für die Filme) fehlt. Möglichkeiten: per winget installieren (Gyan.FFmpeg, ca. 100 MB, Benutzerinstallation)"
-  Say "  oder selbst eine ffmpeg.exe nach $Werkzeuge\ffmpeg\bin\ kopieren."
-  if ((Get-Command winget -ErrorAction SilentlyContinue) -and (Ask "ffmpeg jetzt per winget installieren?")) {
+  Say (L "  ffmpeg (für die Filme) fehlt. Möglichkeiten: per winget installieren (Gyan.FFmpeg, ca. 100 MB, Benutzerinstallation)" "  ffmpeg (for the movies) is missing. Options: install via winget (Gyan.FFmpeg, approx. 100 MB, user installation)")
+  Say (L "  oder selbst eine ffmpeg.exe nach $Werkzeuge\ffmpeg\bin\ kopieren." "  or copy an ffmpeg.exe to $Werkzeuge\ffmpeg\bin\ yourself.")
+  if ((Get-Command winget -ErrorAction SilentlyContinue) -and (Ask (L "ffmpeg jetzt per winget installieren?" "Install ffmpeg via winget now?"))) {
     winget install --id Gyan.FFmpeg --scope user --accept-package-agreements --accept-source-agreements
     $f = Find-Ffmpeg
-    if ($f) { Ok "ffmpeg: $f" } else { Err "ffmpeg nach der Installation nicht gefunden – Fenster neu öffnen." }
+    if ($f) { Ok "ffmpeg: $f" } else { Err (L "ffmpeg nach der Installation nicht gefunden – Fenster neu öffnen." "ffmpeg not found after installation – reopen the window.") }
   }
   return $f
 }
 
 function Action-Einrichten {
-  Title "Werkzeuge einrichten"
-  Say "  Zielordner: $Werkzeuge"
+  Title (L "Werkzeuge einrichten" "Set up tools")
+  Say (L "  Zielordner: $Werkzeuge" "  Target folder: $Werkzeuge")
   New-Item -ItemType Directory -Force $Werkzeuge | Out-Null
-  if (-not (Test-Path (Join-Path $Pipeline "convert_mission.py"))) { Err "Konverter fehlen ($Pipeline). Das Paket ist unvollständig."; return }
-  Ok "Konverter: $Pipeline"
+  if (-not (Test-Path (Join-Path $Pipeline "convert_mission.py"))) { Err (L "Konverter fehlen ($Pipeline). Das Paket ist unvollständig." "Converters missing ($Pipeline). The package is incomplete."); return }
+  Ok (L "Konverter: $Pipeline" "Converters: $Pipeline")
   try { [void](Setup-Python) } catch { Err $_.Exception.Message; Log "Einrichten Python: $($_.Exception.Message)" }
   [void](Setup-Ffmpeg)
 }
@@ -415,42 +436,44 @@ function Mission-Steps([string]$m) {
 function General-Steps {
   $c = $Cfg.Ziel
   $s = @(
-    @{ K = "mp"; T = "Mehrspielerkarten (Regeln/Zonen)"; S = "fmt_mp.py"; A = @() },
-    @{ K = "vehicle_dm"; T = "Fahrzeug-Schadensmodelle"; S = "fmt_vehicle_dm.py"; A = @("--all") },
-    @{ K = "weapons"; T = "Waffen"; S = "export_weapons.py"; A = @() },
-    @{ K = "hands"; T = "Ego-Hände"; S = "export_weapons.py"; A = @("--hands") },
-    @{ K = "anims"; T = "Skriptanimationen"; S = "fmt_i3d.py"; A = @() },
-    @{ K = "dmodels"; T = "Zerstörbare Objekte"; S = "fmt_dmodels.py"; A = @() },
-    @{ K = "commands"; T = "Befehlsmenü + Sprachausgabe"; S = "fmt_commands.py"; A = @() },
-    @{ K = "sounds"; T = "Klänge und Musik"; S = "fmt_sounds.py"; A = @() },
-    @{ K = "blood"; T = "Bluttexturen"; S = "fmt_blood.py"; A = @($Cfg.Orig, $c) },
-    @{ K = "humanzones"; T = "Trefferzonen"; S = "fmt_humanzones.py"; A = @() },
-    @{ K = "gamedata"; T = "Missionsdatenbank"; S = "fmt_gamedata.py"; A = @() },
-    @{ K = "roster"; T = "Soldaten und Ausrüstung"; S = "fmt_roster.py"; A = @() },
+    @{ K = "mp"; T = (L "Mehrspielerkarten (Regeln/Zonen)" "Multiplayer maps (rules/zones)"); S = "fmt_mp.py"; A = @() },
+    @{ K = "vehicle_dm"; T = (L "Fahrzeug-Schadensmodelle" "Vehicle damage models"); S = "fmt_vehicle_dm.py"; A = @("--all") },
+    @{ K = "weapons"; T = (L "Waffen" "Weapons"); S = "export_weapons.py"; A = @() },
+    @{ K = "hands"; T = (L "Ego-Hände" "First-person hands"); S = "export_weapons.py"; A = @("--hands") },
+    @{ K = "anims"; T = (L "Skriptanimationen" "Script animations"); S = "fmt_i3d.py"; A = @() },
+    @{ K = "dmodels"; T = (L "Zerstörbare Objekte" "Destructible objects"); S = "fmt_dmodels.py"; A = @() },
+    @{ K = "commands"; T = (L "Befehlsmenü + Sprachausgabe" "Command menu + speech"); S = "fmt_commands.py"; A = @() },
+    @{ K = "sounds"; T = (L "Klänge und Musik" "Sounds and music"); S = "fmt_sounds.py"; A = @() },
+    @{ K = "dabing"; T = (L "Gesichtsdaten der Sprache" "Lip-sync face data"); S = "fmt_dabing.py"; A = @() },   # B-052
+    @{ K = "characters_morph"; T = (L "Alle Figuren mit Gesichtsanimation" "All characters with facial animation"); S = "export_characters.py"; A = @("--all") },   # B-052, nach den Missionen
+    @{ K = "blood"; T = (L "Bluttexturen" "Blood textures"); S = "fmt_blood.py"; A = @($Cfg.Orig, $c) },
+    @{ K = "humanzones"; T = (L "Trefferzonen" "Hit zones"); S = "fmt_humanzones.py"; A = @() },
+    @{ K = "gamedata"; T = (L "Missionsdatenbank" "Mission database"); S = "fmt_gamedata.py"; A = @() },
+    @{ K = "roster"; T = (L "Soldaten und Ausrüstung" "Soldiers and equipment"); S = "fmt_roster.py"; A = @() },
     @{ K = "hud"; T = "HUD"; S = "export_hud.py"; A = @() },
-    @{ K = "menu"; T = "Menüs"; S = "_menu_export.py"; A = @() },
-    @{ K = "menu_inv"; T = "Inventar-Bildschirm"; S = "_menu_export_ingame_inv.py"; A = @() },
-    @{ K = "menu_spec"; T = "Menü-Texte/Ablauf"; S = "_menu_spec.py"; A = @() },
-    @{ K = "fonts"; T = "Originalschriften"; S = "fmt_fonts.py"; A = @($Cfg.Orig, "$c\ui\fonts") })   # B-024/O-003
+    @{ K = "menu"; T = (L "Menüs" "Menus"); S = "_menu_export.py"; A = @() },
+    @{ K = "menu_inv"; T = (L "Inventar-Bildschirm" "Inventory screen"); S = "_menu_export_ingame_inv.py"; A = @() },
+    @{ K = "menu_spec"; T = (L "Menü-Texte/Ablauf" "Menu texts/flow"); S = "_menu_spec.py"; A = @() },
+    @{ K = "fonts"; T = (L "Originalschriften" "Original fonts"); S = "fmt_fonts.py"; A = @($Cfg.Orig, "$c\ui\fonts") })   # B-024/O-003
   if (Test-Path (Join-Path $Cfg.Orig "PlayersProfiles")) {
-    $s += @{ K = "profiles"; T = "Spielerprofile (Übernahme)"; S = "fmt_profile.py"; A = @((Join-Path $Cfg.Orig "PlayersProfiles"), "$c\profiles_import.json") }
+    $s += @{ K = "profiles"; T = (L "Spielerprofile (Übernahme)" "Player profiles (import)"); S = "fmt_profile.py"; A = @((Join-Path $Cfg.Orig "PlayersProfiles"), "$c\profiles_import.json") }
   }
   return $s
 }
 
 function Action-Export {
-  Title "Spieldaten exportieren"
+  Title (L "Spieldaten exportieren" "Export game data")
   if (-not (Require-Orig)) { return }
   $script:Py = Get-Py
   if (-not $script:Py -or -not (Test-PyModules $script:Py $PY_MODS)) {
-    Warn "Python-Umgebung fehlt oder ist unvollständig."
-    if (Ask "Jetzt einrichten (Menüpunkt 2)?" $true) { try { $script:Py = Setup-Python } catch { Err $_.Exception.Message; return } }
+    Warn (L "Python-Umgebung fehlt oder ist unvollständig." "Python environment missing or incomplete.")
+    if (Ask (L "Jetzt einrichten (Menüpunkt 2)?" "Set it up now (menu item 2)?") $true) { try { $script:Py = Setup-Python } catch { Err $_.Exception.Message; return } }
     if (-not $script:Py) { return }
   }
   # Die Original-Installation wird nie beschrieben: Ziel darf nicht in ihr liegen
   $oFull = [IO.Path]::GetFullPath($Cfg.Orig).TrimEnd('\') + '\'
   $zFull = [IO.Path]::GetFullPath($Cfg.Ziel).TrimEnd('\') + '\'
-  if ($zFull.StartsWith($oFull, [StringComparison]::OrdinalIgnoreCase)) { Err "Ziel liegt in der Original-Installation ($($Cfg.Ziel)) – bitte einen anderen Ordner wählen (-Ziel)."; return }
+  if ($zFull.StartsWith($oFull, [StringComparison]::OrdinalIgnoreCase)) { Err (L "Ziel liegt in der Original-Installation ($($Cfg.Ziel)) – bitte einen anderen Ordner wählen (-Ziel)." "Target is inside the original installation ($($Cfg.Ziel)) – please choose another folder (-Ziel)."); return }
   New-Item -ItemType Directory -Force $Cfg.Ziel, $LogDir | Out-Null
   $script:ExportLog = Join-Path $LogDir ("export_{0}.log" -f (Get-Date -Format "yyyyMMdd_HHmmss"))
   $script:State = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -461,10 +484,10 @@ function Action-Export {
   $env:DH2_WAV_TABLES = Join-Path $Werkzeuge "wav_tables.json"
   $env:PYTHONIOENCODING = "utf-8"
   $env:PYTHONUTF8 = "1"        # O-024: Pfade mit Umlauten/Leerzeichen
-  Say "  Quelle (nur lesen): $($Cfg.Orig)"
-  Say "  Ziel:               $($Cfg.Ziel)"
-  Say "  Protokoll:          $script:ExportLog"
-  Say "  Bereits erledigte Schritte werden übersprungen (-Neu bzw. Menü: neu = alles wiederholen). Abbruch jederzeit mit Strg+C."
+  Say (L "  Quelle (nur lesen): $($Cfg.Orig)" "  Source (read-only): $($Cfg.Orig)")
+  Say (L "  Ziel:               $($Cfg.Ziel)" "  Target:             $($Cfg.Ziel)")
+  Say (L "  Protokoll:          $script:ExportLog" "  Log:                $script:ExportLog")
+  Say (L "  Bereits erledigte Schritte werden übersprungen (-Neu bzw. Menü: neu = alles wiederholen). Abbruch jederzeit mit Strg+C." "  Steps already done are skipped (-Neu or menu: n = redo everything). Cancel any time with Ctrl+C.")
   Log "Export gestartet: $($Cfg.Orig) -> $($Cfg.Ziel)"
 
   $gruppen = if ($Schritte.Count) { $Schritte } else { @("Tabellen", "Missionen", "Mehrspieler", "Allgemein") }
@@ -475,15 +498,15 @@ function Action-Export {
   if ($gruppen -notcontains "Missionen") { $miss = @() }
   if ($gruppen -notcontains "Mehrspieler") { $mp = @() }
   $jobs = New-Object System.Collections.Generic.List[object]
-  if ($gruppen -contains "Tabellen") { $jobs.Add(@{ K = "wavtables"; T = "Audiotabellen"; Steps = @(@{ S = "read_wav_tables.py"; A = @() }) }) }
-  foreach ($m in ($miss + $mp)) { $jobs.Add(@{ K = "mission:$m"; T = "Mission $m"; Steps = (Mission-Steps $m); M = $m }) }
+  if ($gruppen -contains "Tabellen") { $jobs.Add(@{ K = "wavtables"; T = (L "Audiotabellen" "Audio tables"); Steps = @(@{ S = "read_wav_tables.py"; A = @() }) }) }
+  foreach ($m in ($miss + $mp)) { $jobs.Add(@{ K = "mission:$m"; T = (L "Mission $m" "Mission $m"); Steps = (Mission-Steps $m); M = $m }) }
   if ($gruppen -contains "Allgemein") { foreach ($g in General-Steps) { $jobs.Add(@{ K = "global:$($g.K)"; T = $g.T; Steps = @($g) }) } }
 
   # O-023: fehlende Konverter vorab melden (statt nur "!! fehlt" im Protokoll)
   $fehlt = @($jobs | ForEach-Object { $_.Steps } | ForEach-Object { $_.S } | Sort-Object -Unique | Where-Object { -not (Test-Path (Join-Path $Pipeline $_)) })
-  if ($fehlt.Count) { Warn "Konverter fehlen in ${Pipeline}: $($fehlt -join ', ') – diese Schritte scheitern und werden beim nächsten Lauf wiederholt." }
+  if ($fehlt.Count) { Warn (L "Konverter fehlen in ${Pipeline}: $($fehlt -join ', ') – diese Schritte scheitern und werden beim nächsten Lauf wiederholt." "Converters missing in ${Pipeline}: $($fehlt -join ', ') – these steps fail and are retried on the next run.") }
   if ($Probelauf) {
-    Say "  PROBELAUF – es wird nichts ausgeführt. Offene Schritte:"
+    Say (L "  PROBELAUF – es wird nichts ausgeführt. Offene Schritte:" "  DRY RUN – nothing is executed. Open steps:")
     foreach ($j in $jobs) {
       if (State-Has $j.K) { continue }
       $n = 0
@@ -491,12 +514,13 @@ function Action-Export {
     }
     return
   }
+  $act = L "Spieldaten exportieren" "Exporting game data"
   $fehler = @(); $i = 0; $t0 = Get-Date
   foreach ($j in $jobs) {
     $i++
     $pct = [int](100 * ($i - 1) / [Math]::Max(1, $jobs.Count))
-    Write-Progress -Activity "Spieldaten exportieren" -Status ("[{0}/{1}] {2}" -f $i, $jobs.Count, $j.T) -PercentComplete $pct
-    if (State-Has $j.K) { Say ("  [{0,3}/{1}] {2,-34} bereits erledigt" -f $i, $jobs.Count, $j.T) DarkGray; continue }
+    Write-Progress -Activity $act -Status ("[{0}/{1}] {2}" -f $i, $jobs.Count, $j.T) -PercentComplete $pct
+    if (State-Has $j.K) { Say ("  [{0,3}/{1}] {2,-34} {3}" -f $i, $jobs.Count, $j.T, (L "bereits erledigt" "already done")) DarkGray; continue }
     $ts = Get-Date; $ok = $true; $bad = @(); $n = 0
     foreach ($st in $j.Steps) {
       # B-024/O-001: Status je Schritt ("<job>#<nr>:<skript>"); erfolgreiche Schritte werden beim nächsten Lauf
@@ -508,17 +532,17 @@ function Action-Export {
     if ($j.M) { $okLevel = Test-Path (Join-Path $Cfg.Ziel "$($j.M.ToLower())\scene.glb") } else { $okLevel = $ok }
     $dt = [int]((Get-Date) - $ts).TotalSeconds
     if ($ok) { Say ("  [{0,3}/{1}] {2,-34} OK ({3} s)" -f $i, $jobs.Count, $j.T, $dt) Green; State-Add $j.K }
-    elseif ($okLevel) { Say ("  [{0,3}/{1}] {2,-34} teilweise ({3})" -f $i, $jobs.Count, $j.T, ($bad -join ', ')) Yellow; $fehler += "$($j.T): $($bad -join ', ')" }
-    else { Say ("  [{0,3}/{1}] {2,-34} FEHLER ({3})" -f $i, $jobs.Count, $j.T, ($bad -join ', ')) Red; $fehler += "$($j.T): $($bad -join ', ')" }
+    elseif ($okLevel) { Say ("  [{0,3}/{1}] {2,-34} {4} ({3})" -f $i, $jobs.Count, $j.T, ($bad -join ', '), (L "teilweise" "partial")) Yellow; $fehler += "$($j.T): $($bad -join ', ')" }
+    else { Say ("  [{0,3}/{1}] {2,-34} {4} ({3})" -f $i, $jobs.Count, $j.T, ($bad -join ', '), (L "FEHLER" "ERROR")) Red; $fehler += "$($j.T): $($bad -join ', ')" }
   }
-  Write-Progress -Activity "Spieldaten exportieren" -Completed
+  Write-Progress -Activity $act -Completed
   $dauer = [int]((Get-Date) - $t0).TotalMinutes
   Say ""
   if ($fehler.Count) {
-    Warn "$($fehler.Count) Schritt(e) mit Fehlern (Einzelheiten im Protokoll $script:ExportLog):"
+    Warn (L "$($fehler.Count) Schritt(e) mit Fehlern (Einzelheiten im Protokoll $script:ExportLog):" "$($fehler.Count) step(s) with errors (details in log $script:ExportLog):")
     $fehler | ForEach-Object { Say "     - $_" Yellow }
-    Say "  Ein erneuter Start wiederholt nur die fehlgeschlagenen Schritte."
-  } else { Ok "Export abgeschlossen ($dauer min)." }
+    Say (L "  Ein erneuter Start wiederholt nur die fehlgeschlagenen Schritte." "  Running again repeats only the failed steps.")
+  } else { Ok (L "Export abgeschlossen ($dauer min)." "Export finished ($dauer min).") }
   Log "Export beendet, Fehler: $($fehler.Count)"
 }
 
@@ -526,31 +550,32 @@ function Action-Export {
 # 4) Filme
 # ==================================================================================================================
 function Action-Filme {
-  Title "Filme konvertieren (Bink -> Ogg Theora)"
+  Title (L "Filme konvertieren (Bink -> Ogg Theora)" "Convert movies (Bink -> Ogg Theora)")
   if (-not (Require-Orig)) { return }
   $src = Join-Path $Cfg.Orig "Gamemovie"
-  if (-not (Test-Path $src)) { Err "Kein Ordner Gamemovie in der Installation."; return }
+  if (-not (Test-Path $src)) { Err (L "Kein Ordner Gamemovie in der Installation." "No Gamemovie folder in the installation."); return }
   $ff = Find-Ffmpeg
   if (-not $ff) { $ff = Setup-Ffmpeg }
-  if (-not $ff) { Err "ffmpeg fehlt – Menüpunkt 2."; return }
+  if (-not $ff) { Err (L "ffmpeg fehlt – Menüpunkt 2." "ffmpeg missing – menu item 2."); return }
   $out = Join-Path $Cfg.Ziel "movies"
   New-Item -ItemType Directory -Force $out, $LogDir | Out-Null
   $log = Join-Path $LogDir "filme.log"
   $files = @(Get-ChildItem $src -Filter *.bik)
-  Say "  $($files.Count) Filme, Ziel $out (fertige werden übersprungen)."
+  Say (L "  $($files.Count) Filme, Ziel $out (fertige werden übersprungen)." "  $($files.Count) movies, target $out (finished ones are skipped).")
+  $act = L "Filme konvertieren" "Converting movies"
   $n = 0; $i = 0; $err = 0
   foreach ($f in $files) {
     $i++
     $dst = Join-Path $out ($f.BaseName + ".ogv")
     if ((Test-Path $dst) -and -not $Neu) { continue }
-    Write-Progress -Activity "Filme konvertieren" -Status "[$i/$($files.Count)] $($f.Name)" -PercentComplete (100 * ($i - 1) / $files.Count)
+    Write-Progress -Activity $act -Status "[$i/$($files.Count)] $($f.Name)" -PercentComplete (100 * ($i - 1) / $files.Count)
     $tmp = "$dst.tmp.ogv"
     & $ff -hide_banner -loglevel error -y -i $f.FullName -c:v libtheora -q:v 7 -c:a libvorbis -q:a 5 $tmp 2>> $log
     if ($LASTEXITCODE -eq 0) { Move-Item -Force $tmp $dst; $n++; Say "  OK      $($f.Name)" Green }
-    else { Remove-Item $tmp -ErrorAction SilentlyContinue; $err++; Say "  FEHLER  $($f.Name) (siehe $log)" Red }
+    else { Remove-Item $tmp -ErrorAction SilentlyContinue; $err++; Say (L "  FEHLER  $($f.Name) (siehe $log)" "  ERROR   $($f.Name) (see $log)") Red }
   }
-  Write-Progress -Activity "Filme konvertieren" -Completed
-  Ok "$n Filme konvertiert, $err Fehler."
+  Write-Progress -Activity $act -Completed
+  Ok (L "$n Filme konvertiert, $err Fehler." "$n movies converted, $err errors.")
 }
 
 # ==================================================================================================================
@@ -564,18 +589,18 @@ function Setup-Upscale([string]$py) {
   if (Test-PyModules $py "torch, spandrel") {
     if ($Geraet -eq "cuda") {
       & $py -I -c "import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)" 2>$null
-      if ($LASTEXITCODE -ne 0) { Warn "torch ist installiert, aber ohne nutzbare CUDA-GPU – es wird die CPU verwendet."; $script:Geraet = "cpu" }
+      if ($LASTEXITCODE -ne 0) { Warn (L "torch ist installiert, aber ohne nutzbare CUDA-GPU – es wird die CPU verwendet." "torch is installed but no usable CUDA GPU – using the CPU."); $script:Geraet = "cpu" }
     }
     return $true
   }
-  Say "  Für das Hochskalieren werden PyTorch und spandrel benötigt (nur in $Werkzeuge):"
-  Say "    CPU-Fassung ca. 250 MB Download – läuft auf jedem PC."
-  Say "    GPU-Fassung (NVIDIA/CUDA) ca. 3 GB Download – vielfach schneller."
+  Say (L "  Für das Hochskalieren werden PyTorch und spandrel benötigt (nur in $Werkzeuge):" "  Upscaling needs PyTorch and spandrel (only in $Werkzeuge):")
+  Say (L "    CPU-Fassung ca. 250 MB Download – läuft auf jedem PC." "    CPU version approx. 250 MB download – runs on every PC.")
+  Say (L "    GPU-Fassung (NVIDIA/CUDA) ca. 3 GB Download – vielfach schneller." "    GPU version (NVIDIA/CUDA) approx. 3 GB download – many times faster.")
   $idx = "https://download.pytorch.org/whl/cpu"
   if ($Geraet -eq "cuda") { $idx = "https://download.pytorch.org/whl/cu128" }
-  if (-not (Ask "PyTorch ($Geraet) jetzt installieren?")) { return $false }
+  if (-not (Ask (L "PyTorch ($Geraet) jetzt installieren?" "Install PyTorch ($Geraet) now?"))) { return $false }
   & $py -m pip install --disable-pip-version-check --no-warn-script-location torch torchvision --index-url $idx
-  if ($LASTEXITCODE -ne 0) { Err "PyTorch-Installation fehlgeschlagen."; return $false }
+  if ($LASTEXITCODE -ne 0) { Err (L "PyTorch-Installation fehlgeschlagen." "PyTorch installation failed."); return $false }
   Install-Requirements $py (Join-Path $PSScriptRoot "requirements-upscale.txt")
   return (Test-PyModules $py "torch, spandrel")
 }
@@ -585,44 +610,45 @@ function Setup-Models {
   $missing = @($MODELS | Where-Object { -not (Test-Path (Join-Path $dir $_.Name)) })
   if ($missing.Count) {
     $mb = 0; foreach ($m in $missing) { $mb += $m.MB }
-    Say "  KI-Modelle (Real-ESRGAN, BSD-3-Lizenz) fehlen: $(($missing | ForEach-Object { $_.Name }) -join ', ') – zusammen ca. $mb MB von github.com."
-    if (-not (Ask "Herunterladen?")) { return $false }
+    $names = ($missing | ForEach-Object { $_.Name }) -join ', '
+    Say (L "  KI-Modelle (Real-ESRGAN, BSD-3-Lizenz) fehlen: $names – zusammen ca. $mb MB von github.com." "  AI models (Real-ESRGAN, BSD-3 licence) missing: $names – together approx. $mb MB from github.com.")
+    if (-not (Ask (L "Herunterladen?" "Download?"))) { return $false }
     foreach ($m in $missing) {
       $dst = Join-Path $dir $m.Name
       Download $m.Url $dst
       $h = (Get-FileHash $dst -Algorithm SHA256).Hash
-      if ($h -ne $m.Sha) { Remove-Item $dst; Err "Prüfsumme von $($m.Name) stimmt nicht – Datei verworfen."; return $false }
-      Ok "$($m.Name) geprüft."
+      if ($h -ne $m.Sha) { Remove-Item $dst; Err (L "Prüfsumme von $($m.Name) stimmt nicht – Datei verworfen." "Checksum of $($m.Name) does not match – file discarded."); return $false }
+      Ok (L "$($m.Name) geprüft." "$($m.Name) verified.")
     }
   }
   $env:DH2_SR_MODELS = $dir
   return $true
 }
 function Action-Hochskalieren {
-  Title "Texturen hochskalieren ($($Stufe.ToUpper()), $Geraet)"
+  Title (L "Texturen hochskalieren ($($Stufe.ToUpper()), $Geraet)" "Upscale textures ($($Stufe.ToUpper()), $Geraet)")
   $py = Get-Py
-  if (-not $py) { Err "Python fehlt – zuerst Menüpunkt 2."; return }
+  if (-not $py) { Err (L "Python fehlt – zuerst Menüpunkt 2." "Python missing – run menu item 2 first."); return }
   $folders = @(Texture-Folders)
-  if (-not $folders.Count) { Err "Keine exportierten Texturen gefunden – zuerst Menüpunkt 3."; return }
+  if (-not $folders.Count) { Err (L "Keine exportierten Texturen gefunden – zuerst Menüpunkt 3." "No exported textures found – run menu item 3 first."); return }
   $total = 0; $open = 0
   foreach ($f in $folders) {
     $n = @(Get-ChildItem $f -Filter *.png -File).Count
     $d = $f.TrimEnd('\') + "_$Stufe"
     $done = if (Test-Path $d) { @(Get-ChildItem $d -Filter *.png -File).Count } else { 0 }
     $total += $n; $open += [Math]::Max(0, $n - $done)
-    Say ("  {0,-60} {1,5} Texturen, {2,5} fertig" -f $f, $n, $done)
+    Say ("  {0,-60} {1,5} {3}, {2,5} {4}" -f $f, $n, $done, (L "Texturen" "textures"), (L "fertig" "done"))
   }
   $sek = if ($Geraet -eq "cuda") { 1.5 } else { if ($Stufe -eq "hd") { 15 } else { 12 } }
   $min = [Math]::Ceiling($open * $sek / 60)
-  $std = if ($min -lt 120) { "$min Minuten" } else { "$([Math]::Round($min / 60, 1)) Stunden" }
+  $std = if ($min -lt 120) { L "$min Minuten" "$min minutes" } else { $h = [Math]::Round($min / 60, 1); L "$h Stunden" "$h hours" }
   $gb = if ($Stufe -eq "hd") { [Math]::Round($total * 0.6 / 1000, 2) } else { [Math]::Round($total * 1.8 / 1000, 2) }
-  Say "  Offen: $open Texturen. Geschätzte Dauer ca. $std ($Geraet), Platzbedarf ca. $gb GB."
-  if ($Stufe -eq "4k") { Say "  Hinweis: 4K baut auf HD auf (fehlende HD-Texturen werden dabei mit erzeugt)." }
-  Say "  Der Lauf ist jederzeit abbrechbar (Strg+C) und setzt beim nächsten Start fort."
-  if ($open -eq 0) { Ok "Nichts zu tun." ; return }
-  if (-not (Ask "Starten?" $true)) { return }
+  Say (L "  Offen: $open Texturen. Geschätzte Dauer ca. $std ($Geraet), Platzbedarf ca. $gb GB." "  Open: $open textures. Estimated time approx. $std ($Geraet), disk space approx. $gb GB.")
+  if ($Stufe -eq "4k") { Say (L "  Hinweis: 4K baut auf HD auf (fehlende HD-Texturen werden dabei mit erzeugt)." "  Note: 4K builds on HD (missing HD textures are created as well).") }
+  Say (L "  Der Lauf ist jederzeit abbrechbar (Strg+C) und setzt beim nächsten Start fort." "  The run can be cancelled any time (Ctrl+C) and resumes on the next start.")
+  if ($open -eq 0) { Ok (L "Nichts zu tun." "Nothing to do.") ; return }
+  if (-not (Ask (L "Starten?" "Start?") $true)) { return }
   if ($Interaktiv -and -not $PSBoundParameters.ContainsKey("Geraet")) {
-    $g = Read-Host "  Rechengerät: 1 = CPU (Standard), 2 = NVIDIA-GPU (CUDA)"
+    $g = Read-Host (L "  Rechengerät: 1 = CPU (Standard), 2 = NVIDIA-GPU (CUDA)" "  Device: 1 = CPU (default), 2 = NVIDIA GPU (CUDA)")
     if ($g -eq "2") { $script:Geraet = "cuda" }
   }
   if (-not (Setup-Upscale $py)) { return }
@@ -632,6 +658,7 @@ function Action-Hochskalieren {
   New-Item -ItemType Directory -Force $LogDir | Out-Null
   $log = Join-Path $LogDir "hochskalieren.log"
   $sp = Join-Path $Pipeline "upscale_textures.py"
+  $act = L "Hochskalieren" "Upscaling"
   foreach ($f in $folders) {
     $passes = if ($Stufe -eq "4k") { @("hd", "--4k") } else { @("hd") }
     foreach ($pass in $passes) {
@@ -640,83 +667,87 @@ function Action-Hochskalieren {
       "== $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $f $($extra -join ' ')" | Out-File -Append -Encoding utf8 $log
       & $py -I $sp $f @extra 2>&1 | ForEach-Object {
         $line = "$_"; $line | Out-File -Append -Encoding utf8 $log
-        if ($line -match '^\[(\d+)/(\d+)\]') { Write-Progress -Activity "Hochskalieren $(Split-Path $f -Leaf)" -Status $line -PercentComplete (100 * [int]$Matches[1] / [int]$Matches[2]) }
+        if ($line -match '^\[(\d+)/(\d+)\]') { Write-Progress -Activity "$act $(Split-Path $f -Leaf)" -Status $line -PercentComplete (100 * [int]$Matches[1] / [int]$Matches[2]) }
         elseif ($line -match 'FERTIG|Texturen|offen') { Say "     $line" }
       }
-      if ($LASTEXITCODE -ne 0) { Err "Abbruch bei $f (siehe $log)"; return }
+      if ($LASTEXITCODE -ne 0) { Err (L "Abbruch bei $f (siehe $log)" "Aborted at $f (see $log)"); return }
     }
   }
-  Write-Progress -Activity "Hochskalieren" -Completed
-  Ok "Fertig. Das Spiel verwendet automatisch die beste vorhandene Stufe (textures_4k vor textures_hd)."
+  Write-Progress -Activity $act -Completed
+  Ok (L "Fertig. Das Spiel verwendet automatisch die beste vorhandene Stufe (textures_4k vor textures_hd)." "Done. The game automatically uses the best available level (textures_4k before textures_hd).")
 }
 function Action-Installieren([switch]$Zurueck) {
   $py = Get-Py
-  if (-not $py) { Err "Python fehlt – zuerst Menüpunkt 2."; return }
+  if (-not $py) { Err (L "Python fehlt – zuerst Menüpunkt 2." "Python missing – run menu item 2 first."); return }
   $base = if ($Ordner) { $Ordner } else { Join-Path $Cfg.Ziel "textures" }
   $sp = Join-Path $Pipeline "upscale_textures.py"
   if ($Zurueck) {
-    Title "Original-Texturen wiederherstellen"
-    if (-not (Test-Path "$base`_sd")) { Warn "Keine Sicherung ($base`_sd) vorhanden – es ist nichts installiert."; return }
+    Title (L "Original-Texturen wiederherstellen" "Restore original textures")
+    if (-not (Test-Path "$base`_sd")) { Warn (L "Keine Sicherung ($base`_sd) vorhanden – es ist nichts installiert." "No backup ($base`_sd) present – nothing is installed."); return }
     & $py -I $sp $base --restore
   } else {
-    Title "HD-Texturen fest installieren"
-    Say "  Normalerweise nicht nötig: das Spiel nutzt textures_hd/textures_4k automatisch."
-    Say "  Installieren kopiert die HD-Fassung über $base (Originale werden vorher nach $base`_sd gesichert)."
-    if (-not (Test-Path "$base`_hd")) { Err "Keine HD-Texturen vorhanden – zuerst hochskalieren."; return }
-    if (-not (Ask "Fortfahren?")) { return }
+    Title (L "HD-Texturen fest installieren" "Install HD textures permanently")
+    Say (L "  Normalerweise nicht nötig: das Spiel nutzt textures_hd/textures_4k automatisch." "  Usually not needed: the game uses textures_hd/textures_4k automatically.")
+    Say (L "  Installieren kopiert die HD-Fassung über $base (Originale werden vorher nach $base`_sd gesichert)." "  Installing copies the HD version over $base (originals are backed up to $base`_sd first).")
+    if (-not (Test-Path "$base`_hd")) { Err (L "Keine HD-Texturen vorhanden – zuerst hochskalieren." "No HD textures present – upscale first."); return }
+    if (-not (Ask (L "Fortfahren?" "Continue?"))) { return }
     & $py -I $sp $base --install
   }
-  if ($LASTEXITCODE -eq 0) { Ok "Erledigt." } else { Err "Fehlgeschlagen." }
+  if ($LASTEXITCODE -eq 0) { Ok (L "Erledigt." "Done.") } else { Err (L "Fehlgeschlagen." "Failed.") }
 }
 
 # ==================================================================================================================
-# 6) Status
+# 6) Status (nur lesen)
 # ==================================================================================================================
 function Action-Status {
   Title "Status"
-  if ($Cfg.Orig) { [void](Test-Installation $Cfg.Orig) } else { Warn "Keine Original-Installation gewählt (Menüpunkt 1)." }
+  if ($Cfg.Orig) { [void](Test-Installation $Cfg.Orig) } else { Warn (L "Keine Original-Installation gewählt (Menüpunkt 1)." "No original installation selected (menu item 1).") }
   Say ""
-  if (Test-Path (Join-Path $Pipeline "convert_mission.py")) { Ok "Konverter: $Pipeline ($(@(Get-ChildItem $Pipeline -Filter *.py).Count) Skripte)" } else { Err "Konverter fehlen: $Pipeline" }
+  if (Test-Path (Join-Path $Pipeline "convert_mission.py")) {
+    $nc = @(Get-ChildItem $Pipeline -Filter *.py).Count
+    Ok (L "Konverter: $Pipeline ($nc Skripte)" "Converters: $Pipeline ($nc scripts)")
+  } else { Err (L "Konverter fehlen: $Pipeline" "Converters missing: $Pipeline") }
   $py = Get-Py
   if ($py) {
-    if (Test-PyModules $py $PY_MODS) { Ok "Python (Export): $py" } else { Warn "Python vorhanden, Pakete fehlen: $py" }
-    if (Test-PyModules $py "torch, spandrel") { Ok "Hochskalieren: PyTorch vorhanden" } else { Say "  [--]     Hochskalieren: PyTorch nicht installiert" DarkGray }
-  } else { Warn "Python-Umgebung fehlt (Menüpunkt 2)." }
+    if (Test-PyModules $py $PY_MODS) { Ok "Python (Export): $py" } else { Warn (L "Python vorhanden, Pakete fehlen: $py" "Python present, packages missing: $py") }
+    if (Test-PyModules $py "torch, spandrel") { Ok (L "Hochskalieren: PyTorch vorhanden" "Upscaling: PyTorch present") } else { Say (L "  [--]     Hochskalieren: PyTorch nicht installiert" "  [--]     Upscaling: PyTorch not installed") DarkGray }
+  } else { Warn (L "Python-Umgebung fehlt (Menüpunkt 2)." "Python environment missing (menu item 2).") }
   $ff = Find-Ffmpeg
-  if ($ff) { Ok "ffmpeg: $ff" } else { Say "  [--]     ffmpeg nicht gefunden (nur für Filme)" DarkGray }
+  if ($ff) { Ok "ffmpeg: $ff" } else { Say (L "  [--]     ffmpeg nicht gefunden (nur für Filme)" "  [--]     ffmpeg not found (only needed for movies)") DarkGray }
   $md = Join-Path $Werkzeuge "sr_models"
   $mods = @($MODELS | Where-Object { Test-Path (Join-Path $md $_.Name) }).Count
-  Say "  KI-Modelle: $mods/$($MODELS.Count)"
+  Say (L "  KI-Modelle: $mods/$($MODELS.Count)" "  AI models: $mods/$($MODELS.Count)")
   Say ""
   $c = $Cfg.Ziel
-  Say "  Spieldaten: $c"
-  if (-not (Test-Path $c)) { Warn "Noch nicht exportiert (Menüpunkt 3)."; return }
+  Say (L "  Spieldaten: $c" "  Game data: $c")
+  if (-not (Test-Path $c)) { Warn (L "Noch nicht exportiert (Menüpunkt 3)." "Not exported yet (menu item 3)."); return }
   $camp = @($CAMPAIGN | Where-Object { Test-Path (Join-Path $c "$($_.ToLower())\scene.glb") })
   $mpd = @($MULTI | Where-Object { Test-Path (Join-Path $c "$($_.ToLower())\scene.glb") })
   $line = { param($name, $ok, $info) if ($ok) { Ok ("{0,-22} {1}" -f $name, $info) } else { Warn ("{0,-22} {1}" -f $name, $info) } }
-  & $line "Kampagnenmissionen" ($camp.Count -eq $CAMPAIGN.Count) "$($camp.Count)/$($CAMPAIGN.Count)"
-  if ($camp.Count -lt $CAMPAIGN.Count) { Say "       fehlen: $((@($CAMPAIGN | Where-Object { $camp -notcontains $_ })) -join ', ')" DarkYellow }
-  & $line "Mehrspielerkarten" ($mpd.Count -eq $MULTI.Count) "$($mpd.Count)/$($MULTI.Count)"
-  foreach ($x in @(@("Texturen", "textures"), @("Figuren", "characters"), @("Waffen", "weapons"), @("Klänge", "sounds"),
-                  @("Musik", "music"), @("Menüs/HUD", "ui"), @("Animationen", "anims"), @("Filme", "movies"),
-                  @("HD-Texturen", "textures_hd"), @("4K-Texturen", "textures_4k"))) {
+  & $line (L "Kampagnenmissionen" "Campaign missions") ($camp.Count -eq $CAMPAIGN.Count) "$($camp.Count)/$($CAMPAIGN.Count)"
+  if ($camp.Count -lt $CAMPAIGN.Count) { Say ("       {0}: {1}" -f (L "fehlen" "missing"), ((@($CAMPAIGN | Where-Object { $camp -notcontains $_ })) -join ', ')) DarkYellow }
+  & $line (L "Mehrspielerkarten" "Multiplayer maps") ($mpd.Count -eq $MULTI.Count) "$($mpd.Count)/$($MULTI.Count)"
+  foreach ($x in @(@((L "Texturen" "Textures"), "textures"), @((L "Figuren" "Characters"), "characters"), @((L "Waffen" "Weapons"), "weapons"),
+                  @((L "Klänge" "Sounds"), "sounds"), @((L "Musik" "Music"), "music"), @((L "Menüs/HUD" "Menus/HUD"), "ui"),
+                  @((L "Animationen" "Animations"), "anims"), @((L "Filme" "Movies"), "movies"),
+                  @((L "HD-Texturen" "HD textures"), "textures_hd"), @((L "4K-Texturen" "4K textures"), "textures_4k"))) {
     $s = Dir-Stats (Join-Path $c $x[1])
-    & $line $x[0] ($s.N -gt 0) ("{0,6} Dateien  {1}" -f $s.N, (Fmt-Size $s.B))
+    & $line $x[0] ($s.N -gt 0) ("{0,6} {2}  {1}" -f $s.N, (Fmt-Size $s.B), (L "Dateien" "files"))
   }
   # B-024/O-002: jede Sprachinstallation – mindestens eine texts_<sprache>.json
   $tx = @(Get-ChildItem $c -Filter "texts_*.json" -File -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName.Substring(6) })
-  & $line "Originaltexte" ($tx.Count -gt 0) ($(if ($tx.Count) { $tx -join ', ' } else { "keine texts_*.json" }))
-  & $line "Originalschriften" (Test-Path (Join-Path $c "ui\fonts\fonts.json")) "ui\fonts\fonts.json"
+  & $line (L "Originaltexte" "Original texts") ($tx.Count -gt 0) ($(if ($tx.Count) { $tx -join ', ' } else { L "keine texts_*.json" "no texts_*.json" }))
+  & $line (L "Originalschriften" "Original fonts") (Test-Path (Join-Path $c "ui\fonts\fonts.json")) "ui\fonts\fonts.json"
   foreach ($f in @("items.json", "sounds.json", "commands.json", "mp_maps.json", "missions_db.json", "roster.json")) {
     & $line $f (Test-Path (Join-Path $c $f)) ""
   }
   if ($Cfg.Orig -and (Test-Path (Join-Path $Cfg.Orig "Gamemovie"))) {
     $b = @(Get-ChildItem (Join-Path $Cfg.Orig "Gamemovie") -Filter *.bik).Count
     $o = (Dir-Stats (Join-Path $c "movies") "*.ogv").N
-    Say "  Filme: $o von $b konvertiert"
+    Say (L "  Filme: $o von $b konvertiert" "  Movies: $o of $b converted")
   }
   $all = Dir-Stats $c
-  Say "  Gesamt: $($all.N) Dateien, $(Fmt-Size $all.B)"
+  Say (L "  Gesamt: $($all.N) Dateien, $(Fmt-Size $all.B)" "  Total: $($all.N) files, $(Fmt-Size $all.B)")
 }
 
 # ==================================================================================================================
@@ -724,19 +755,20 @@ function Action-Status {
 # ==================================================================================================================
 function Action-Starten {
   $exe = @((Join-Path $Root "DangerousHidden2.exe"), (Join-Path $Root "build\DangerousHidden2.exe")) | Where-Object { Test-Path $_ } | Select-Object -First 1
-  if (-not $exe) { Err "DangerousHidden2.exe nicht gefunden (erwartet in $Root)."; return }
+  if (-not $exe) { Err (L "DangerousHidden2.exe nicht gefunden (erwartet in $Root)." "DangerousHidden2.exe not found (expected in $Root)."); return }
   # B-038: Spieldaten liegen als DangerousHidden2.pck neben der EXE (ältere Pakete: in der EXE eingebettet)
   $dir = Split-Path $exe
   $pck = Join-Path $dir "DangerousHidden2.pck"
   $ver = Join-Path $dir "version.txt"
   if (-not (Test-Path $pck)) {
-    if (Test-Path $ver) { Err "DangerousHidden2.pck fehlt neben der EXE ($dir) – EXE und .pck aus demselben Paket kopieren."; return }
-    Warn "Keine DangerousHidden2.pck gefunden – nur ältere Pakete mit eingebetteten Spieldaten starten so."
+    if (Test-Path $ver) { Err (L "DangerousHidden2.pck fehlt neben der EXE ($dir) – EXE und .pck aus demselben Paket kopieren." "DangerousHidden2.pck missing next to the EXE ($dir) – copy EXE and .pck from the same package."); return }
+    Warn (L "Keine DangerousHidden2.pck gefunden – nur ältere Pakete mit eingebetteten Spieldaten starten so." "No DangerousHidden2.pck found – only older packages with embedded game data start this way.")
   } elseif (Test-Path $ver) {
-    Say "  Version $((Get-Content $ver -TotalCount 1).Trim()) (EXE + .pck; das Spiel prüft beim Start, ob beide zusammenpassen)."
+    $v = (Get-Content $ver -TotalCount 1).Trim()
+    Say (L "  Version $v (EXE + .pck; das Spiel prüft beim Start, ob beide zusammenpassen)." "  Version $v (EXE + .pck; the game checks at start-up that both match).")
   }
-  if (-not (Test-Path (Join-Path $Cfg.Ziel "textures"))) { Warn "Es wurden noch keine Spieldaten exportiert – Originalinhalte fehlen dann." }
-  Say "  Starte $exe …"
+  if (-not (Test-Path (Join-Path $Cfg.Ziel "textures"))) { Warn (L "Es wurden noch keine Spieldaten exportiert – Originalinhalte fehlen dann." "No game data has been exported yet – original content will be missing.") }
+  Say (L "  Starte $exe …" "  Starting $exe …")
   Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe)
 }
 
@@ -747,7 +779,7 @@ function Run-Action([string]$a) {
   try {
     switch ($a) {
       "Suchen" { Action-Suchen }
-      "Pruefen" { Title "Installation prüfen"; if ($Cfg.Orig) { [void](Test-Installation $Cfg.Orig) } else { Action-Suchen } }
+      "Pruefen" { Title (L "Installation prüfen" "Check installation"); if ($Cfg.Orig) { [void](Test-Installation $Cfg.Orig) } else { Action-Suchen } }
       "Einrichten" { Action-Einrichten }
       "Export" { Action-Export }
       "Filme" { Action-Filme }
@@ -773,28 +805,29 @@ if (-not $Interaktiv) {
 while ($true) {
   Clear-Host
   Say "=================================================================" Cyan
-  Say "   DANGEROUS AND HIDDEN 2  –  Werkzeuge (inoffizielles Fanprojekt)" Cyan
+  Say (L "   DANGEROUS AND HIDDEN 2  –  Werkzeuge (inoffizielles Fanprojekt)" "   DANGEROUS AND HIDDEN 2  –  Tools (unofficial fan project)") Cyan
   Say "=================================================================" Cyan
-  Say "   Original-Installation: $(if ($Cfg.Orig) { $Cfg.Orig } else { '(noch nicht gewählt)' })"
-  Say "   Spieldaten-Ziel:       $($Cfg.Ziel)"
+  Say (L "   Original-Installation: $(if ($Cfg.Orig) { $Cfg.Orig } else { '(noch nicht gewählt)' })" "   Original installation: $(if ($Cfg.Orig) { $Cfg.Orig } else { '(not selected yet)' })")
+  Say (L "   Spieldaten-Ziel:       $($Cfg.Ziel)" "   Game data target:      $($Cfg.Ziel)")
   Say ""
-  Say "   1) Original-Installation suchen / wählen / prüfen"
-  Say "   2) Werkzeuge einrichten (Python, Pakete, ffmpeg)"
-  Say "   3) Spieldaten exportieren (fortsetzbar)"
-  Say "   4) Filme konvertieren"
-  Say "   5) Texturen hochskalieren / installieren"
-  Say "   6) Prüfen / Status"
-  Say "   7) Spiel starten"
-  Say "   0) Beenden"
+  Say (L "   1) Original-Installation suchen / wählen / prüfen" "   1) Find / select / check original installation")
+  Say (L "   2) Werkzeuge einrichten (Python, Pakete, ffmpeg)" "   2) Set up tools (Python, packages, ffmpeg)")
+  Say (L "   3) Spieldaten exportieren (fortsetzbar)" "   3) Export game data (resumable)")
+  Say (L "   4) Filme konvertieren" "   4) Convert movies")
+  Say (L "   5) Texturen hochskalieren / installieren" "   5) Upscale / install textures")
+  Say (L "   6) Prüfen / Status" "   6) Check / status")
+  Say (L "   7) Spiel starten" "   7) Start game")
+  Say "   8) Sprache / Language ($($script:Lang))"
+  Say (L "   0) Beenden" "   0) Exit")
   Say ""
-  $w = Read-Host "   Auswahl"
+  $w = Read-Host (L "   Auswahl" "   Choice")
   switch ($w) {
     "1" { [void](Run-Action "Suchen") }
     "2" { [void](Run-Action "Einrichten") }
     "3" {
       $Neu = $false
-      $a = Read-Host "  a) alles exportieren (Standard)  b) nur bestimmte Missionen  n) alles neu"
-      if ($a -eq "b") { $Missionen = @((Read-Host "  Missionen (z. B. ARCTIC1,TUTORIAL)") -split '[,; ]+' | Where-Object { $_ }) ; $Schritte = @("Tabellen", "Missionen", "Mehrspieler") }
+      $a = Read-Host (L "  a) alles exportieren (Standard)  b) nur bestimmte Missionen  n) alles neu" "  a) export everything (default)  b) only certain missions  n) redo everything")
+      if ($a -eq "b") { $Missionen = @((Read-Host (L "  Missionen (z. B. ARCTIC1,TUTORIAL)" "  Missions (e.g. ARCTIC1,TUTORIAL)")) -split '[,; ]+' | Where-Object { $_ }) ; $Schritte = @("Tabellen", "Missionen", "Mehrspieler") }
       elseif ($a -eq "n") { $Neu = $true; $Missionen = @(); $Schritte = @() }
       else { $Missionen = @(); $Schritte = @() }
       [void](Run-Action "Export")
@@ -802,10 +835,10 @@ while ($true) {
     }
     "4" { [void](Run-Action "Filme") }
     "5" {
-      Say "   a) HD (4-fach, max. 2048 px) erzeugen"
-      Say "   b) 4K (zusätzlich, max. 4096 px) erzeugen"
-      Say "   c) HD fest installieren   d) Originale wiederherstellen"
-      $a = Read-Host "   Auswahl"
+      Say (L "   a) HD (4-fach, max. 2048 px) erzeugen" "   a) create HD (4x, max. 2048 px)")
+      Say (L "   b) 4K (zusätzlich, max. 4096 px) erzeugen" "   b) create 4K (additionally, max. 4096 px)")
+      Say (L "   c) HD fest installieren   d) Originale wiederherstellen" "   c) install HD permanently   d) restore originals")
+      $a = Read-Host (L "   Auswahl" "   Choice")
       switch ($a) {
         "a" { $Stufe = "hd"; [void](Run-Action "Hochskalieren") }
         "b" { $Stufe = "4k"; [void](Run-Action "Hochskalieren") }
@@ -815,6 +848,13 @@ while ($true) {
     }
     "6" { [void](Run-Action "Status") }
     "7" { [void](Run-Action "Starten") }
+    "8" {
+      $script:Lang = if ($script:Lang -eq "de") { "en" } else { "de" }
+      $Cfg.Sprache = $script:Lang
+      try { Save-Config } catch { }
+      try { $Host.UI.RawUI.WindowTitle = (L "Dangerous and Hidden 2 – Werkzeuge" "Dangerous and Hidden 2 – Tools") } catch { }
+      continue
+    }
     "0" { exit 0 }
     default { continue }
   }

@@ -18,6 +18,7 @@ extends Node
 ##     login(profile := {})                          bindet/meldet das Konto an (GUID nach Abschnitt 9)
 ##     rank_of(guid_hash) -> int                     zuletzt bekannter Master-Rang (-1 = unbekannt)
 ##     fetch_rank(guid_hash) -> Dictionary           GET /v1/accounts/{gh}/stats (await)
+##     fetch_leaderboard(offset, limit) -> Dictionary  GET /v1/leaderboard (await + Signal leaderboard_received)
 ##   Spielserver
 ##     load_server_key(path) -> String               RSA-Serverschlüssel laden/erzeugen, liefert server_id
 ##     register_server(info) / unregister_server(reason) / report_match(report)
@@ -31,6 +32,14 @@ signal error(code: String, text: String)
 signal match_reported(resp: Dictionary)
 signal ranks_updated
 signal promoted(level: int, rank_name: String)
+signal leaderboard_received(page: Dictionary)
+
+const LB_PAGE := 20
+const LB_MAX_LIMIT := 100
+const LB_MAX_OFFSET := 10000
+const CTX_LEADERBOARD := "DH2/v1/leaderboard"
+const LB_MAX_AGE_S := 600            ## generated_at höchstens 10 min alt
+const LB_MAX_FUTURE_S := 120         ## und höchstens 2 min in der Zukunft
 
 var promotions_sent: Array = []      ## Spielserver: [peer_id, level] (Protokoll/Tests)
 
@@ -66,7 +75,7 @@ const TEXTS := {
 	"CAPACITY": "Masterserver ausgelastet.", "INTERNAL": "Masterserver-Fehler.",
 	"GUID_CONFLICT": "Konto ist an einen anderen Schlüssel gebunden.",
 	"NO_BUILD": "Kein offizieller Build – Masterserver nicht verfügbar.",
-	"NET_OFFLINE": "Masterserver nicht erreichbar – LAN und Favoriten weiter nutzbar.",
+	"NET_OFFLINE": "Masterserver nicht erreichbar – LAN, Favoriten und Beitritt per IP weiter nutzbar.",
 	"LIST_INVALID": "Serverliste ungültig.",
 }
 
@@ -142,7 +151,8 @@ func build_kid() -> String:
 static func sha256(data: PackedByteArray) -> PackedByteArray:
 	var h := HashingContext.new()
 	h.start(HashingContext.HASH_SHA256)
-	h.update(data)
+	if data.size() > 0:   # leerer Body (GET) → sonst Fehler „len == 0“ / empty body (GET) otherwise errors
+		h.update(data)
 	return h.finish()
 
 
@@ -357,7 +367,10 @@ func _set_state(s: String, text: String) -> void:
 
 
 func _fail(res: Dictionary) -> void:
-	if res["code"] == "NET_OFFLINE":
+	# 0.11.4: jeder Fehlschlag ohne gültige Liste (auch 5xx/CAPACITY/INTERNAL) gilt als „nicht erreichbar“,
+	# damit der Browser den Hinweis auf Direktverbindung per IP zeigt statt einer leeren Liste.
+	# 0.11.4: any failure without a valid list counts as "unreachable" so the browser shows the direct-IP hint.
+	if res["code"] == "NET_OFFLINE" or (state == "connecting" and list.is_empty()) or int(res.get("status", 0)) >= 500:
 		_set_state("offline", error_text("NET_OFFLINE"))
 	error.emit(String(res["code"]), String(res["text"]))
 
@@ -389,6 +402,14 @@ func connect_master() -> void:
 	var ok := await refresh_servers()
 	if ok:
 		_set_state("online", "Masterserver verbunden.")
+		# 0.11.4: Konto anmelden/binden – ohne Login blieb guid_hash leer, Matchberichte enthielten
+		# keinen Spieler und das Profil erschien nie im Ranking.
+		# 0.11.4: log in / bind the account – without it the guid_hash stayed empty, match reports
+		# contained no player and the profile never showed up in the ranking.
+		var g := get_node_or_null("/root/Game")
+		if g and String(g.profile_name) != "" and account.is_empty():
+			var lok: bool = await login({"name": String(g.profile_name), "dir": g.profile_dir()})
+			print("MASTER: Login ", "ok" if lok else "fehlgeschlagen / failed")
 
 
 func list_query(filter := {}) -> String:
@@ -525,7 +546,11 @@ func _account_path(profile: Dictionary) -> String:
 	var dir := String(profile.get("dir", ""))
 	if dir == "":
 		var g := get_node_or_null("/root/Game")
-		dir = g.profile_dir() if g and String(g.profile_name) != "" else "user://master_account"
+		# 0.11.5: Tests (--autoplay, Speicherprofil) → Testordner statt user://master_account
+		if g and String(g.profile_name) != "":
+			dir = g.profile_dir()
+		else:
+			dir = g.user_file("master_account") if g else "user://master_account"
 	return dir.path_join("account.json")
 
 
@@ -739,6 +764,66 @@ func fetch_rank(gh: String) -> Dictionary:
 	return j
 
 
+# ------------------------------------------------------------------ Rangliste (PROTOCOL §15.l, 0.11.5)
+
+## Rangliste holen: GET /v1/leaderboard?offset=&limit= (Anfrage mit X-DH2-Auth signiert wie alle /v1-Aufrufe).
+## Antwort = signierter Umschlag (§15.l, Kontext DH2/v1/leaderboard, bekannter Master-kid); unsigniert, falscher kid,
+## falsche Signatur oder generated_at außerhalb −2 min … +10 min → ok = false (LIST_INVALID).
+## Ergebnis (await und Signal leaderboard_received): {ok, code, text, generated_at, total, offset, limit, entries}.
+## Leaderboard: signed request like every /v1 call; plain JSON reply (§15.l), an envelope must verify, else rejected.
+func fetch_leaderboard(offset := 0, limit := LB_PAGE) -> Dictionary:
+	offset = clampi(offset, 0, LB_MAX_OFFSET)
+	limit = clampi(limit, 1, LB_MAX_LIMIT)
+	var res := await request("GET", "/v1/leaderboard", "offset=%d&limit=%d" % [offset, limit])
+	var out := {"ok": false, "code": String(res.get("code", "")), "text": String(res.get("text", "")),
+		"generated_at": 0, "total": 0, "offset": offset, "limit": limit, "entries": []}
+	if res["ok"]:
+		var page = parse_leaderboard(res["json"])
+		if page == null:
+			out["code"] = "LIST_INVALID"
+			out["text"] = error_text("LIST_INVALID")
+		else:
+			out.merge(page, true)
+			out["ok"] = true
+			out["code"] = ""
+			out["text"] = ""
+	leaderboard_received.emit(out)
+	return out
+
+
+## Antwort prüfen und bereinigen. null = ganze Seite verwerfen.
+func parse_leaderboard(env):
+	# Signatur Pflicht (bekannter kid aus MasterKeys, Kontext DH2/v1/leaderboard); unsigniert → verworfen
+	var j = open_master_envelope(env, CTX_LEADERBOARD)
+	if typeof(j) != TYPE_DICTIONARY or typeof(j.get("entries")) != TYPE_ARRAY:
+		return null
+	var age := now() - int(j.get("generated_at", 0))
+	if age > LB_MAX_AGE_S or age < -LB_MAX_FUTURE_S:
+		return null
+	var gh_re := RegEx.create_from_string("^[0-9a-f]{32}$")
+	var rows: Array = []
+	for e in j["entries"]:
+		if rows.size() >= LB_MAX_LIMIT:
+			break
+		if typeof(e) != TYPE_DICTIONARY:
+			continue
+		var gh := String(e.get("gh", ""))
+		if not gh_re.search(gh):
+			continue
+		var r := {"gh": gh, "name": clean_text(String(e.get("name", ""))).strip_edges().substr(0, 32),
+			"rank_name": clean_text(String(e.get("rank_name", ""))).substr(0, 32)}
+		for k in ["pos", "xp", "rank", "stars", "kills", "deaths", "wins", "matches", "revives", "heals"]:
+			r[k] = maxi(int(e.get(k, 0)), 0) if typeof(e.get(k)) in [TYPE_INT, TYPE_FLOAT] else 0
+		rows.append(r)
+	return {"generated_at": int(j.get("generated_at", 0)), "total": maxi(int(j.get("total", 0)), 0),
+		"offset": maxi(int(j.get("offset", 0)), 0), "limit": maxi(int(j.get("limit", 0)), 0), "entries": rows}
+
+
+## guid_hash des angemeldeten Kontos ("" ohne Anmeldung) / guid_hash of the logged-in account
+func own_guid_hash() -> String:
+	return String(account.get("guid_hash", ""))
+
+
 # ------------------------------------------------------------------ Spielserver (Abschnitt 5.1–5.3, 10, 15.t/u)
 
 ## Serverschlüssel laden oder (fehlt die Datei) erzeugen. Liefert die server_id (64 hex) bzw. "".
@@ -917,6 +1002,7 @@ func report_match(report: Dictionary) -> Dictionary:
 			var rk := int(cr.get("level", -1)) if typeof(cr) == TYPE_DICTIONARY else -1
 			_ranks[String(c["gh"])] = {"rank": rk, "career": cr, "at": now()}
 	match_reported.emit(j)
+	print("MASTER: Bericht / report %s %s" % [String(j.get("verdict", "?")), String(j.get("reason", ""))])
 	if String(j.get("verdict", "")) == "ACCEPTED":
 		_announce_promotions(j.get("career", []))
 		await distribute_ranks(true)

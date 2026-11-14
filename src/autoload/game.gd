@@ -257,6 +257,10 @@ var _profile_folders := {}   ## Anzeigename -> Unterordner (Cache, von list_prof
 
 
 func profile_dir(n: String = profile_name) -> String:
+	if _memory_profile:
+		# 0.11.5: Speicherprofil der Tests nie unter user://profiles (dort erschiene ein Profil „Test“ mit Spielständen,
+		# Vorlagen, Master-Konto) – stattdessen im Testordner. / memory test profile lives in the test folder.
+		return TEST_USER_DIR + "/profile_" + _safe_name(n)
 	if not _memory_profile and not _profile_folders.has(n):
 		list_profiles()
 	return profiles_dir + "/" + String(_profile_folders.get(n, _safe_name(n)))
@@ -470,6 +474,30 @@ static func is_test_profiles_dir(path: String) -> bool:
 		return false
 	var first := rest.split("/")[0]
 	return first.length() > TEST_PROFILES_PREFIX.length() and first.to_lower().begins_with(TEST_PROFILES_PREFIX)
+
+
+## 0.11.5 Testprofil isolieren: Nutzerdateien außerhalb der Profile (known_hosts.json, mp_favorites.json,
+## mp_filter.json, mp_maplists.json, server.key, master_account/, dedicated/, ServerConfigs/) liegen normal unter
+## user://<name>. Mit --autoplay: im Testprofilordner (--profiles_dir=user://test…, je Lauf geleert) unter
+## „_userdata/“, sonst unter user://test_userdata/ – Tests schreiben nie in die echten Nutzerdateien.
+## 0.11.5 isolate test profile: user files outside profiles go to a test folder when running --autoplay.
+const TEST_USER_DIR := "user://test_userdata"
+
+
+func user_file(file_name: String) -> String:
+	if not cli.has("autoplay"):
+		return "user://" + file_name
+	var base := TEST_USER_DIR
+	if not _memory_profile and is_test_profiles_dir(profiles_dir):
+		base = profiles_dir + "/_userdata"
+	DirAccess.make_dir_recursive_absolute(base)
+	return base + "/" + file_name
+
+
+## Statischer Zugang (static-Funktionen anderer Skripte, Werkzeuge ohne Autoload): ohne Game unverändert user://.
+static func user_path(file_name: String) -> String:
+	var g = Engine.get_main_loop().root.get_node_or_null("/root/Game") if Engine.get_main_loop() is SceneTree else null
+	return g.user_file(file_name) if g else "user://" + file_name
 
 
 func _load_memory_profile() -> void:
@@ -1393,7 +1421,15 @@ static func movie_path(name: String) -> String:
 		if FileAccess.file_exists(base + ext):
 			return base + ext
 	var lower := OrigLevel.cache_root() + "/movies/" + name.get_basename().to_lower() + ".ogv"
-	return lower if FileAccess.file_exists(lower) else ""
+	if FileAccess.file_exists(lower):
+		return lower
+	# 0.11.5: Linux-Dateisysteme unterscheiden Groß/Klein (Skript „intro“ ↔ Datei „Intro.ogv“) → Ordner durchsuchen
+	var dir := OrigLevel.cache_root() + "/movies"
+	var want := name.get_basename().to_lower() + ".ogv"
+	for f in DirAccess.get_files_at(dir):
+		if f.to_lower() == want:
+			return dir + "/" + f
+	return ""
 
 
 func film_seen(name: String) -> bool:

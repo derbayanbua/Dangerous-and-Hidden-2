@@ -100,7 +100,8 @@ func _run() -> void:
 	check(rig.fpv_active and rig.camera.global_position.distance_to(eye) < 0.05 and absf(eye.y - s.global_position.y - 1.62) < 0.05,
 		"1. Person am Dummy cameraFPV (1,62 m)", "%.2f" % (eye.y - s.global_position.y))
 	check(is_instance_valid(rig._vm_weapon) and rig._vm_anim != null, "FPV-Modell (Hände + Waffe) mit Animationen")
-	check(not s.model.visible, "1. Person: eigene Figur ausgeblendet (kein Kopf-/Kragen-Clipping)")
+	check(s.model.visible == Settings.fpv_body and s.model.fpv_body_mode == (SoldierModel.FPV_BODY_LEGS if Settings.fpv_body else SoldierModel.FPV_BODY_OFF),
+		"1. Person: eigene Figur nur als Schatten + Beine (0.11.5) bzw. ausgeblendet (Option aus)")
 	# Uniformwechsel (Figur ge01a, deutsch) in der 1. Person: Anker/Waffe/Sichtbarkeit am neuen Modell
 	var old_fig := s.model.orig_figure
 	var fig2 := OrigWeapons._load(OrigLevel.cache_root() + "/characters/ge01a.glb")
@@ -111,7 +112,8 @@ func _run() -> void:
 		"Uniformwechsel: alte Figur entfernt, neue Figur aktiv")
 	check(s.model._hand != null and fig2.is_ancestor_of(s.model._hand) and s.model._weapon_mesh != null
 		and s.model._weapon_mesh.get_parent() == s.model._hand, "Uniformwechsel: Waffe am hw1 der neuen Figur")
-	check(rig.fpv_active and not s.model.visible and rig.camera.global_position.distance_to(eye2) < 0.05
+	check(rig.fpv_active and s.model.fpv_body_mode == rig.fpv_body_mode() and s.model.fpv_leg_meshes().all(func(lm): return fig2.is_ancestor_of(lm))
+		and rig.camera.global_position.distance_to(eye2) < 0.05
 		and absf(eye2.y - s.global_position.y - 1.6) < 0.1, "Uniformwechsel: Ego-Kamera am cameraFPV der neuen Figur",
 		"%.2f m" % (eye2.y - s.global_position.y))
 	Input.action_press("aim")
@@ -304,8 +306,8 @@ func _run() -> void:
 		await seconds(4.0)
 
 	# --- B-012: MG 42 (items.sav u9 = 0) nur liegend feuerbar, Bren (u9 = 2) in jeder Haltung ---
-	check(Soldier.fire_stance_max(WeaponDB.get_weapon(&"o_33")) == 0 and Soldier.fire_stance_max(WeaponDB.get_weapon(&"bren")) == 2
-		and Soldier.fire_stance_max(WeaponDB.get_weapon(&"o_34")) == 1, "Haltungsregel aus items.sav: MG 42 liegend, Browning hockend/liegend, Bren frei")
+	check(Soldier.fire_stance_max(WeaponDB.get_weapon(&"o_33")) == 0 and Soldier.fire_stance_max(WeaponDB.get_weapon(&"bren")) == 0
+		and Soldier.fire_stance_max(WeaponDB.get_weapon(&"o_34")) == 1, "Haltungsregel: MG 42 und Bren (Zweibein, 0.11.4) liegend, Browning hockend/liegend")
 	var keep0: Weapon = s.weapons[0]
 	var mg := Weapon.new(WeaponDB.get_weapon(&"o_33"))
 	s.weapons[0] = mg
@@ -392,7 +394,71 @@ func _run() -> void:
 	await _hands_and_fire(m, s)
 	await _fpv_extras(m, s)
 	await _camera_modes(m, s)
+	await _fpv_body(m, s)
 	_finish()
+
+
+## 0.11.5: eigener Körper in der 1. Person – Schatten aller Figur-Meshes, sichtbare Beine (ohne Kopf/Arme),
+## Zielfernrohr = nur Schatten, 3. Person = normal, Option aus = ausgeblendet.
+func _fpv_body(m: Mission, s: Soldier) -> void:
+	var rig: CameraRig = m.rig
+	Settings.fpv_body = true
+	s.equip(["o_13", "colt", "m24", "panzerfaust", "knife"])
+	rig.mode = CameraRig.Mode.THIRD
+	await seconds(0.6)
+	var figm := s.model.orig_figure.find_children("*", "MeshInstance3D", true, false).filter(
+		func(x): return (x as MeshInstance3D).skin != null and not x.has_meta("fpv_legs"))
+	check(not figm.is_empty() and figm.all(func(x): return (x as MeshInstance3D).cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_ON)
+		and s.model.fpv_leg_meshes().is_empty() and s.model.visible, "3. Person: Figur normal (Schatten an, keine Beinkopie)", str(figm.size()))
+	rig.toggle_mode()
+	await seconds(0.5)
+	var legs := s.model.fpv_leg_meshes()
+	var all_geo := s.model.find_children("*", "GeometryInstance3D", true, false).filter(func(x): return not x.has_meta("fpv_legs"))
+	check(rig.fpv_active and s.model.visible and s.model.fpv_body_mode == SoldierModel.FPV_BODY_LEGS
+		and all_geo.all(func(x): return (x as GeometryInstance3D).cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY),
+		"1. Person: alle Körper-Meshes nur Schatten (SHADOWS_ONLY)", "%d Meshes" % all_geo.size())
+	# Beinkopie: sichtbar, ohne Schatten, nur Unterkörper (alle Ecken unter der Schnitthöhe der Bindepose)
+	var low_ok := not legs.is_empty()
+	var tri := [0, 0]
+	for lm in legs:
+		if lm.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF or not lm.is_visible_in_tree() or lm.skin == null:
+			low_ok = false
+		tri[0] += lm.mesh.get_faces().size() / 3
+	for x in figm:
+		tri[1] += (x as MeshInstance3D).mesh.get_faces().size() / 3
+	check(low_ok and tri[0] > 0 and tri[0] < tri[1] * 0.8, "1. Person: Beine sichtbar (Kopie ohne Schatten, nur Unterkörper)",
+		"%d von %d Dreiecken" % [tri[0], tri[1]])
+	# Weltlage: sichtbare Beine liegen deutlich unter der Kamera (nichts ragt in die Nahebene)
+	var top := -INF
+	for lm in legs:
+		var sk := lm.get_node_or_null(lm.skeleton) as Skeleton3D
+		if sk == null:
+			continue
+		var ab: AABB = lm.global_transform * lm.get_aabb()
+		top = maxf(top, ab.end.y)
+	var cam_y := rig.camera.global_position.y
+	check(top > -INF and top < cam_y - 0.3, "Beine (Bindepose-Hülle) unterhalb der Kamera", "%.2f / Kamera %.2f" % [top, cam_y])
+	check(not rig._vm_weapon or rig._viewmodel.visible, "Ego-Waffe/Hände weiter sichtbar")
+	# Zielfernrohr: Körper nur Schatten
+	Input.action_press("aim")
+	await seconds(1.0)
+	check(rig.optic_overlay() >= 0 and s.model.fpv_body_mode == SoldierModel.FPV_BODY_SHADOW and s.model.fpv_leg_meshes().is_empty(),
+		"Zielfernrohr: Körper ausgeblendet (nur Schatten)", "Overlay %d, Modus %d" % [rig.optic_overlay(), s.model.fpv_body_mode])
+	Input.action_release("aim")
+	await seconds(0.8)
+	check(s.model.fpv_body_mode == SoldierModel.FPV_BODY_LEGS and not s.model.fpv_leg_meshes().is_empty(), "Zielen beendet: Beine wieder sichtbar")
+	# Option aus: Figur ausgeblendet wie bisher
+	Settings.fpv_body = false
+	await seconds(0.3)
+	check(not s.model.visible and s.model.fpv_body_mode == SoldierModel.FPV_BODY_OFF and s.model.fpv_leg_meshes().is_empty(),
+		"Option KÖRPER IN 1. PERSON aus: Figur ausgeblendet")
+	Settings.fpv_body = true
+	await seconds(0.3)
+	rig.toggle_mode()
+	await seconds(0.5)
+	check(s.model.visible and s.model.fpv_body_mode == SoldierModel.FPV_BODY_OFF and s.model.fpv_leg_meshes().is_empty()
+		and figm.all(func(x): return not is_instance_valid(x) or (x as MeshInstance3D).cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_ON),
+		"Zurück in die 3. Person: Schatten/Sichtbarkeit wiederhergestellt")
 
 
 ## Bildschleifen (HUD aktualisiert in _process; frames() zählt Physiktakte)

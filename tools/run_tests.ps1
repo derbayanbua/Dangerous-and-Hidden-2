@@ -59,6 +59,10 @@ $suites = @(
   @{ name = "test_b0108";    args = "--headless -- --mission=al1_waldgeister --autoplay=test_b0108" },
   @{ name = "test_b0109_cz1"; args = "--headless -- --mission=cz1_eintrittsgeld --autoplay=test_b0109" },
   @{ name = "test_b0109_no1"; args = "--headless -- --mission=no1_leuchtturm --autoplay=test_b0109" },
+  @{ name = "test_b0112_fauna_af5"; args = "--headless -- --mission=af5_whiskey_bar --autoplay=test_b0112_fauna" },   # B-053 Uhren
+  @{ name = "test_b0112_fauna_al1"; args = "--headless -- --mission=al1_waldgeister --autoplay=test_b0112_fauna" },   # B-053 Vögel
+  @{ name = "test_b0112_fauna_nw1"; args = "--headless -- --mission=nw1_dampfleitung --autoplay=test_b0112_fauna" },  # B-053 Fische
+  @{ name = "test_b0112_fauna_no1"; args = "--headless -- --mission=no1_leuchtturm --autoplay=test_b0112_fauna" },    # B-053 Vögel+Fische
   # Zweiprozessig: startet den Client (test_normandie_doors_client) selbst
   @{ name = "test_normandie_doors"; args = "--headless -- --autoplay=test_normandie_doors"; mp = $true },
   # B-017: Türflügel/Zäune/Wasser/Zielmarker (echte Benutzen-/Vorwärtstaste)
@@ -88,6 +92,7 @@ $suites = @(
   @{ name = "test_commands"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_commands" },
   @{ name = "test_follow_spacing"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_follow_spacing" },
   @{ name = "test_quick_line"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_quick_line" },
+  @{ name = "test_b0112_lipsync"; args = "--headless -- --mission=a1_blizzard --autoplay=test_b0112_lipsync" },
   @{ name = "test_master_client"; args = "--headless -- --autoplay=test_master_client --profiles_dir=user://test_master_client --noimport" },   # 0.11.1 Master (lokaler Mock)
   @{ name = "test_career"; args = "--headless -- --autoplay=test_career --profiles_dir=user://test_career --noimport" },   # 0.11.1 Karriere-XP
   @{ name = "test_surrender"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_surrender" },
@@ -111,10 +116,13 @@ $suites = @(
 @{ name = "test_bots";     args = "--headless -- --autoplay=test_bots"; mp = $true; group = "full"; timeout = 2400 },   # nav-Phase über alle MP-Karten > 15 min
   @{ name = "test_lan_e2e";  args = "--headless -- --autoplay=test_lan_e2e --profiles_dir=user://test_lan_host --noimport"; mp = $true },
   @{ name = "test_mp_features"; args = "--headless -- --autoplay=test_mp_features --profiles_dir=user://test_mp_features --noimport"; mp = $true },
+  # 0.11.5: Tag-/Nachtwechsel auf allen Karten (nur MP): Regel aus/an, Glätte, Grafikstufe, Spät-Beitritt, SP unberührt
+  @{ name = "test_mp_daynight"; args = "--headless -- --mission=m01_funkfeuer --autoplay=test_mp_daynight --profiles_dir=user://test_mp_daynight"; mp = $true; timeout = 900 },
   @{ name = "test_mp_weapons"; args = "--headless -- --autoplay=test_mp_weapons --phase=all"; mp = $true },
   @{ name = "test_dedicated"; args = "--headless -- --autoplay=test_dedicated --profiles_dir=user://test_ded --noimport"; mp = $true },
   @{ name = "test_dedicated_ui"; args = "--headless -- --autoplay=test_dedicated_ui --profiles_dir=user://test_ded_ui --noimport"; mp = $true },   # 0.10.3 Konfigurationsmenue dedizierter Server
   @{ name = "test_mp_setup_ui"; args = "--headless -- --autoplay=test_mp_setup_ui --profiles_dir=user://test_mp_setup --noimport"; mp = $true },
+  @{ name = "test_leaderboard"; args = "--headless -- --autoplay=test_leaderboard --profiles_dir=user://test_leaderboard --noimport" },   # 0.11.5 Rangliste (lokaler Master-Nachbau)
   @{ name = "test_mp_browser"; args = "--headless -- --autoplay=test_mp_browser --profiles_dir=user://test_mp_browser --noimport --setup_gate=1"; mp = $true },   # 0.11.1 Serverbrowser + Setup vor Spawn
   @{ name = "test_mp_feedback"; args = "--headless -- --autoplay=test_mp_feedback"; mp = $true },
   @{ name = "test_support_strike"; args = "--headless -- --autoplay=test_support_strike"; mp = $true },
@@ -128,6 +136,7 @@ $suites = @(
   @{ name = "test_bavaria_details"; args = "--headless -- --mission=bavaria --autoplay=test_bavaria_details"; timeout = 1200 },
   @{ name = "test_bavaria_ground_mg42"; args = "--headless -- --mission=bavaria_occupation --autoplay=test_bavaria_ground_mg42"; timeout = 1200 },
   @{ name = "test_bavaria_clipping"; args = "--headless -- --mission=bavaria --autoplay=test_bavaria_clipping"; timeout = 1500 },
+  @{ name = "test_bavaria_daynight"; args = "--headless -- --mission=bavaria --autoplay=test_bavaria_daynight"; timeout = 1200 },
   @{ name = "test_bavaria_integration"; args = "--headless -- --autoplay=test_bavaria_integration"; mp = $true; timeout = 1800 },
   @{ name = "test_bavaria_mp"; args = "--headless -- --autoplay=test_bavaria_mp"; mp = $true; group = "full"; timeout = 1800 },
   # --- Gruppe "full" (nur mit -Full): lange Läufe ---

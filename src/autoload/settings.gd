@@ -90,7 +90,7 @@ const PROFILE_KEYS := {
 	"graphics": ["gamma", "shadows", "morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models", "quality", "view_mode", "water_mode"],
 	"audio": ["master_volume", "music_volume", "sfx_volume", "speech_volume"],
 	"controls": ["mouse_sensitivity", "invert_y"],
-	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll"],
+	"game": ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll", "fpv_body"],
 	"multiplayer": ["voice_enabled", "voice_volume", "connection_type"],
 }
 ## Original „MEHRSPIELER-SPIEL-EINSTELLUNGEN“ (T2409): Voice-Chat ermöglichen (T2431, Original-Standard aus),
@@ -120,6 +120,10 @@ var precise_aim := false
 ## B-016 BEWUSSTE ABWEICHUNG ([D]): Ragdoll-Physik für Gefallene (src/actors/ragdoll.gd);
 ## aus = Original-Todesanimationen (anim.sav) wie im Original
 var ragdoll := true
+## 0.11.5 Ergänzung ([D]): eigener Körper in der 1. Person – Beine sichtbar, ganzer Körper wirft Schatten
+## (SoldierModel.set_fpv_body); aus = eigene Figur ausgeblendet (bisher, ohne Schatten)
+## 0.11.5 addition: own body in first person – legs visible, whole body casts shadows
+var fpv_body := true
 # --- aus dem Original-Setup (setup.exe, LS3D_setup), soweit heute sinnvoll ---
 ## VSync-Modus: 0 aus, 1 an, 2 adaptiv, 3 Dreifachpuffer (Original „Triple-Buffering“)
 var vsync_mode := 1
@@ -191,7 +195,7 @@ func load_from_config(cfg: ConfigFile) -> void:
 		_load_key(cfg, "controls", k)
 	for k in ["master_volume", "music_volume", "sfx_volume", "speech_volume"]:
 		_load_key(cfg, "audio", k)
-	for k in ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll", "precise_aim"]:
+	for k in ["subtitles", "crosshair", "show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll", "precise_aim", "fpv_body"]:
 		_load_key(cfg, "game", k)
 	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		_load_key(cfg, "graphics", k)
@@ -317,7 +321,7 @@ func save_settings() -> void:
 	_cfg.set_value("graphics", "shadows", shadows)
 	_cfg.set_value("game", "subtitles", subtitles)
 	_cfg.set_value("game", "crosshair", crosshair)
-	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll", "precise_aim"]:
+	for k in ["show_fps", "show_names", "hit_feedback", "hurt_feedback", "kill_cam", "objective_markers", "ragdoll", "precise_aim", "fpv_body"]:
 		_cfg.set_value("game", k, get(k))
 	for k in ["morphing", "decals", "blood", "blood_level", "grass", "dynamic_lights", "high_models"]:
 		_cfg.set_value("graphics", k, get(k))
@@ -554,15 +558,29 @@ func apply_to_world(env: Environment, sun: DirectionalLight3D) -> void:
 		# Tonemapping), aus = y^(1/gamma) je Kanal; Helligkeit bleibt neutral.
 		env.adjustment_brightness = 1.0
 		env.adjustment_color_correction = gamma_lut()
-		env.ssao_enabled = q >= 1
+		# 0.11.4 [D]: gleiche Lichtstimmung auf allen Stufen – SSAO und Glow immer an (nur Qualität sinkt), fehlendes
+		# indirektes Licht (SSIL/SDFGI) und fehlender Volumennebel werden über Ambient bzw. Tiefennebel ausgeglichen.
+		# Basiswerte einmal merken, damit wiederholte Aufrufe nichts aufsummieren.
+		# 0.11.4: same lighting mood on every level – SSAO/glow always on (only quality drops); missing GI and
+		# volumetric fog are compensated via ambient / depth fog. Base values stored once.
+		if not env.has_meta("q_base_amb"):
+			env.set_meta("q_base_amb", env.ambient_light_energy)
+			env.set_meta("q_base_fog", env.fog_density)
+		env.ssao_enabled = true
 		env.ssil_enabled = q >= 3
 		env.sdfgi_enabled = q >= 3
 		env.sdfgi_use_occlusion = q >= 4
 		env.sdfgi_cascades = 6 if q >= 4 else 4
 		env.ssr_enabled = q >= 4
-		env.glow_enabled = q >= 1
+		env.glow_enabled = true
 		# B-041: Originalmissionen tragen Meta „b041_no_volfog“ (Volumennebel ist künstlicher Zusatznebel)
-		env.volumetric_fog_enabled = q >= 2 and not env.has_meta("b041_no_volfog")
+		var vol_ok := not env.has_meta("b041_no_volfog")
+		env.volumetric_fog_enabled = q >= 2 and vol_ok
+		env.ambient_light_energy = float(env.get_meta("q_base_amb")) * (1.0 if q >= 3 else 1.12)
+		var fog_add := 0.0
+		if vol_ok and q < 2 and env.volumetric_fog_density > 0.0:
+			fog_add = env.volumetric_fog_density * 0.25
+		env.fog_density = float(env.get_meta("q_base_fog")) + fog_add
 	var rs_q: int = [0, 1, 2, 2, 3][q]    # RenderingServer-Qualitätsstufen (sehr niedrig … hoch/ultra)
 	RenderingServer.environment_set_ssao_quality([RenderingServer.ENV_SSAO_QUALITY_VERY_LOW,
 		RenderingServer.ENV_SSAO_QUALITY_LOW, RenderingServer.ENV_SSAO_QUALITY_MEDIUM,

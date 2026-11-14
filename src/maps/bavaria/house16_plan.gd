@@ -83,16 +83,7 @@ static func build(lb: LevelBuilder, templates, n: Node3D, w: float, d: float) ->
 	lb.box(Vector3(r.get_center().x, 0.92, z_wall), Vector3(r.size.x, 0.05, 0.05), "darkwood", 0, false, n)
 	for x in [r.position.x + 0.1, r.get_center().x, r.end.x - 0.1]:
 		lb.box(Vector3(x, 0.45, z_wall), Vector3(0.05, 0.5, 0.05), "darkwood", 0, false, n)
-	# Kellerlichter (schwach, ohne Schatten), je Kellerhälfte
-	for lp in [Vector3(-2.5, CELLAR_FLOOR + 1.9, 2.4), Vector3(3.0, CELLAR_FLOOR + 1.9, -2.4)]:
-		var lamp := OmniLight3D.new()
-		lamp.name = "Kellerlicht"
-		lamp.light_color = Color(1.0, 0.72, 0.42)
-		lamp.light_energy = 0.7
-		lamp.omni_range = 6.5
-		n.add_child(lamp)
-		lamp.position = lp
-		lb.box(lp + Vector3(0, 0.05, 0), Vector3(0.12, 0.08, 0.12), "darkwood", 0, false, n)
+	# Kellerleuchten (je Kellerhälfte) baut room_lighting.gd aus plan_levels.cellar_floor (Modell + Licht, Tageszyklus).
 	_cellar_decor(lb, templates, n, w, d)
 	_yard_decor(lb, templates, n, w, d)
 	n.set_meta("plan_storeys", ["Keller", "EG", "OG", "Dach"])

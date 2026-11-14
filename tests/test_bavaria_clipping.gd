@@ -45,6 +45,7 @@ func _run() -> void:
 	_check_trenches()
 	await _check_furniture()
 	_check_og_windows()
+	_check_street_lamps()
 	await _check_house_walk()
 	var f := FileAccess.open("res://test_output/bavaria_clipping_report.txt", FileAccess.WRITE)
 	if f:
@@ -508,12 +509,57 @@ func _check_og_windows() -> void:
 		if vis and vis.mesh:
 			for s in vis.mesh.get_surface_count():
 				var mat := vis.mesh.surface_get_material(s) as StandardMaterial3D
-				if mat and mat.has_meta("bavaria_og_glass"):
+				if mat and (mat.has_meta("bavaria_og_glass") or mat.has_meta("bavaria_og_clear_glass")):
 					glass = true
 		if wins.size() < 2 or not glass:
 			missing.append("%s(%d,%s)" % [b.name, wins.size(), glass])
 	report.append("OG_WINDOWS %d Häuser, fehlend: %s" % [n, missing])
 	check(n >= 12 and missing.is_empty(), "Sichtbare OG-Fenster an allen %d intakten Wohnhäusern %s" % [n, missing])
+
+# --- Laternen: Mast frei von Gebäuden/Deko/Bäumen, Leuchtenkopf ragt in keine Wand, Boden trägt ---
+func _check_street_lamps() -> void:
+	var space := m.get_world_3d().direct_space_state
+	var bad: PackedStringArray = []
+	var lamps: Array = get_tree().get_nodes_in_group("bavaria_street_lamps")
+	for l in lamps:
+		var lamp := l as Node3D
+		var kind := String(lamp.get_meta("kind"))
+		if kind == "pole":
+			var pos := lamp.global_position
+			var query := PhysicsShapeQueryParameters3D.new()
+			var cyl := CylinderShape3D.new()
+			cyl.radius = 0.2
+			cyl.height = 3.3
+			query.shape = cyl
+			query.transform = Transform3D(Basis(), pos + Vector3.UP * 1.85)
+			query.collision_mask = 1 | 16
+			query.exclude = [(lamp as CollisionObject3D).get_rid()]
+			for hit in space.intersect_shape(query, 4):
+				bad.append("%s↔%s" % [lamp.name, hit.collider.name])
+			if _house_at(pos, -0.4).size() > 0:
+				bad.append("%s im Gebäude" % lamp.name)
+			var ground := space.intersect_ray(PhysicsRayQueryParameters3D.create(pos + Vector3.UP * 0.3, pos + Vector3.DOWN * 0.5, 1, [(lamp as CollisionObject3D).get_rid()]))
+			if ground.is_empty() or absf(float(ground.position.y) - pos.y) > 0.08:
+				bad.append("%s ohne Bodenkontakt" % lamp.name)
+			var head: Vector3 = lamp.to_global(lamp.get_meta("head"))
+			if not space.intersect_point(_point_query(head), 1).is_empty():
+				bad.append("%s Leuchtenkopf in Geometrie" % lamp.name)
+		else:
+			# Wandleuchte: Halter an der Wand, Schirm frei davor
+			var shade := lamp.to_global(Vector3(0, -0.05, 0.28))
+			if not space.intersect_point(_point_query(shade), 1).is_empty():
+				bad.append("%s Schirm in Wand" % lamp.name)
+			var wall := space.intersect_ray(PhysicsRayQueryParameters3D.create(lamp.to_global(Vector3(0, 0, 0.1)), lamp.to_global(Vector3(0, 0, -0.5)), 1))
+			if wall.is_empty():
+				bad.append("%s ohne Wand dahinter" % lamp.name)
+	report.append("STREET_LAMPS %d, Fehler: %s" % [lamps.size(), bad])
+	check(lamps.size() >= 24 and bad.is_empty(), "Laternen/Wandleuchten ohne Clipping (%d): %s" % [lamps.size(), bad])
+
+func _point_query(p: Vector3) -> PhysicsPointQueryParameters3D:
+	var q := PhysicsPointQueryParameters3D.new()
+	q.position = p
+	q.collision_mask = 1
+	return q
 
 # --- 11/2026: Rundgang um alle intakten Gebäude (Augenhöhe, Kamera) ---
 func _check_house_walk() -> void:
@@ -558,6 +604,13 @@ func _check_house_walk() -> void:
 						continue
 					if open_gate and y < minf(float(h.h) - 0.3, 3.2):
 						continue   # offenes Scheunen-/Schuppentor (gewollte Öffnung)
+					var og_open := false
+					for ow in node.get_meta("og_open_windows", []):
+						var ov: Vector3 = ow
+						if (side < 2) and absf(ov.x - wall_p.x) < 0.6 and absf(ov.z - wall_p.z) < 0.5 and y > ov.y and y < ov.y + 1.4:
+							og_open = true
+					if og_open:
+						continue   # echtes OG-Fenster (Glas, Bewegungssperre Ebene 5) – gewollte Sicht-/Schussöffnung
 					var from: Vector3 = node.to_global(wall_p + out_n * 0.7 + Vector3.UP * y)
 					var to: Vector3 = node.to_global(wall_p - out_n * 0.6 + Vector3.UP * y)
 					var rq := PhysicsRayQueryParameters3D.create(from, to, 1)

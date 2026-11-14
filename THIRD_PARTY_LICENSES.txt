@@ -15,3 +15,8 @@ DANGEROUS AND HIDDEN 2 (unofficial) - Fremdquellen und Lizenzhinweise
    Urheber: Juan Linietsky, Ariel Manzur und die Godot-Mitwirkenden
    Quelle:  https://godotengine.org
    Lizenz:  MIT (https://godotengine.org/license)
+
+------------------------------------------------------------------------
+Sky HDRIs (assets/sky/*.hdr)
+Source: Poly Haven, https://polyhaven.com - Licence: CC0 1.0 (public domain dedication)
+List of files and URLs: docs/SKY_SOURCES.md

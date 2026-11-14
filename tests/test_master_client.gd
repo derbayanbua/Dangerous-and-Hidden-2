@@ -50,11 +50,45 @@ func _run() -> void:
 	await _login_tests()
 	await _server_tests()
 	await _offline()
+	_test_user_files()
 
 	M.master_url = saved_url
 	M.test_master_keys = {}
 	M.set_build_key(null)
 	_finish()
+
+
+## 0.11.5: Testprofil isoliert – Net-/Master-Nutzerdateien liegen bei --autoplay im Testordner, nie unter user://.
+func _test_user_files() -> void:
+	var AUTH = load("res://src/autoload/net_auth.gd")
+	var LAN = load("res://src/ui/lan_menu.gd")
+	var paths := {"known_hosts": AUTH.known_hosts_path(), "favoriten": Net.fav_path(), "kartenlisten": LAN.maplist_path(),
+		"server.key": Net._server_key_path(), "filter": Game.user_file("mp_filter.json"), "dedicated": Game.user_file("dedicated"),
+		"master_account": Game.user_file("master_account")}
+	var bad: Array = []
+	for k in paths:
+		var p := String(paths[k])
+		if not Game.is_test_profiles_dir(p.get_base_dir()) and not p.begins_with(Game.TEST_USER_DIR + "/"):
+			bad.append("%s=%s" % [k, p])
+	check(bad.is_empty(), "Testprofil: Nutzerdateien im Testordner (%s)" % String(paths["known_hosts"]).get_base_dir(), str(bad))
+	check(String(paths["known_hosts"]).begins_with("user://test_master_client/_userdata/"),
+		"known_hosts im --profiles_dir-Testordner", String(paths["known_hosts"]))
+	# Schreiben/Lesen über die echten Funktionen landet im Testordner; die Datei unter user:// bleibt unberührt
+	var real := "user://known_hosts.json"
+	var real_before := FileAccess.get_file_as_string(real) if FileAccess.file_exists(real) else "<fehlt>"
+	AUTH.save_known_hosts({"test.invalid:1": {"sid": "x"}})
+	var real_after := FileAccess.get_file_as_string(real) if FileAccess.file_exists(real) else "<fehlt>"
+	check(AUTH.load_known_hosts().has("test.invalid:1") and FileAccess.file_exists(String(paths["known_hosts"]))
+		and real_before == real_after, "known_hosts: Test schreibt nur in den Testordner")
+	var fav_bak: Array = Net.favorites.duplicate()
+	Net.favorites = ["test.invalid:2"]
+	Net.save_favorites()
+	Net.favorites = []
+	Net.load_favorites()
+	check(Net.favorites == ["test.invalid:2"] and FileAccess.file_exists(Net.fav_path()), "Favoriten: im Testordner gespeichert/geladen")
+	Net.favorites = fav_bak
+	check(Game.profile_dir().begins_with("user://test") and not Game.profile_dir().begins_with("user://profiles"),
+		"Profilordner im Testbereich", Game.profile_dir())
 
 
 func _signature_format(pub: CryptoKey) -> void:

@@ -117,6 +117,8 @@ func _handle(s: StreamPeerTCP, req: Dictionary) -> void:
 	var p: String = req["path"]
 	if req["method"] == "GET" and p == "/v1/servers":
 		_reply(s, 200, _list(req["query"]))
+	elif req["method"] == "GET" and p == "/v1/leaderboard":
+		_leaderboard(s, req["query"])
 	elif p == "/v1/accounts/bind":
 		_bind(s, req)
 	elif p == "/v1/accounts/login":
@@ -164,6 +166,62 @@ func _handle(s: StreamPeerTCP, req: Dictionary) -> void:
 		_reply(s, 204, null)
 	else:
 		_reply(s, 404, {"error": {"code": "NOT_FOUND"}})
+
+
+## 0.11.5 Rangliste (PROTOCOL §15.l): lb_entries = volle sortierte Liste; Antwort mit dem Laufzeit-Testschlüssel des
+## Nachbaus signiert (DH2/v1/leaderboard). lb_mode "ok" | "plain" (unsigniert) | "badsig" (Payload manipuliert) |
+## "wrongkid" (fremder Schlüssel) | "wrongctx" | "stale" (−15 min) | "future" (+10 min) | "garbage" (ohne entries)
+var lb_entries: Array = []
+var lb_mode := "ok"
+
+
+func _leaderboard(s: StreamPeerTCP, query: String) -> void:
+	var q := {}
+	for kv in query.split("&", false):
+		q[kv.get_slice("=", 0)] = kv.get_slice("=", 1)
+	var off := int(q.get("offset", "0"))
+	var lim := int(q.get("limit", "50"))
+	if not String(q.get("offset", "0")).is_valid_int() or not String(q.get("limit", "50")).is_valid_int() \
+			or off < 0 or off > 10000 or lim < 1 or lim > 100:
+		_reply(s, 400, {"error": {"code": "INVALID_FIELD", "message": "offset/limit"}})
+		return
+	var rows: Array = []
+	for i in range(off, mini(off + lim, lb_entries.size())):
+		var e: Dictionary = (lb_entries[i] as Dictionary).duplicate()
+		e["pos"] = i + 1
+		rows.append(e)
+	var body := {"generated_at": int(Time.get_unix_time_from_system()), "total": lb_entries.size(), "offset": off,
+		"limit": lim, "entries": rows}
+	body["v"] = 1
+	match lb_mode:
+		"plain":
+			_reply(s, 200, body)
+		"badsig":
+			var env := envelope("DH2/v1/leaderboard", body)
+			env["payload"] = Marshalls.raw_to_base64(JSON.stringify(body).replace("\"xp\":", "\"xp\":9").to_utf8_buffer())
+			_reply(s, 200, env)
+		"wrongkid":
+			# fremder Schlüssel mit eigenem kid (dem Client unbekannt) / foreign key, unknown kid
+			var k0 := master_key
+			var kid0 := master_kid
+			master_key = _crypto.generate_rsa(2048)
+			master_kid = "m1-" + MC.fingerprint(master_key).substr(0, 16)
+			var env := envelope("DH2/v1/leaderboard", body)
+			master_key = k0
+			master_kid = kid0
+			_reply(s, 200, env)
+		"wrongctx":
+			_reply(s, 200, envelope("DH2/v1/serverlist", body))
+		"stale":
+			body["generated_at"] = int(body["generated_at"]) - 900
+			_reply(s, 200, envelope("DH2/v1/leaderboard", body))
+		"future":
+			body["generated_at"] = int(body["generated_at"]) + 600
+			_reply(s, 200, envelope("DH2/v1/leaderboard", body))
+		"garbage":
+			_reply(s, 200, envelope("DH2/v1/leaderboard", {"v": 1, "generated_at": body["generated_at"], "total": 1}))
+		_:
+			_reply(s, 200, envelope("DH2/v1/leaderboard", body))
 
 
 var reports: Array = []             ## geöffnete Berichts-Payloads (Tests)

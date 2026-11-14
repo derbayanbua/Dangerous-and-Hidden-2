@@ -1058,7 +1058,8 @@ func _update_weapon(delta: float) -> void:
 	if not stance_allows_fire(w.data):
 		can_fire = false
 		if trigger and not _trigger_prev and is_player_controlled and not net_puppet:
-			Events.say("%s: nur %s feuerbar" % [w.data.display_name, "im Liegen" if fire_stance_max(w.data) == 0 else "hockend oder liegend"], 1.5)
+			Events.say(tr("%s: nur im Liegen feuerbar") % w.data.display_name if fire_stance_max(w.data) == 0
+				else tr("%s: nur hockend oder liegend feuerbar") % w.data.display_name, 1.5)
 	if w.data.action == WeaponData.Action.MELEE:
 		# Klick wird gemerkt (auch während der Erholung), gehaltene Taste sticht weiter
 		if trigger and not _tool_trigger_prev:
@@ -1087,7 +1088,11 @@ func _update_weapon(delta: float) -> void:
 ## fmt_actors_items._decode_behaviour) = höchste Haltung, aus der gefeuert werden darf [P: Deutung aus den Werten –
 ## 2 bei allen Gewehren/MPs/Pistolen/Bren/BAR, 0 bei MG 42/MG 15/MG 81, 1 bei Browning 1919/Typ 97/„DO BUNKRU“].
 ## 0 = nur liegend, 1 = liegend oder hockend, 2 = jede Haltung. Gilt nicht in Stellungen/Fahrzeugen.
-const FIRE_STANCE_MAX := {33: 0, 37: 0, 42: 0, 43: 0, 55: 0, 30: 1, 34: 1, 35: 1, 40: 1}
+## 0.11.4 [D]: Zweibeinwaffen nur liegend, in SP und MP (Typ 97 30, ZB 26 19, Bren 29, DP 31 ergänzt); die BAR (28)
+## bleibt in jeder Haltung feuerbar. Dreibein/Bunkerwaffen (Browning 34/35, DO BUNKRU 40) hockend oder liegend.
+## 0.11.4 [D]: bipod weapons prone only, SP and MP; the BAR stays usable in any stance; tripod/bunker weapons
+## crouched or prone.
+const FIRE_STANCE_MAX := {33: 0, 37: 0, 42: 0, 43: 0, 55: 0, 30: 0, 19: 0, 29: 0, 31: 0, 34: 1, 35: 1, 40: 1}
 
 
 static func fire_stance_max(data: WeaponData) -> int:
@@ -1125,6 +1130,8 @@ func _fire_shot(w: Weapon) -> void:
 	if team == TEAM_ALLIED and _CF.active(_CF.steady):
 		spread_deg = 0.0
 	dir = _apply_spread(dir, spread_deg)
+	if is_player_controlled and not veh_gun and not is_instance_valid(mounted):
+		dir = apply_orig_recoil(dir, w)     # 0.11.2 nur Spieler-Controller (KI-Grundwert 0) [B]
 	if team == TEAM_ALLIED and _CF.active(_CF.keep_mag) and w.data.slot != WeaponData.Slot.GRENADE:
 		w.in_mag = mini(w.in_mag + 1, w.data.magazine_size)
 	if w.data.action == WeaponData.Action.ROCKET:
@@ -1532,6 +1539,77 @@ static func _apply_spread(dir: Vector3, spread_deg: float) -> Vector3:
 		return dir
 	# 0.10.7: Verteilung wie hd2.exe 0x545140 (Betrag gleichverteilt bis zum Höchstwinkel) [B]
 	return Ballistics.scatter_orig(dir, tan(deg_to_rad(spread_deg)))
+
+
+## 0.11.2 Grundwert des Spieler-Controllers (hd2.exe vtable+0xEC = 0x542B10, nur Controller Typ 1 = Spieler; alle
+## übrigen Controller liefern 0,0 = 0x524DA0) [B Formel]: Waffenhaltung (Anschlag 0,25 / bereit 0,1 / weg 0,05) +
+## Gang bei Bewegung (Klasse 0x1000 +0,1, 0x2000 +0,5, 0x4000 +0,75, sonst +0) + (100 − Schießen) · 0,01.
+## Zuordnung der Gangklassen zu unseren Gangarten [P]: geduckt = 0x1000 (Schleichen), Laufschritt/Gehen = 0x4000,
+## Schleichmodus stehend = 0x1000, Sprint = 0x10000 (+0), liegend kriechen +0. Ohne Kaderwert gilt Schießen 100 [E].
+func orig_aim_base() -> float:
+	if not is_player_controlled:
+		return 0.0
+	var w := current_weapon()
+	var v := 0.05
+	if w != null and tool == "":
+		v = 0.25 if aiming else 0.1
+	if is_moving():
+		if stance == Stance.CROUCH or move_mode == MoveMode.SNEAK:
+			v += 0.1
+		elif stance == Stance.STAND and move_mode != MoveMode.RUN:
+			v += 0.75
+	var shoot := skill_shooting if skill_shooting >= 0.0 else 100.0
+	return v + (100.0 - clampf(shoot, 0.0, 100.0)) * 0.01
+
+
+## 0.11.2 Zielgenauigkeit wie hd2.exe 0x5A8100 [B]: 0 ohne Waffe bzw. mit Hilfsmittel, sonst Grundwert + dw15 · 0,01
+## (dw15 · 0,01 = tan der Zielstreuung `spread_aim`, s. WeaponDB.orig_aim_spread_deg).
+func orig_accuracy() -> float:
+	var w := current_weapon()
+	if w == null or tool != "":
+		return 0.0
+	return orig_aim_base() + tan(deg_to_rad(maxf(w.data.spread_aim, 0.0)))
+
+
+## 0.11.2 Rückstoßstärke R wie hd2.exe 0x5454D0 [B]; 0 = kein Rückstoß. `offline_sp` = (0x982100 & 7) == 7.
+var orig_recoil_off := false        ## nur Tests (Bahnmessungen ohne Rückstoß)
+
+
+func orig_recoil_strength(w: Weapon) -> float:
+	if w == null or orig_recoil_off:
+		return 0.0
+	var offline_sp := not Net.is_online
+	var diff := Net.difficulty_level()
+	# Ausnahme Sonderschalter (wie die Streuung): nur im Einzelspieler, außer Schwierigkeit 4
+	if offline_sp and team == TEAM_ALLIED and _CF.active(_CF.steady) and diff != 4:
+		return 0.0
+	var r := orig_aim_base()
+	if r == 0.0:
+		return 0.0
+	r *= WeaponDB.recoil_kind_factor(w.data)
+	if aiming:
+		r *= 0.5          # Zielansicht (Flag [0x698500+0x5C]+0x5A) – Zuordnung „Zielen“ [P]
+	r *= 2.0 - clampf(float(int(stamina)) * 0.01, 0.0, 1.0)     # 0x5A62A0 Ausdauer in % (ganzzahlig)
+	if offline_sp:
+		if diff == 1:
+			r *= 0.3
+		elif diff == 2:
+			r *= 0.8
+	return r
+
+
+## 0.11.2 Rückstoß auf die Schussrichtung (hd2.exe 0x5454D0, nach der Streuung 0x545140) [B]:
+## x/z += (Zufall − 0,5) · R · 0,2, y += Zufall · R · 0,2 (nur nach oben), danach normiert.
+func apply_orig_recoil(dir: Vector3, w: Weapon, rng: RandomNumberGenerator = null) -> Vector3:
+	var r := orig_recoil_strength(w)
+	if r <= 0.0:
+		return dir
+	var k := r * 0.2
+	var a := rng.randf() if rng else randf()
+	var b := rng.randf() if rng else randf()
+	var c := rng.randf() if rng else randf()
+	var d := dir + Vector3((a - 0.5) * k, b * k, (c - 0.5) * k)
+	return d.normalized() if d.length_squared() > 1e-8 else dir
 
 
 ## Vom Controller abgeholter Rückstoß (Grad), danach zurückgesetzt.

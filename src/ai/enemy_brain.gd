@@ -944,7 +944,7 @@ func reachable_point(p: Vector3) -> Vector3:
 	var q := NavigationServer3D.map_get_closest_point(map, p)
 	if Vector2(q.x - p.x, q.z - p.z).length() > 4.0:
 		return Vector3.INF
-	var path := NavigationServer3D.map_get_path(map, soldier.global_position, q, true)
+	var path := AIBrain.nav_path(map, soldier.global_position, q)   # B-010c
 	if path.is_empty() or path[path.size() - 1].distance_to(q) > 2.5:
 		return Vector3.INF
 	return q

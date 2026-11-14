@@ -260,6 +260,41 @@ static func _apply_orig_spread() -> void:
 		w.spread_hip = maxf(w.spread_hip, deg)
 
 
+## 0.11.2 Rückstoß hd2.exe 0x5454D0 [B]: Faktor nach Waffenart (Getter vtable+0x10 der Gegenstandsdefinition):
+## 2 → 0,8; 3 → 0,3; 4 → 0,4 (mit Zielfernrohr-Block 2 = Verhalten 5, Absehen < 4 → 1,0); 5 → 0,4; 12 → 0,5; sonst 1,0.
+## Die Zuordnung der Gegenstände zu den Arten 2/3/4/5/12 ist [P] (Pistolen/MPs/Gewehre/leichte MGs/Sturmgewehre);
+## das Zielfernrohr-Kriterium ist [B] (items.sav Block 2 dw2 = Absehen 0–3 nur bei 13/15/16/17).
+const RECOIL_KIND := {0: 2, 1: 2, 2: 2, 3: 2, 5: 2, 260: 2, 261: 2,
+	18: 3, 20: 3, 21: 3, 22: 3, 24: 3, 25: 3,
+	4: 4, 6: 4, 7: 4, 8: 4, 10: 4, 11: 4, 12: 4, 13: 4, 14: 4, 15: 4, 16: 4, 17: 4, 23: 4, 262: 4, 263: 4,
+	19: 5, 29: 5, 30: 5, 31: 5, 26: 12, 28: 12}
+const SCOPED_ITEMS := [13, 15, 16, 17]
+
+
+## Waffenart für 0x5454D0 (0 = keine der gelisteten Arten → Faktor 1,0). Ohne Originalgegenstand nach Platz/Feuerart [E].
+static func recoil_kind(w: WeaponData) -> int:
+	if w == null:
+		return 0
+	var item := orig_item_of(w.id)
+	if item >= 0:
+		return int(RECOIL_KIND.get(item, 0))
+	if w.slot == WeaponData.Slot.SIDEARM:
+		return 2
+	if w.slot != WeaponData.Slot.PRIMARY:
+		return 0
+	return 3 if w.action == WeaponData.Action.AUTO else 4
+
+
+## Rückstoßfaktor der Waffenart (0x5454D0 Fallunterscheidung) [B Faktoren].
+static func recoil_kind_factor(w: WeaponData) -> float:
+	var k := recoil_kind(w)
+	# 0.11.4: der ZF-Zweig (Faktor 1,0) ist nicht belegt (Sprung 0x5457D4 ungeprüft) und ließ Springfield/K98-ZF
+	# bis ~3° hochschlagen. Bis zur Belegung gilt für ZF-Gewehre derselbe Faktor wie für Gewehre (0,4) [E].
+	# 0.11.4: the scope branch (factor 1.0) is unverified and threw scoped rifles up to ~3°; until verified
+	# scoped rifles use the rifle factor (0.4) [E].
+	return float({2: 0.8, 3: 0.3, 4: 0.4, 5: 0.4, 12: 0.5}.get(k, 1.0))
+
+
 static func from_orig(item: int, mounted := false) -> WeaponData:
 	if _cache.is_empty():
 		_build()

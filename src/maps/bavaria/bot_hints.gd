@@ -4,7 +4,7 @@ extends RefCounted
 ## Hinweisarten:
 ##   trench  – Schützenauftritt, stehend
 ##   cover   – hinter Felddeckung/Wrack, hockend
-##   window  – Fensterplatz im EG, stehend
+##   window  – Fensterplatz im EG bzw. OG der Treppenhäuser („upper“), stehend
 ##   house   – Haus 16 EG/OG/Keller, hockend
 ##   high    – Dach-/Baumstand, hockend
 ##   emplacement – Platz an Flak/MG42 mit Schlüssel "emplacement"
@@ -70,6 +70,9 @@ func build(m) -> void:
 		for w in house.get_meta("shooting_windows", []):
 			var wl: Vector3 = w
 			raw.append({"pos": house.to_global(Vector3(wl.x, 0.1, wl.z - signf(wl.z) * 0.7)), "kind": "window", "stance": STAND})
+		for w in house.get_meta("og_shooting_windows", []):   # echte OG-Fenster der Treppenhäuser
+			var wl: Vector3 = w
+			raw.append({"pos": house.to_global(Vector3(wl.x, wl.y + 0.05, wl.z - signf(wl.z) * 0.7)), "kind": "window", "stance": STAND, "upper": true})
 		if String(house.name) == "haus_16":
 			for lp in [Vector3(-2.5, 0.1, 2.0), Vector3(2.5, 0.1, 2.0), Vector3(-2.5, 3.3, 1.5), Vector3(2.5, 3.3, -1.5),
 					Vector3(-1.0, -2.3, 1.0)]:

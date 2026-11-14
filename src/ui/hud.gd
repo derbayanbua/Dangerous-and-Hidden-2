@@ -26,6 +26,8 @@ var _obj_panel: PanelContainer
 var _obj_label: Label
 var _prompt: Label
 var _crosshair: Control
+var _xh_off := 0.0           ## 0.11.2 Fadenkreuzabstand (0x4AA840, geglättet)
+var _xh_ms := 0
 var _compass: Label
 var _alarm_label: Label
 var _center_label: Label
@@ -315,15 +317,45 @@ func _draw_crosshair() -> void:
 	var vp_h := get_viewport().get_visible_rect().size.y
 	# Streuwinkel in Pixel umrechnen
 	var px := tan(deg_to_rad(spread)) / tan(deg_to_rad(cam.fov * 0.5)) * vp_h * 0.5
+	# 0.11.2 Spieler: Abstand der vier Marken wie hd2.exe 0x4AA840 [B]: Ziel = Genauigkeit (0x5A8100) · 0,025 + 0,01,
+	# Annäherung 0,05 je Sekunde; Einheit = halbe Bildhöhe [P] (Bildschirmeinheit der HUD-Frames nicht belegt).
+	if s.is_player_controlled and s.orig_accuracy() > 0.0:
+		var target := s.orig_accuracy() * 0.025 + 0.01
+		var dt := clampf(float(Time.get_ticks_msec() - _xh_ms) * 0.001, 0.0, 0.5)
+		_xh_ms = Time.get_ticks_msec()
+		_xh_off = move_toward(_xh_off, target, dt * 0.05) if _xh_off > 0.0 else target
+		px = _xh_off * vp_h * 0.5
 	px = clampf(px, 3.0, 200.0)
 	var col := Color(1, 1, 1, 0.8)
 	var l := 8.0
 	# Hinweiszeile unter dem Fadenkreuz halten (große MG-Streuung: untere Marke lag sonst im Text, „MG 42:¦verlassen“)
 	_prompt.offset_top = maxf(60.0, px + l + 10.0)      # Versatz zum Bildmittelpunkt (Anker Mitte)
 	_prompt.offset_bottom = _prompt.offset_top + 30.0
+	# 0.11.4: Bordwaffe – Kreuz auf den echten Treffpunkt der Laufachse projizieren (Turm dreht träge nach,
+	# 3. Person versetzt). / Vehicle weapon: project the crosshair onto the real barrel hit point.
+	var o := _vehicle_aim_offset(s, cam)
 	for d in [Vector2.RIGHT, Vector2.LEFT, Vector2.UP, Vector2.DOWN]:
-		_crosshair.draw_line(d * px, d * (px + l), col, 2.0)
-	_crosshair.draw_circle(Vector2.ZERO, 1.5, col)
+		_crosshair.draw_line(o + d * px, o + d * (px + l), col, 2.0)
+	_crosshair.draw_circle(o, 1.5, col)
+	if o.length() > 6.0:     # blasse Blickmitte zur Orientierung / faint view centre
+		_crosshair.draw_circle(Vector2.ZERO, 2.0, Color(1, 1, 1, 0.3))
+
+
+func _vehicle_aim_offset(s, cam: Camera3D) -> Vector2:
+	var v = s.vehicle
+	if v == null or not is_instance_valid(v) or not v.has_method("turret_dir") or not v.has_method("muzzle_point"):
+		return Vector2.ZERO
+	if not (v.turrets as Dictionary).has(s.seat_index):
+		return Vector2.ZERO
+	var mp: Vector3 = v.muzzle_point(s.seat_index)
+	var dir: Vector3 = v.turret_dir(s.seat_index)
+	var q := PhysicsRayQueryParameters3D.create(mp, mp + dir * 400.0, 1)
+	q.exclude = [v.get_rid()]
+	var hit := (v as Node3D).get_world_3d().direct_space_state.intersect_ray(q)
+	var wp: Vector3 = hit.position if not hit.is_empty() else mp + dir * 400.0
+	if cam.is_position_behind(wp):
+		return Vector2.ZERO
+	return cam.unproject_position(wp) - get_viewport().get_visible_rect().size * 0.5
 
 
 func _process(_delta: float) -> void:

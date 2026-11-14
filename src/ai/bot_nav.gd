@@ -58,7 +58,7 @@ static func closest(n: Node3D, p: Vector3) -> Vector3:
 static func path(n: Node3D, a: Vector3, b: Vector3) -> PackedVector3Array:
 	if not nav_ready(n):
 		return PackedVector3Array()
-	return NavigationServer3D.map_get_path(map_of(n), a, b, true)
+	return AIBrain.nav_path(map_of(n), a, b)   # B-010c: Suchgrenze angehoben
 
 
 static func length(pts: PackedVector3Array) -> float:
@@ -136,6 +136,12 @@ func plan(s: Soldier, to: Vector3, threat: Vector3, use_cover: bool) -> bool:
 			waypoints.append(to)
 			route_vias += 1
 			return reachable
+	# 0.11.4: Pfad mit unendlichem/NaN-Punkt (Navigationsfehler „most reachable polygons“) ließ die Deckungsschleife
+	# endlos laufen (next_at < inf) – Demo-Server-Hänger. Nur endliche Pfade, Schleife zusätzlich begrenzt.
+	# 0.11.4: a path with an infinite/NaN point made the cover loop run forever (demo server hang).
+	if not is_finite(path_len) or path_len > 5000.0:
+		waypoints.append(to)
+		return reachable
 	if use_cover and path_len > COVER_SEG * 1.6:
 		var space := s.get_world_3d().direct_space_state
 		var acc := 0.0
@@ -145,7 +151,9 @@ func plan(s: Soldier, to: Vector3, threat: Vector3, use_cover: bool) -> bool:
 			var a := pts[i - 1]
 			var b := pts[i]
 			var seg := a.distance_to(b)
-			while acc + seg >= next_at and next_at < path_len - 10.0:
+			var guard := 0
+			while acc + seg >= next_at and next_at < path_len - 10.0 and guard < 64:
+				guard += 1
 				var p := a.lerp(b, (next_at - acc) / maxf(seg, 0.001))
 				var c := _cover_near(s, space, p, threat)
 				if c.is_finite() and c.distance_to(last_wp) > 7.0:
@@ -260,6 +268,66 @@ func sidestep(s: Soldier, toward: Vector3) -> void:
 		perp = -perp
 	side_pos = closest(s, s.global_position - d.normalized() * 3.0)
 	side_t = 2.0
+
+
+## Ecken nicht schneiden: zwei schräge Fühlerstrahlen (Hüfthöhe, 0,9 m) alle 0,15 s; trifft einer eine Wand,
+## schiebt der Rückgabevektor seitlich davon weg. Höchstens 2 Strahlen je 0,15 s.
+## Don't cut corners: two angled whisker rays (hip height, 0.9 m) every 0.15 s; if one hits a wall the returned
+## vector pushes sideways away from it. At most 2 rays per 0.15 s.
+var _wh_t := 0.0
+var _wh_push := Vector3.ZERO
+
+func wall_push(s: Soldier, dir: Vector3, delta: float) -> Vector3:
+	_wh_t -= delta
+	if _wh_t > 0.0:
+		return _wh_push
+	_wh_t = 0.15
+	_wh_push = Vector3.ZERO
+	dir.y = 0.0
+	if dir.length() < 0.1:
+		return _wh_push
+	dir = dir.normalized()
+	var space := s.get_world_3d().direct_space_state
+	var o := s.global_position + Vector3.UP * 0.6
+	var right := Vector3(-dir.z, 0, dir.x)
+	for side: float in [1.0, -1.0]:
+		var probe := (dir * 0.7 + right * side * 0.5).normalized() * 0.9
+		var q := PhysicsRayQueryParameters3D.create(o, o + probe, 1, [s.get_rid()])
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty():
+			var k := 1.0 - o.distance_to(hit["position"]) / 0.9
+			_wh_push -= right * side * clampf(k, 0.2, 1.0)
+	return _wh_push
+
+
+## Flanken-Zwischenpunkt: Netzpunkt etwa auf halbem Weg, vom Gegner weg versetzt und von ihm aus verdeckt, damit
+## der Flankierer nicht in gerader Linie durchs Schussfeld läuft. Billige Prüfungen (Abstand) vor Strahl, Strahl vor
+## Netzpfad; höchstens 3 Versuche. INF = kein geeigneter Punkt (dann direkter Netzweg).
+## Flank via-point: navmesh point near the halfway mark, offset away from the enemy and hidden from him, so the
+## flanker does not run straight through the line of fire. Cheap checks (distance) before ray, ray before nav path;
+## at most 3 tries. INF = none found (then the direct nav path is used).
+static func flank_via(s: Soldier, from: Vector3, to: Vector3, threat: Vector3) -> Vector3:
+	if not threat.is_finite() or not nav_ready(s) or flat(from, to) < 8.0:
+		return Vector3.INF
+	var mid := from.lerp(to, 0.5)
+	var away := mid - threat
+	away.y = 0.0
+	if away.length() < 0.1:
+		return Vector3.INF
+	away = away.normalized()
+	var space := s.get_world_3d().direct_space_state
+	var direct := flat(from, to)
+	for k in 3:
+		var c := closest(s, mid + away * (2.0 + 2.5 * float(k)))
+		if flat(c, from) < 3.0 or flat(c, to) < 3.0 or absf(c.y - mid.y) > 3.0:
+			continue
+		var q := PhysicsRayQueryParameters3D.create(threat + Vector3.UP * 1.5, c + Vector3.UP * 1.0, 1)
+		if space.intersect_ray(q).is_empty():
+			continue           # vom Gegner aus sichtbar / visible from the enemy
+		var l := path_cost(s, from, c) + path_cost(s, c, to)
+		if is_finite(l) and l < direct * 2.5 + 10.0:
+			return c
+	return Vector3.INF
 
 
 ## Letzte Abhilfe nach > 15 s ohne Fortschritt: Soldat liegt neben dem Netz (z. B. in einer Kollisionslücke

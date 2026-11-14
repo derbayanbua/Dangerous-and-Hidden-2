@@ -60,6 +60,12 @@ func _run() -> void:
 			check(await wait_for(func(): return m.prank_mines.initialized and m.prank_mines.spent[0]),
 				"Später Client erhält verbrauchte Mine ohne erneute Auslösung")
 			check(m.prank_mines.effect_count==0,"Beitritt spielt alten Minenrauch/-ton nicht erneut")
+			# Tageszyklus: Host hat vor dem Beitritt auf 2:30 Uhr gestellt (Zyklus 240 min); Client übernimmt Serverzeit.
+			check(await wait_for(func(): return m.day_night.synced, 20.0),"Client erhält die Tageszeit vom Server (später Beitritt)")
+			check(is_equal_approx(m.day_night.cycle_min,240.0),"Client übernimmt die Zyklusdauer des Servers")
+			check(m.day_night.hour>2.3 and m.day_night.hour<3.8,"Client-Uhrzeit = Serverzeit (Nacht), nicht eigene Startzeit: %.2f"%m.day_night.hour)
+			check(await wait_for(func(): return m.room_lighting.initialized and m.room_lighting.lights_on()==m.room_lighting.coverage.size(),20.0)
+				and m.street_lamps.lights_on()==m.street_lamps.lights.size(),"Client: nachts alle Raumlichter und Laternen an")
 			var start := me.global_position
 			Input.action_press("move_forward")
 			await get_tree().create_timer(1.2).timeout
@@ -114,7 +120,8 @@ func _run() -> void:
 	Net.move_check = false   # B-022: Testclient versetzt seine Figur direkt an Flak/MG42/Leitern – kein Spielzug
 	check(Net.host({"name":"Bavaria Test", "map":map_id, "mode":game_mode,
 		"port":Net.PORT+42, "max_players":8, "time_limit_min":0, "score_limit":0, "warmup_s":0, "respawn_s":5,
-		"bots_per_team":1, "password":"", "allow_vehicles":false, "flood_protect":false}), "Server mit angefordertem Spielmodus gestartet")
+		"bots_per_team":1, "password":"", "allow_vehicles":false, "flood_protect":false,
+		"day_start_h":22, "day_cycle_min":240}), "Server mit angefordertem Spielmodus gestartet")
 	var ready := await wait_for(func(): return Game.current_mission() != null and Net._soldiers.has(1) and Net._soldiers.size() >= 3)
 	check(ready, "Host und zwei vorhandene MP-Bots erzeugt")
 	if not ready:
@@ -131,6 +138,9 @@ func _run() -> void:
 			Net._soldiers[id].process_mode = Node.PROCESS_MODE_DISABLED
 	check(await wait_for(func(): return m.prank_mines.initialized),"Zehn Minen auf Host bereit")
 	m.prank_mines.trigger(0) # Vor Clientbeitritt: Zustand muss ohne Effektwiederholung nachkommen.
+	check(is_equal_approx(m.day_night.start_hour,22.0) and is_equal_approx(m.day_night.cycle_min,240.0),
+		"Host übernimmt Startzeit/Zyklus aus den Server-Einstellungen")
+	m.day_night.set_hour(2.5)   # vor dem Beitritt verstellt: Client muss diese Zeit bekommen, nicht 22 Uhr
 	# Exportvorlagen verbieten --path; sie laden das eingebettete Projekt selbst.
 	var args := ["--headless", "--log-file",
 		ProjectSettings.globalize_path("res://test_output/bavaria_mp_client.log"), "--", "--autoplay=test_bavaria_mp", "--bavaria_peer=1"]

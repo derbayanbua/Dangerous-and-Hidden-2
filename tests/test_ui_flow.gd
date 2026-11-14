@@ -27,6 +27,117 @@ func btn(name_part: String) -> Button:
 	return null
 
 
+func sp(a: String) -> String:
+	return str(InputSetup.spec_of(a))
+
+
+func _key(code: int) -> InputEventKey:
+	var k := InputEventKey.new()
+	k.physical_keycode = code
+	k.pressed = true
+	return k
+
+
+## Tastenmenü: Umbelegen (Taste/Maus/Rad), Tausch, Löschen, Esc, Blättern, Standard, Speichern → Neu laden.
+## Key menu: rebind (key/mouse/wheel), swap, clear, Esc, paging, defaults, save → reload.
+func _keys_rebind_roundtrip(menu) -> void:
+	InputSetup.reset_defaults()
+	var listed := {}
+	for cat in menu.KEY_CATEGORIES:
+		for a in cat[1]:
+			listed[a] = true
+	var missing := InputSetup.ACTIONS.keys().filter(func(a): return not listed.has(a))
+	check(missing.is_empty(), "Tastenmenü: alle InputSetup-Aktionen erreichbar", str(missing))
+	menu.options_page = "keys"
+	menu._keys_category = 0
+	menu._keys_part = 0
+	menu.show_menu("options")
+	await frames(2)
+	# Blättern über alle Unterseiten: jede Aktion erscheint als Zeile, danach wieder Seite 1
+	var seen := {}
+	var pages := 0
+	for c in menu.KEY_CATEGORIES.size():
+		pages += menu._keys_parts(c)
+	for i in pages:
+		for b in menu.find_children("key_*", "Button", true, false):
+			seen[String(b.name).substr(4)] = true
+		(menu.find_child("bkeys_page", true, false) as Button).pressed.emit()
+		await frames(2)
+	check(seen.size() == InputSetup.ACTIONS.size() and menu._keys_category == 0 and menu._keys_part == 0,
+		"Blättern: %d Seiten zeigen alle Aktionen, danach Seite 1" % pages, "%d/%d" % [seen.size(), InputSetup.ACTIONS.size()])
+	menu._keys_prev_page()
+	check(menu._keys_category == menu.KEY_CATEGORIES.size() - 1 and menu._keys_part == menu._keys_parts(menu._keys_category) - 1,
+		"Zurückblättern von Seite 1 → letzte Seite")
+	menu._keys_category = 0
+	menu._keys_part = 0
+	menu.show_menu("options")
+	await frames(2)
+	# Zeilen liegen über den Standard-Knöpfen (Stage-Koordinaten, Auflösung skaliert nur die Bühne)
+	var low := 0.0
+	for b in menu.find_children("key_*", "Button", true, false):
+		low = maxf(low, (b as Button).position.y + (b as Button).size.y)
+	check(low <= 626.0, "Belegungszeilen enden vor STANDARD-Knöpfen", str(low))
+	# Umbelegen per Menü: Zeile anklicken, Taste drücken
+	var row := menu.find_child("key_lean_left", true, false) as Button
+	var lean = InputSetup.spec_of("lean_left")
+	row.pressed.emit()
+	await frames(2)
+	check(menu._waiting_action == "lean_left", "Zeile anklicken wartet auf Taste")
+	menu._input(_key(KEY_ESCAPE))
+	await frames(2)
+	check(menu._waiting_action == "" and sp("lean_left") == str(lean), "Esc bricht ab, Belegung unverändert")
+	menu._waiting_action = "jump"
+	menu._input(_key(KEY_K))
+	await frames(2)
+	check(sp("jump") == str(KEY_K), "Umbelegen mit Tastatur (K)")
+	var wheel := InputEventMouseButton.new()
+	wheel.button_index = MOUSE_BUTTON_WHEEL_UP
+	wheel.pressed = true
+	menu._waiting_action = "climb"
+	menu._input(wheel)
+	var mb := InputEventMouseButton.new()
+	mb.button_index = MOUSE_BUTTON_XBUTTON1
+	mb.pressed = true
+	menu._waiting_action = "speed_up"
+	menu._input(mb)
+	await frames(2)
+	check(sp("climb") == "mouse:%d" % MOUSE_BUTTON_WHEEL_UP and InputSetup.binding_text("climb") == "Rad hoch"
+		and sp("speed_up") == "mouse:%d" % MOUSE_BUTTON_XBUTTON1, "Umbelegen mit Mausrad und Maustaste")
+	# Doppelbelegung: jump bekommt W → move_forward erhält K (Tausch)
+	var swapped: Array = InputSetup.rebind("jump", _key(KEY_W))
+	check(swapped == ["move_forward"] and sp("move_forward") == str(KEY_K) and sp("jump") == str(KEY_W),
+		"Doppelbelegung wird getauscht", str(swapped))
+	check(InputSetup.conflicts("tac_regroup", KEY_W).is_empty(), "Taktik-Kontext kollidiert nicht mit Spieltasten")
+	# Löschen per Rechtsklick
+	menu.show_menu("options")
+	await frames(2)
+	var rc := InputEventMouseButton.new()
+	rc.button_index = MOUSE_BUTTON_RIGHT
+	rc.pressed = true
+	(menu.find_child("key_run", true, false) as Button).gui_input.emit(rc)
+	await frames(2)
+	check(sp("run") == "<null>" and InputSetup.binding_text("run") == "—", "Rechtsklick löscht Taste (unbelegt)")
+	# Speichern → Neustart simulieren (Standard laden) → gespeicherte Belegung lesen
+	var path := "user://test_ui_flow/keys_roundtrip.cfg"
+	DirAccess.make_dir_recursive_absolute("user://test_ui_flow")
+	var cfg := ConfigFile.new()
+	InputSetup.write_keys(cfg)
+	check(cfg.save(path) == OK, "Belegung gespeichert")
+	InputSetup.read_keys(null)
+	check(sp("jump") == "<null>" and sp("run") != "<null>", "Neustart: Standardbelegung aktiv")
+	var cfg2 := ConfigFile.new()
+	cfg2.load(path)
+	InputSetup.read_keys(cfg2)
+	check(sp("jump") == str(KEY_W) and sp("move_forward") == str(KEY_K) and sp("run") == "<null>"
+		and sp("climb") == "mouse:%d" % MOUSE_BUTTON_WHEEL_UP, "Neu laden: Umbelegung, Tausch, unbelegt und Mausrad erhalten")
+	# Standard wiederherstellen per Menüknopf
+	(menu.find_child("bdefault1", true, false) as Button).pressed.emit()
+	await frames(2)
+	check(sp("move_forward") == str(KEY_W) and sp("jump") == "<null>", "STANDARD-EINSTELLUNGEN 1 stellt Vorgabe her")
+	DirAccess.remove_absolute(path)
+	menu.options_page = "graphics"
+
+
 func _run() -> void:
 	await frames(10)
 	var menu := get_tree().current_scene
@@ -228,5 +339,6 @@ func _run() -> void:
 	check(fm.orig.requested == ["en01"], "Held der Gegenseite gewählt → Held der eigenen Armee (en01)", str(fm.orig.requested))
 	s.queue_free()
 	fm.free()
+	await _keys_rebind_roundtrip(menu)
 	Game.delete_profile("UiFlow")
 	_finish()

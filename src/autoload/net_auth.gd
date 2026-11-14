@@ -50,6 +50,8 @@ var _cnonce := ""
 ## Host
 var _pending := {}                   ## peer -> {ip, t, hn, acc, join}
 var _ip_req := {}                    ## ip -> [ticks]
+var _live := {}                      ## peer -> true, solange ENet ihn kennt / while ENet knows the peer
+var _dropping := {}                  ## peer -> true, Trennung bereits geplant / drop already scheduled
 
 
 func _mp() -> SceneMultiplayer:
@@ -77,6 +79,15 @@ func install() -> void:
 	if not m.peer_authenticating.is_connected(_on_authenticating):
 		m.peer_authenticating.connect(_on_authenticating)
 		m.peer_authentication_failed.connect(_on_auth_failed)
+	if not m.peer_disconnected.is_connected(_on_peer_gone):
+		m.peer_disconnected.connect(_on_peer_gone)
+
+
+## Peer ist weg (getrennt oder Auth fehlgeschlagen): kein weiteres disconnect_peer mehr.
+## Peer is gone (disconnected or auth failed): no further disconnect_peer.
+func _on_peer_gone(peer: int) -> void:
+	_live.erase(peer)
+	_pending.erase(peer)
 
 
 func reset() -> void:
@@ -127,18 +138,38 @@ func _send_error(peer: int, code: int, extra := {}) -> void:
 	_drop_later(peer)
 
 
+## Trennt einen Peer verzögert – höchstens einmal und nur, solange er noch verbunden ist
+## (v0.11.3-Demo: ~200 Fehler „disconnect_peer … !peers.has“ und freigegebene Lambda-Captures).
+## Drops a peer after a delay – at most once and only while it is still connected.
 func _drop_later(peer: int, ms := 200) -> void:
-	get_tree().create_timer(ms / 1000.0, true, false, true).timeout.connect(func():
+	if _dropping.has(peer) or not _live.has(peer):
 		_pending.erase(peer)
-		var p: ENetMultiplayerPeer = net._peer if net else null
-		if p and p.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED:
-			p.disconnect_peer(peer))
+		return
+	_dropping[peer] = true
+	var me: WeakRef = weakref(self)
+	get_tree().create_timer(ms / 1000.0, true, false, true).timeout.connect(func():
+		var a = me.get_ref()
+		if a == null:
+			return
+		a._drop_now(peer))
+
+
+func _drop_now(peer: int) -> void:
+	_dropping.erase(peer)
+	_pending.erase(peer)
+	if not _live.has(peer):
+		return
+	_live.erase(peer)
+	var p: ENetMultiplayerPeer = net._peer if net != null and is_instance_valid(net) else null
+	if p and p.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED:
+		p.disconnect_peer(peer)
 
 
 # ------------------------------------------------------------------ gemeinsamer Rückruf
 
 func _on_authenticating(peer: int) -> void:
 	if multiplayer.is_server():
+		_live[peer] = true
 		var ip := _peer_ip(peer)
 		var same := _pending.values().filter(func(e): return e["ip"] == ip).size()
 		var nojoin := _pending.values().filter(func(e): return not e["join"]).size()
@@ -155,6 +186,7 @@ func _on_auth_failed(peer: int) -> void:
 	if multiplayer.is_server() and _pending.has(peer) and net:
 		net._reject_log(peer, "peer", "Anmeldung (ENet-Auth) nicht abgeschlossen -> getrennt")
 	_pending.erase(peer)
+	_live.erase(peer)
 	if not multiplayer.is_server() and peer == 1 and net:
 		net.auth_failed("TIMEOUT", "")
 
@@ -401,14 +433,20 @@ static func fingerprint_text(sid: String) -> String:
 	return "%s-%s-%s-%s" % [s.substr(0, 4), s.substr(4, 4), s.substr(8, 4), s.substr(12, 4)]
 
 
+## Pfad der known_hosts-Datei (0.11.5: in Tests im Testprofil, Game.user_path).
+static func known_hosts_path() -> String:
+	return Game.user_path(KNOWN_HOSTS.trim_prefix("user://"))
+
+
 static func load_known_hosts() -> Dictionary:
-	if not FileAccess.file_exists(KNOWN_HOSTS):
+	var p := known_hosts_path()
+	if not FileAccess.file_exists(p):
 		return {}
-	var d = JSON.parse_string(FileAccess.get_file_as_string(KNOWN_HOSTS))
+	var d = JSON.parse_string(FileAccess.get_file_as_string(p))
 	return d if typeof(d) == TYPE_DICTIONARY else {}
 
 
 static func save_known_hosts(d: Dictionary) -> void:
-	var f := FileAccess.open(KNOWN_HOSTS, FileAccess.WRITE)
+	var f := FileAccess.open(known_hosts_path(), FileAccess.WRITE)
 	if f:
 		f.store_string(JSON.stringify(d, "\t"))

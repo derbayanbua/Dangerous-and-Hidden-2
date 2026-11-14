@@ -379,7 +379,7 @@ func _phase_hits() -> void:
 	target.damaged.connect(cb)
 	var classes := [["Pistole", "colt", WeaponData.Slot.SIDEARM], ["MP", "sten", WeaponData.Slot.PRIMARY],
 		["Gewehr", "enfield", WeaponData.Slot.PRIMARY], ["Zielfernrohr", "o_17", WeaponData.Slot.PRIMARY],
-		["MG", "bren", WeaponData.Slot.PRIMARY]]
+		["MG", "o_28", WeaponData.Slot.PRIMARY]]   # 0.11.4 [D]: Bren nur liegend -> stehend mit BAR
 	var diff := Game.difficulty()
 	for c in classes:
 		var prim: String = c[1] if c[2] == WeaponData.Slot.PRIMARY else "enfield"

@@ -5,12 +5,17 @@ extends OrigScreen
 ## dediziert/Voice, Knöpfe SPIEL BEITRETEN 2310, SERVER ERSTELLEN 2311, SPIEL-INFO 2312, ZURÜCK 2313, SERVER-IP
 ## EINGEBEN 2308, SERVER-FILTER 2309, LISTE NEU EINLESEN/AKTUALISIEREN 2325/2327, FAVORITEN/GESAMTLISTE 20100/20101,
 ## ZU FAVORITEN HINZUFÜGEN/AUS FAVORITEN LÖSCHEN 20102/20103, Statuszeile text_online).
+## LAN (lan_mode, Titel T2320 „MEHRSPIELER-SPIEL - LAN“): dasselbe Modell, Liste aus dem UDP-Broadcast (Net.servers),
+## LISTE NEU EINLESEN/AKTUALISIEREN mit HALT (T2326/2328), Passwort-Server fragen vor dem Beitritt nach dem Passwort.
+## LAN (lan_mode, title T2320): same model, list from the UDP broadcast (Net.servers), reread/update with HALT,
+## password servers ask for the password before joining.
 ## Daten: Masterserver über MasterLink (echtes Modul /root/Master oder Ersatz); Favoriten/Filter/Spiel-Info und
 ## Beitritt über das LanMenu (Eltern). Nicht-rankede Server (ranked = false): „!“ in der Zeile und Rückfrage vor dem
 ## Beitritt. Das GameSpy-Logo des Modells wird nicht gezeichnet (kein GameSpy).
 
 signal create_requested
 signal back_requested
+signal leaderboard_requested       ## 0.11.5: RANGLISTE (nur Internet)
 
 const ROW_Y0 := 221.0
 const ROW_H := 32.6
@@ -31,11 +36,25 @@ var sort_key := ""
 var status_text := ""
 var hidden_count := 0
 var _ip_panel: Control
+var lan_mode := false              ## LAN-Liste statt Masterserver / LAN list instead of the master server
+var selected_key := ""             ## Auswahl über Aktualisierungen hinweg / selection kept across list updates
+var _sig := ""                     ## Inhalt der letzten Liste (nur bei Änderung neu aufbauen) / last list signature
 
 
-func open(lan_menu: Node) -> void:
+func open(lan_menu: Node, lan_only := false) -> void:
 	lan = lan_menu
+	lan_mode = lan_only
 	setup_stage()
+	if not Net.scan_changed.is_connected(_on_scan):
+		Net.scan_changed.connect(_on_scan)
+	if not Net.status_changed.is_connected(_on_net_status):
+		Net.status_changed.connect(_on_net_status)
+	if lan_mode:
+		# LAN: Liste aus Net.servers (Broadcast, jede Sekunde) / LAN: list from Net.servers (broadcast)
+		if not Net.servers_updated.is_connected(_on_fav_update):
+			Net.servers_updated.connect(_on_fav_update)
+		build()
+		return
 	master = MasterLink.source(get_tree())
 	if master.has_signal("servers_updated") and not master.servers_updated.is_connected(_on_master_list):
 		master.servers_updated.connect(_on_master_list)
@@ -49,6 +68,10 @@ func open(lan_menu: Node) -> void:
 
 
 func _exit_tree() -> void:
+	if Net.scan_changed.is_connected(_on_scan):
+		Net.scan_changed.disconnect(_on_scan)
+	if Net.status_changed.is_connected(_on_net_status):
+		Net.status_changed.disconnect(_on_net_status)
 	if master and is_instance_valid(master):
 		if master.servers_updated.is_connected(_on_master_list):
 			master.servers_updated.disconnect(_on_master_list)
@@ -82,12 +105,69 @@ func _on_master_status(state, text = null) -> void:
 
 
 func _on_fav_update() -> void:
-	if favorites_view:
+	if favorites_view or lan_mode:
+		_rebuild_if_changed()
+
+
+## Nur neu aufbauen, wenn sich die angezeigte Liste geändert hat und kein Eingabefeld/Dialog offen ist
+## Rebuild only when the shown list changed and no entry panel/dialog is open
+func _rebuild_if_changed() -> void:
+	if is_instance_valid(_ip_panel) or (is_instance_valid(stage) and stage.get_node_or_null("Dialog") != null):
+		return
+	# nicht während eines Klicks neu aufbauen (Knopf ginge verloren) / never rebuild mid-click
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		return
+	if _list_signature() != _sig:
 		build()
+
+
+func _list_signature() -> String:
+	var parts: PackedStringArray = [str(favorites_view)]
+	for s in source_list():
+		parts.append("%s|%s|%s|%s|%s|%s|%s|%s" % [key_of(s), s.get("name", ""), s.get("map", ""), s.get("mode", 0),
+			s.get("ping", -1), s.get("players", 0), s.get("max", 0), s.get("pw", false)])
+	return ";".join(parts)
+
+
+## Schlüssel eines Eintrags (ip:port) / entry key
+static func key_of(s: Dictionary) -> String:
+	return String(s.get("key", "%s:%d" % [String(s.get("ip", "")), int(s.get("port", Net.PORT))]))
+
+
+## LISTE NEU EINLESEN/AKTUALISIEREN ↔ HALT ohne Neuaufbau umbenennen / relabel without rebuilding
+func _on_scan() -> void:
+	if not is_instance_valid(stage):
+		return
+	var rb := stage.get_node_or_null("RereadButton") as Button
+	var ub := stage.get_node_or_null("UpdateButton") as Button
+	if rb:
+		rb.text = _reread_text()
+	if ub:
+		ub.text = _update_text()
+
+
+func _net_scan() -> bool:
+	return lan_mode or favorites_view
+
+
+func _reread_text() -> String:
+	return SAS.text(2326, "HALT") if lan_mode and Net.scan_kind == "reread" else SAS.text(2325, "LISTE NEU EINLESEN")
+
+
+func _update_text() -> String:
+	return SAS.text(2328, "HALT") if lan_mode and Net.scan_kind == "update" else SAS.text(2327, "LISTE AKTUALISIEREN")
+
+
+## Netz-Meldungen (Verbinden, „Falsches Passwort.“) in der Statuszeile / network messages in the status line
+func _on_net_status(_t: String) -> void:
+	if lan_mode and is_instance_valid(stage) and stage.get_node_or_null("text_online"):
+		(stage.get_node("text_online") as Label).text = _status_line()
 
 
 func _status_line() -> String:
 	var s := status_text
+	if lan_mode and lan and lan.has_method("status_text"):
+		s = String(lan.call("status_text"))
 	if hidden_count > 0:
 		s += ("   " if s != "" else "") + "Filter: %d" % hidden_count
 	return s
@@ -95,9 +175,15 @@ func _status_line() -> String:
 
 ## Quelle der Liste: Master-Server oder Favoriten (mit Abfrage-Antworten aus Net.fav_info)
 func source_list() -> Array:
-	if not favorites_view:
-		return master_list
 	var out: Array = []
+	if not favorites_view:
+		if not lan_mode:
+			return master_list
+		for k in Net.servers:
+			var e: Dictionary = (Net.servers[k] as Dictionary).duplicate()
+			e["key"] = k
+			out.append(e)
+		return out
 	for a in Net.favorites:
 		var info: Dictionary = Net.fav_info.get(a, {})
 		var d := info.duplicate()
@@ -121,7 +207,14 @@ func _refresh_entries() -> void:
 			hidden_count += 1
 	if sort_key != "":
 		entries.sort_custom(func(a, b): return _sort_val(a) < _sort_val(b))
-	selected = clampi(selected, -1, entries.size() - 1)
+	# Auswahl über den Schlüssel halten (LAN-Liste wird jede Sekunde aktualisiert) / keep selection by key
+	if selected_key == "":
+		selected = clampi(selected, -1, entries.size() - 1)
+	else:
+		selected = -1
+		for i in entries.size():
+			if key_of(entries[i]) == selected_key:
+				selected = i
 	scroll = clampi(scroll, 0, maxi(entries.size() - ROWS, 0))
 
 
@@ -141,8 +234,12 @@ func _sort_val(s: Dictionary):
 
 func build() -> void:
 	_refresh_entries()
+	_sig = _list_signature()
 	begin("multiplayer menu")
-	title(2321, "MEHRSPIELER-SPIEL - INTERNET")
+	if lan_mode:
+		title(2320, "MEHRSPIELER-SPIEL - LAN")
+	else:
+		title(2321, "MEHRSPIELER-SPIEL - INTERNET")
 	draw_frames(["table00"])
 	# Spaltenköpfe (Klick = sortieren)
 	orig_button("bhost name", SAS.text(2302, "HOSTNAME"), _sort.bind("name"), true, "HeadName", 14)
@@ -171,8 +268,8 @@ func build() -> void:
 	var sel_ok := selected >= 0
 	orig_button("bjoin game", SAS.text(2310, "SPIEL BEITRETEN"), join_selected, sel_ok, "JoinButton")
 	orig_button("bcreate server", SAS.text(2311, "SERVER ERSTELLEN"), func(): create_requested.emit(), true, "CreateButton")
-	orig_button("brefresh list", SAS.text(2327, "LISTE AKTUALISIEREN"), refresh, true, "UpdateButton", 15)
-	orig_button("brestore list", SAS.text(2325, "LISTE NEU EINLESEN"), reconnect, true, "RereadButton", 15)
+	orig_button("brefresh list", _update_text(), refresh, true, "UpdateButton", 15)
+	orig_button("brestore list", _reread_text(), reconnect, true, "RereadButton", 15)
 	orig_button("bfavorites", SAS.text(20101 if favorites_view else 20100, "GESAMTLISTE" if favorites_view else "FAVORITEN"),
 		toggle_favorites, true, "FavoritesButton", 15)
 	orig_button("bserver filters", SAS.text(2309, "SERVER-FILTER"), func(): lan.call("open_filter"), true, "FilterButton", 15)
@@ -181,6 +278,11 @@ func build() -> void:
 		"AUS FAVORITEN LÖSCHEN" if favorites_view else "ZU FAVORITEN HINZUFÜGEN"), _fav_add_remove, sel_ok, "FavAddRemove", 13)
 	orig_button("benter server ip", SAS.text(2308, "SERVER-IP EINGEBEN"), open_ip_entry, true, "EnterIpButton", 15)
 	orig_button("bback", SAS.text(2313, "ZURÜCK"), func(): back_requested.emit(), true, "BackButton")
+	# 0.11.5: RANGLISTE (nur Internet) mit der SERVER-FILTER-Grafik, eine Zeile über der Knopfreihe (Platz des GameSpy-Logos)
+	# 0.11.5: LEADERBOARD (internet only) using the server-filter button art one row above the button row
+	if not lan_mode:
+		button_from(frames, "bserver filters", tr("RANGLISTE"), func(): leaderboard_requested.emit(), true,
+			"LeaderboardButton", 15, Rect2(731.4, 133.5, 207.0, 35.8), Vector2(0, -42))
 	var st := text_at("text_online", _status_line(), 14, HORIZONTAL_ALIGNMENT_LEFT, INK, false, Rect2(73, 606.3, 865.4, 25))
 	st.name = "text_online"
 
@@ -217,6 +319,7 @@ func _row(k: int, i: int) -> void:
 		_cell("map", y, "–")
 	hit(Rect2(117.7, y, 809, ROW_H), func(dbl: bool = false):
 		selected = i
+		selected_key = key_of(s)
 		if dbl:
 			join_selected()
 		else:
@@ -237,16 +340,25 @@ func _scroll(d: int) -> void:
 	build()
 
 
+## LISTE AKTUALISIEREN (T2327); LAN: läuft die Abfrage, hält der Knopf sie an (HALT T2328)
+## Refresh list; LAN: while a query runs the button stops it (HALT)
 func refresh() -> void:
-	if favorites_view:
-		Net.update_list()
+	if _net_scan():
+		if lan_mode and Net.scan_kind == "update":
+			Net.halt_scan()
+		else:
+			Net.update_list()
 	else:
 		master.call("refresh_servers", Net.server_filter)
 
 
+## LISTE NEU EINLESEN (T2325); LAN mit HALT (T2326) / reread list, LAN with HALT
 func reconnect() -> void:
-	if favorites_view:
-		Net.reread_list()
+	if _net_scan():
+		if lan_mode and Net.scan_kind == "reread":
+			Net.halt_scan()
+		else:
+			Net.reread_list()
 	else:
 		master.call("connect_master")
 
@@ -255,6 +367,7 @@ func toggle_favorites() -> void:
 	favorites_view = not favorites_view
 	Net.browsing_favorites = favorites_view
 	selected = -1
+	selected_key = ""
 	scroll = 0
 	if favorites_view:
 		Net.update_list()
@@ -272,6 +385,7 @@ func _fav_add_remove() -> void:
 	if favorites_view:
 		Net.remove_favorite(String(s.get("key", "")))
 		selected = -1
+		selected_key = ""
 	else:
 		Net.add_favorite("%s:%d" % [String(s.get("ip", "")), int(s.get("port", Net.PORT))])
 	build()
@@ -296,6 +410,11 @@ func request_join(s: Dictionary) -> void:
 		dialog(tr(UNRANKED_WARNING), [[SAS.text(2310, "SPIEL BEITRETEN"), func(): _join(s)],
 			[SAS.text(2313, "ZURÜCK"), func(): pass]]).name = "UnrankedDialog"
 		return
+	# LAN: Server mit Passwort → Original-Passwortabfrage (password.4ds) vor dem Beitritt
+	# LAN: password server → original password prompt before joining
+	if lan_mode and bool(s.get("pw", false)):
+		open_ip_entry(key_of(s), true)
+		return
 	_join(s)
 
 
@@ -304,7 +423,8 @@ func _join(s: Dictionary) -> void:
 
 
 ## SERVER-IP EINGEBEN: kleine Eingabe (IP/Name[:Port] + Passwort) über dem Bildschirm
-func open_ip_entry() -> void:
+## target/pw_only: Passwortabfrage für einen gewählten Server (Adresse vorbelegt) / password prompt for a chosen server
+func open_ip_entry(target := "", pw_only := false) -> void:
 	if is_instance_valid(_ip_panel):
 		_ip_panel.queue_free()
 	var p := Control.new()
@@ -324,7 +444,7 @@ func open_ip_entry() -> void:
 		bg.size = Vector2(360, 180)
 		p.add_child(bg)
 	var t := Label.new()
-	t.text = SAS.text(2308, "SERVER-IP EINGEBEN")
+	t.text = SAS.text(2374, "PASSWORT") if pw_only else SAS.text(2308, "SERVER-IP EINGEBEN")
 	t.position = center + Vector2(-170, -80)
 	t.size = Vector2(340, 26)
 	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -332,7 +452,8 @@ func open_ip_entry() -> void:
 	p.add_child(t)
 	var ip := LineEdit.new()
 	ip.name = "IpEdit"
-	ip.text = String(lan.get("_ip").text) if lan.get("_ip") else ""
+	ip.text = target if target != "" else (String(lan.get("_ip").text) if lan.get("_ip") else "")
+	ip.editable = not pw_only
 	ip.position = center + Vector2(-150, -48)
 	ip.size = Vector2(300, 30)
 	p.add_child(ip)
@@ -340,6 +461,8 @@ func open_ip_entry() -> void:
 	pw.name = "PwEdit"
 	pw.secret = true
 	pw.placeholder_text = tr("Passwort")
+	if lan.get("_join_pw"):
+		pw.text = String(lan.get("_join_pw").text)
 	pw.position = center + Vector2(-150, -10)
 	pw.size = Vector2(300, 30)
 	p.add_child(pw)

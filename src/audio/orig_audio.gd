@@ -533,6 +533,7 @@ func speak_event(s: Node3D, event: int, cooldown := 0.0, set_idx := -1) -> float
 	if p == null:
 		return 0.0
 	var dur: float = p.stream.get_length()
+	LipSync.start(s, file, p)   # B-052 Gesichtsanimation
 	s.set_meta("_speech_until", now + maxf(cooldown, dur))
 	_record("speech", set_idx, event, file)
 	return dur

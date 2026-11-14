@@ -192,12 +192,50 @@ func binding_text(action: String) -> String:
 	return "—"
 
 
-func rebind(action: String, ev: InputEvent) -> void:
+## Belegung einer Aktion als Spec (Keycode/„mouse:n“) oder null (unbelegt).
+## Binding of an action as spec (keycode/"mouse:n") or null (unbound).
+func spec_of(action: String):
+	var evs := InputMap.action_get_events(action)
+	return spec_from_event(evs[0]) if evs.size() > 0 else null
+
+
+## Aktionen im selben Kontext (Spiel bzw. taktische Karte), die spec schon belegen.
+## Actions in the same context (game or tactical map) that already use spec.
+func conflicts(action: String, spec) -> Array:
+	var out: Array = []
+	if spec == null:
+		return out
+	for other: String in ACTIONS:
+		var s = spec_of(other)
+		# Typ zuerst vergleichen (int-Taste vs. „mouse:n“). / Compare type first (int key vs. "mouse:n").
+		if other != action and is_tactical(other) == is_tactical(action) and typeof(s) == typeof(spec) and s == spec:
+			out.append(other)
+	return out
+
+
+## Umbelegen mit Tausch: Doppelbelegungen im selben Kontext erhalten die bisherige Taste der Aktion
+## (oder werden unbelegt). Rückgabe: getauschte Aktionen für den Hinweis im Menü.
+## Rebind with swap: duplicates in the same context receive the action's previous key (or become unbound).
+## Returns the swapped actions for the menu hint.
+func rebind(action: String, ev: InputEvent) -> Array:
 	var spec = spec_from_event(ev)
 	if spec == null:
-		return
+		return []
+	var old = spec_of(action)
+	var swapped := conflicts(action, spec)
+	for other: String in swapped:
+		InputMap.action_erase_events(other)
+		if old != null:
+			_add_event(other, old)
 	InputMap.action_erase_events(action)
 	_add_event(action, spec)
+	save_bindings()
+	return swapped
+
+
+## Aktion ohne Taste („—“, gespeichert als UNBOUND). / Clear the action ("—", saved as UNBOUND).
+func unbind(action: String) -> void:
+	InputMap.action_erase_events(action)
 	save_bindings()
 
 

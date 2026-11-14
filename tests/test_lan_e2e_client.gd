@@ -21,23 +21,39 @@ func _run() -> void:
 		check(false, "Client: LAN-Menü offen")
 		_finish()
 		return
-	var listed := func() -> bool: return lm._list.item_count > 0
+	# 0.11.2: LAN-Liste im Original-Serverbrowser (multiplayer menu.4ds) / LAN list in the original server browser
+	var br: ServerBrowserScreen = lm.browser
+	# Fremde LAN-Server (z. B. Dauerläufe) möglich → Eintrag „E2E-Server“ suchen / other LAN servers may exist → find ours
+	var idx_of := func() -> int:
+		if not is_instance_valid(br):
+			return -1
+		for i in br.entries.size():
+			if String(br.entries[i].get("name", "")).contains("E2E-Server"):
+				return i
+		return -1
+	var row_of := func() -> Control:
+		var i: int = idx_of.call()
+		return br.stage.find_child("Row%d" % i, true, false) as Control if i >= 0 else null
+	var listed := func() -> bool: return row_of.call() != null
 	check(await wait_for(listed, 20.0), "Server erscheint in der LAN-Liste (Broadcast)")
-	if lm._list.item_count == 0:
+	if not listed.call():
 		_finish()
 		return
-	var entry := lm._list.get_item_text(0)
-	check(entry.contains("E2E-Server") and entry.to_upper().contains("TEAM-DEATHMATCH") and entry.contains("+4 KI") and entry.contains("🔒")
-		and entry.contains("1/8"), "Listeneintrag: Name, Stil, Spieler, KI, Passwortschloss", entry)
+	var ei: int = idx_of.call()
+	var e0: Dictionary = br.entries[ei]
+	var name_lbl := br.stage.find_child("RowName%d" % ei, true, false) as Label
+	check(name_lbl != null and name_lbl.text.contains("E2E-Server") and int(e0.get("mode", -1)) == 1 and int(e0.get("bots", 0)) == 4
+		and bool(e0.get("pw", false)) and int(e0.get("players", 0)) == 1 and int(e0.get("max", 0)) == 8,
+		"Listeneintrag: Name, Stil, Spieler, KI, Passwort", str(e0))
 	# Auswahl muss die sekündliche Aktualisierung überstehen (an zwei Aktualisierungen gekoppelt, nicht an Zeit)
-	await click_item(lm._list, 0)
+	await click(row_of.call())
 	var updates := [0]
 	var cnt := func() -> void: updates[0] += 1
 	Net.servers_updated.connect(cnt)
 	var two := func() -> bool: return updates[0] >= 2
 	await wait_for(two, 30.0)
 	Net.servers_updated.disconnect(cnt)
-	check(lm._list.get_selected_items().size() == 1, "Auswahl bleibt bei Listenaktualisierung erhalten", "%d Aktualisierungen" % updates[0])
+	check(br.selected >= 0 and br.selected == idx_of.call(), "Auswahl bleibt bei Listenaktualisierung erhalten", "%d Aktualisierungen" % updates[0])
 	# SPIEL-INFO (gameinfo.4ds) zum markierten Server: Server-Info, Regeln, Spielerliste
 	lm.open_game_info()
 	await frames(3)
@@ -50,18 +66,31 @@ func _run() -> void:
 	await frames(3)
 	check(lm.info_screen == null, "SPIEL-INFO geschlossen (ZURÜCK)")
 	# --- ohne Passwort: abgewiesen ---
-	check(await click(visible_button("Beitreten")), "„Beitreten“ angeklickt (ohne Passwort)")
+	# SPIEL BEITRETEN → Passwortabfrage (Server mit Passwort), leer bestätigen / join → password prompt, confirm empty
+	check(await click(visible_button("JoinButton")), "„%s“ angeklickt" % SAS.text(2310, "SPIEL BEITRETEN"))
+	await frames(2)
+	var pw_ok := visible_button("IpJoin")
+	check(pw_ok != null and br.find_child("PwEdit", true, false) != null, "Passwortabfrage vor dem Beitritt")
+	check(await click(pw_ok), "Beitritt ohne Passwort bestätigt")
 	var rejected := func() -> bool: return lm._status.text.contains("Falsches Passwort")
 	check(await wait_for(rejected, 60.0), "Abgewiesen mit Meldung „Falsches Passwort“", lm._status.text)
 	var offline := func() -> bool: return not Net.is_online and Game.current_mission() == null and lm.is_visible_in_tree()
 	check(await wait_for(offline, 20.0), "Nach Abweisung: offline, im LAN-Menü")
 	# --- mit Passwort ---
-	await type_into(lm._join_pw, "geheim")
-	if lm._join_pw.text != "geheim":
-		lm._join_pw.text = "geheim"       # kopflos 64×64 px: Feld liegt ggf. außerhalb des Fensters (nicht anklickbar)
-	if lm._list.get_selected_items().is_empty():
-		await click_item(lm._list, 0)
-	check(await click(visible_button("Beitreten")), "„Beitreten“ angeklickt (mit Passwort)")
+	await wait_for(listed, 20.0)
+	if br.selected < 0 or br.selected != idx_of.call():
+		await click(row_of.call())
+	await frames(2)
+	check(await click(visible_button("JoinButton")), "„%s“ angeklickt (mit Passwort)" % SAS.text(2310, "SPIEL BEITRETEN"))
+	await frames(2)
+	var pwe := br.find_child("PwEdit", true, false) as LineEdit
+	if pwe:
+		await type_into(pwe, "geheim")
+		if pwe.text != "geheim":
+			pwe.text = "geheim"       # kopflos 64×64 px: Feld liegt ggf. außerhalb des Fensters (nicht anklickbar)
+	var ipj := visible_button("IpJoin")
+	if not await click(ipj) and ipj:
+		ipj.pressed.emit()
 	var in_game := func() -> bool: return Game.current_mission() != null and Net._soldiers.has(Net.my_id()) and Net._soldiers.has(1)
 	check(await wait_for(in_game, 400.0), "Beigetreten: Karte geladen, eigener Soldat und Server-Soldat")
 	var me: Soldier = Net._soldiers.get(Net.my_id())

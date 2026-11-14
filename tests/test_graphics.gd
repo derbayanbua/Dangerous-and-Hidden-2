@@ -29,7 +29,7 @@ func _run() -> void:
 	Settings.quality = 2
 	check(Settings.texture_suffixes()[0] == "_hd", "Hoch: HD-Texturen nach Texturoption", str(Settings.texture_suffixes()))
 	var expect := [  # [ssao, ssil, sdfgi, vol_fog, ssr]
-		[false, false, false, false, false], [true, false, false, false, false], [true, false, false, true, false],
+		[true, false, false, false, false], [true, false, false, false, false], [true, false, false, true, false],
 		[true, true, true, true, false], [true, true, true, true, true]]
 	var shadow_d: Array = []
 	for q in 5:

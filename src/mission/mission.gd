@@ -15,6 +15,7 @@ var env: Environment
 var sun: DirectionalLight3D
 var sky_fx: Node3D        ## src/world/sky_fx.gd (B-013: Wolkenhimmel, Wolkenschatten)
 var day_night: Node       ## src/world/day_night.gd (0.10.1: Tag/Nacht, nur ausgewählte Karten) oder null
+var mp_day_night: Node    ## src/world/mp_day_night.gd (0.11.5: Tag/Nacht aller Karten, nur MP mit Regel daynight) oder null
 const ViewDistanceScript := preload("res://src/world/view_distance.gd")
 var view_stats := {}      ## B-041: zuletzt angewandte Sichtweite (ViewDistance.apply)
 var squad: SquadManager
@@ -169,6 +170,8 @@ func _ready() -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	Settings.changed.connect(_apply_settings)
 	Effects.start_ambience(self, ambience_sound)
+	# 0.11.5: Tag-/Nachtwechsel auf allen Karten (nur MP, Regel daynight; Karten mit eigenem day_night ausgenommen)
+	mp_day_night = preload("res://src/world/mp_day_night.gd").attach(self)
 	if Net.is_online:
 		Net.mission_ready.call_deferred(self)    # Mehrspieler: Spielerfiguren kommen vom Server
 

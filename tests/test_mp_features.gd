@@ -139,26 +139,39 @@ func _run() -> void:
 	lm._mode.item_selected.emit(1)
 	lm._bots.value = 1
 	# Serverliste: LISTE NEU EINLESEN (T2325) leert und sucht neu, HALT (T2326) hält an
-	var rb: Button = lm.find_child("RereadButton", true, false)
-	var ub: Button = lm.find_child("UpdateButton", true, false)
-	check(rb != null and ub != null and rb.text == SAS.text(2325, "LISTE NEU EINLESEN") and ub.text == SAS.text(2327, "LISTE AKTUALISIEREN"),
+	# 0.11.2: Knöpfe im Original-Serverbrowser; die Liste kann ihn neu aufbauen → Knöpfe jeweils neu suchen
+	# buttons live in the original server browser; list updates may rebuild it → look them up each time
+	var rbf := func() -> Button: return lm.browser.stage.get_node_or_null("RereadButton") as Button if is_instance_valid(lm.browser) else null
+	var ubf := func() -> Button: return lm.browser.stage.get_node_or_null("UpdateButton") as Button if is_instance_valid(lm.browser) else null
+	var rb: Button = rbf.call()
+	var ub: Button = ubf.call()
+	check(rb != null and ub != null and lm.browser.lan_mode and rb.text == SAS.text(2325, "LISTE NEU EINLESEN") and ub.text == SAS.text(2327, "LISTE AKTUALISIEREN"),
 		"LAN-Menü: Knöpfe LISTE NEU EINLESEN / LISTE AKTUALISIEREN (T2325/2327)")
 	if rb != null and ub != null:
 		Net.servers["10.9.8.7:1"] = {"name": "alt", "ip": "10.9.8.7", "port": 1, "seen": Time.get_ticks_msec()}
 		if not await click(rb):
 			rb.pressed.emit()
-		check(Net.scan_kind == "reread" and rb.text == SAS.text(2326, "HALT") and not Net.servers.has("10.9.8.7:1"),
+		await frames(1)
+		check(Net.scan_kind == "reread" and (rbf.call() as Button).text == SAS.text(2326, "HALT") and not Net.servers.has("10.9.8.7:1"),
 			"LISTE NEU EINLESEN: Liste geleert, Suche läuft, Knopf HALT (T2326)")
 		var sdone := func() -> bool: return Net.scan_kind == ""
-		check(await wait_for(sdone, 10.0) and rb.text == SAS.text(2325, "LISTE NEU EINLESEN"), "Suche beendet → Knopf wieder LISTE NEU EINLESEN")
+		check(await wait_for(sdone, 10.0) and (rbf.call() as Button).text == SAS.text(2325, "LISTE NEU EINLESEN"), "Suche beendet → Knopf wieder LISTE NEU EINLESEN")
+		ub = ubf.call()
 		if not await click(ub):
 			ub.pressed.emit()
-		check(Net.scan_kind == "update" and ub.text == SAS.text(2328, "HALT"), "LISTE AKTUALISIEREN: Abfrage läuft, Knopf HALT (T2328)")
+		await frames(1)
+		check(Net.scan_kind == "update" and (ubf.call() as Button).text == SAS.text(2328, "HALT"), "LISTE AKTUALISIEREN: Abfrage läuft, Knopf HALT (T2328)")
+		ub = ubf.call()
 		if not await click(ub):
 			ub.pressed.emit()
-		check(Net.scan_kind == "" and Net.scan_paused and ub.text == SAS.text(2327, "LISTE AKTUALISIEREN"), "HALT: Abfrage angehalten")
+		await frames(1)
+		if Net.scan_kind == "update":
+			# Klick fiel in einen Neuaufbau der Liste (Drücken alter, Loslassen neuer Knopf) / click hit a list rebuild
+			(ubf.call() as Button).pressed.emit()
+			await frames(1)
+		check(Net.scan_kind == "" and Net.scan_paused and (ubf.call() as Button).text == SAS.text(2327, "LISTE AKTUALISIEREN"), "HALT: Abfrage angehalten")
 		Net.update_list()
-	check(await click(visible_button("Zurück")), "Zurück ins Hauptmenü")
+	check(await click(visible_button("BackButton")), "Zurück ins Hauptmenü")
 	await frames(5)
 
 	# --- Server: Team-Deathmatch, Aufwärmen, Regeln, 2 Runden, Kartenliste A → B ---
@@ -635,6 +648,10 @@ func _run() -> void:
 	lm2._refresh()
 	check(lm2._list.item_count == 1 and lm2._list.get_item_text(0).begins_with("B") and lm2._filter_label.text.contains("1"),
 		"LAN-Liste: SERVER-FILTER blendet Server aus (1 ausgeblendet)", str(lm2._list.item_count))
+	# 0.11.2: dieselbe Filterung im Original-Serverbrowser (LAN) / same filtering in the original LAN browser
+	lm2.browser.build()
+	check(lm2.browser.lan_mode and lm2.browser.entries.size() == 1 and String(lm2.browser.entries[0]["name"]) == "B"
+		and lm2.browser.hidden_count == 1, "LAN-Browser: SERVER-FILTER blendet Server aus", str(lm2.browser.entries.size()))
 	Net.server_filter = base.duplicate()
 	lm2.queue_free()
 	Net.servers.clear()

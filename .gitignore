@@ -30,6 +30,11 @@ docs/lokal/
 assets/maps/bavaria/**/*.png
 assets/maps/bavaria/**/*.png.import
 assets/maps/bavaria/**/*.jpg
+# Ausnahme: Fernkulisse Nord/Ost/West (Bilder vom Auftraggeber zur Veröffentlichung freigegeben)
+!assets/maps/bavaria/panorama/
+!assets/maps/bavaria/panorama/**/*.png
+!assets/maps/bavaria/panorama/**/*.png.import
+assets/maps/bavaria/panorama/source/
 assets/maps/bavaria/facade/SOURCES.json
 assets/maps/bavaria/roof_antenna/SOURCE_README.md
 assets/ui/mp_maps/bav*

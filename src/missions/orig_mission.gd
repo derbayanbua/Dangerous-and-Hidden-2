@@ -30,6 +30,7 @@ var movie_textures: Array = []      ## [Film, Frame] der aktiven Filmtexturen (m
 var runtime: LsRuntime
 var actor_params := {}
 var interactive: OrigInteractive
+var fauna: Node   ## OrigFauna (B-053)
 var _player_names: Array = []    ## Original-Namen der Spielerfiguren (Akteurtyp 10)          ## actors.bin-Parameter + Ausrüstung (tools/fmt_actors_items.py)
 
 ## Originalwaffe (items.sav-Name) -> eigene Waffen-ID
@@ -163,6 +164,11 @@ func _spawn_actors() -> void:
 	add_child(interactive)
 	interactive.setup(self, runtime, orig)
 	print("ORIG: interaktiv ", interactive.stats)
+	# B-053 Uhren/Vogelschwärme/Fische (src/orig/orig_fauna.gd)
+	fauna = load("res://src/orig/orig_fauna.gd").new()
+	add_child(fauna)
+	fauna.setup(self, runtime, orig)
+	print("ORIG: Fauna ", fauna.stats)
 	var n := runtime.start_scripts()
 	print("ORIG: %d Skripte gestartet" % n)
 
@@ -385,11 +391,15 @@ func _serialize_extra() -> Dictionary:
 	if runtime:
 		d["orig_vm"] = runtime.save_state()
 		d["orig_vm_version"] = ORIG_VM_VERSION
+	if fauna:
+		d["orig_fauna"] = fauna.save_state()
 	return d
 
 
 func _deserialize_extra(d: Dictionary) -> void:
 	super._deserialize_extra(d)
+	if fauna and d.has("orig_fauna"):
+		fauna.load_state(d["orig_fauna"])
 	if runtime == null:
 		return
 	if not d.has("orig_vm") or typeof(d["orig_vm"]) != TYPE_DICTIONARY:
@@ -632,6 +642,7 @@ func _configure_environment(e: Environment, sun_light: DirectionalLight3D) -> vo
 	var view: float = float(extra.get("scene", {}).get("view_distance", 300.0))
 	e.fog_density = clampf(1.5 / maxf(view, 50.0), 0.0015, 0.02)
 	var dir_set := false
+	var amb_primary := false
 	for l in extra.get("lights", []):
 		var col := Color(l["color"][0], l["color"][1], l["color"][2])
 		match String(l.get("type", "")):
@@ -644,6 +655,12 @@ func _configure_environment(e: Environment, sun_light: DirectionalLight3D) -> vo
 				var r: Array = l["world_rot"]
 				sun_light.quaternion = Quaternion(r[0], r[1], r[2], r[3]).normalized()
 			"ambient":
+				# 0.11.4: Ambient des Primärsektors hat Vorrang (vorher gewann das zuletzt gelesene, z. B.
+				# Arctic 1 MP: weißes Wachturm-Ambient 0,3 → Karte zu hell). / Primary-sector ambient wins.
+				var primary := (l.get("sectors", []) as Array).has("Primary sector")
+				if amb_primary and not primary:
+					continue
+				amb_primary = amb_primary or primary
 				e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 				e.ambient_light_color = col
 				e.ambient_light_energy = clampf(float(l.get("power", 1.0)), 0.2, 1.5)
@@ -651,7 +668,10 @@ func _configure_environment(e: Environment, sun_light: DirectionalLight3D) -> vo
 				e.fog_light_color = col
 	var dark := sun_light.light_energy < 0.6 and bgc.get_luminance() < 0.25
 	light_factor = 0.5 if dark else 1.0
-	e.tonemap_exposure = 1.35 if dark else 1.0
+	# 0.11.4: Mehrspielerkarten bei Nacht nicht mehr aufhellen (Arctic 1 MP wirkte zu hell) [D].
+	# 0.11.4: no longer brighten multiplayer maps at night.
+	var mp_map := Net.is_online or String(orig_mission).ends_with("_mp") or String(orig_mission).contains("_mp_")
+	e.tonemap_exposure = (0.95 if mp_map else 1.35) if dark else 1.0
 
 
 ## Missionsende: SaveGameValue-Werte für den nächsten Teil sichern.
